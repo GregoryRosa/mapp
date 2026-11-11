@@ -1,0 +1,140 @@
+package br.com.mapp.ui
+
+import android.Manifest
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import br.com.mapp.overlay.OverlayService
+import br.com.mapp.reader.OfferAccessibilityService
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HomeScreen(onNavigate: (String) -> Unit) {
+    val ctx = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var refresh by remember { mutableIntStateOf(0) }
+    // Reavalia permissões sempre que o usuário volta das Configurações.
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { refresh++ }
+    }
+    val runtimePerms = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { refresh++ }
+
+    val p = remember(refresh) { Perms.check(ctx) }
+
+    Scaffold(topBar = { TopAppBar(title = { Text("MApp – Copiloto") }) }) { pad ->
+        Column(
+            Modifier.fillMaxSize().padding(pad).padding(16.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Permissões", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
+                    PermRow("Localização", p.location) {
+                        val list = buildList {
+                            add(Manifest.permission.ACCESS_FINE_LOCATION)
+                            add(Manifest.permission.ACCESS_COARSE_LOCATION)
+                            if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        runtimePerms.launch(list.toTypedArray())
+                    }
+                    PermRow("Sobrepor outros apps", p.overlay) {
+                        ctx.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}")))
+                    }
+                    PermRow("Acessibilidade (leitor)", p.accessibility) {
+                        ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    }
+                    PermRow("Sem otimização de bateria", p.battery) {
+                        ctx.startActivity(
+                            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}"))
+                        )
+                    }
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(enabled = p.overlay && p.location, onClick = { OverlayService.start(ctx) }) { Text("Iniciar copiloto") }
+                OutlinedButton(onClick = { OverlayService.stop(ctx) }) { Text("Parar") }
+            }
+
+            Text("Menu", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
+            MenuButton("Ganhos e gastos") { onNavigate(Routes.FINANCE) }
+            MenuButton("Relatórios") { onNavigate(Routes.REPORTS) }
+            MenuButton("Histórico de ofertas") { onNavigate(Routes.HISTORY) }
+            MenuButton("Perfis de filtro") { onNavigate(Routes.PROFILES) }
+            MenuButton("Custos do veículo") { onNavigate(Routes.VEHICLE) }
+            MenuButton("Zonas no mapa") { onNavigate(Routes.ZONES) }
+
+            Text(
+                "O MApp só lê as ofertas. Ele nunca aceita ou recusa corridas por você.",
+                style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PermRow(label: String, ok: Boolean, onFix: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text((if (ok) "✅ " else "⚠️ ") + label, Modifier.weight(1f))
+        if (!ok) TextButton(onClick = onFix) { Text("Ativar") }
+    }
+}
+
+@Composable
+private fun MenuButton(label: String, onClick: () -> Unit) {
+    OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) { Text(label) }
+}
+
+data class Perms(val location: Boolean, val overlay: Boolean, val accessibility: Boolean, val battery: Boolean) {
+    companion object {
+        fun check(ctx: Context): Perms {
+            val loc = ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            val overlay = Settings.canDrawOverlays(ctx)
+            // O sistema pode gravar a forma longa ou curta ("pkg/.Classe"): compara como ComponentName.
+            val expected = ComponentName(ctx, OfferAccessibilityService::class.java)
+            val enabled = Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+                ?.split(':')?.any { ComponentName.unflattenFromString(it) == expected } == true
+            val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
+            return Perms(loc, overlay, enabled, pm.isIgnoringBatteryOptimizations(ctx.packageName))
+        }
+    }
+}

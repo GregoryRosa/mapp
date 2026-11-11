@@ -1,0 +1,130 @@
+# MApp — Copiloto pessoal para motoristas de app
+
+App Android de uso pessoal, inspirado em **Rota Pro**, **GigU** (ex-StopClub) e **Rydex Pro**. Ele lê as ofertas de corrida da **Uber, 99 e inDrive**, mostra na hora se a corrida vale a pena (semáforo + mini mapa), avisa se a coleta/destino cai numa zona marcada por você e controla ganhos, gastos e relatórios.
+
+> **Princípio de projeto:** o MApp **só lê e mostra informações**. Ele **nunca aceita nem recusa corridas sozinho** — isso protege a conta do motorista (Uber trata automação como fraude) e respeita a política do Google Play sobre Acessibilidade.
+
+---
+
+## 1. Pesquisa de mercado (nov/2026)
+
+| | Rota Pro | GigU (ex-StopClub) | Rydex Pro |
+|---|---|---|---|
+| Pacote | `app.rotapro` | `co.gigu.app` | `br.com.rydex.app` |
+| Empresa | FRM TECH (Betim-MG) | GigU (RJ), ~200 mil pagantes | Dev. individual |
+| Plataformas | Android 9+ e iOS 17+ | Android (iOS em espera) | Android |
+| Apps suportados | Uber, 99, inDrive (iFood/Keeta beta) | Uber, 99, inDrive (+Lyft/DoorDash EUA) | Uber, 99, inDrive |
+| Preço | R$ 97/ano, 7 dias grátis | R$ 12,90/mês, 30 dias grátis | Não divulgado |
+| Nota Play | 4,7 (50 mil+ downloads) | 3,9 (~880 mil instalações) | 4,9 (1 mil+) |
+
+**Funcionalidades em comum:** semáforo verde/amarelo/vermelho sobre a oferta; R$/km, R$/hora, R$/min; lucro líquido descontando custo do carro; filtros por perfil; histórico de ofertas; controle financeiro e metas.
+
+**Diferenciais observados**
+- *Rota Pro:* até 10 perfis de filtro, custo/km completo (combustível, manutenção, depreciação), cronômetro de jornada (aguardando/buscando/em viagem), alerta de endereço de risco por palavra-chave, aviso por voz, exportação CSV, ranking de melhores horários.
+- *GigU:* atalho para ver coleta/destino no Google Maps/Street View, aviso por voz, prints das ofertas. Teve “recusa automática” — motivo do processo da Uber.
+- *Rydex Pro:* foco financeiro, rastreio de km por GPS, metas diária/mensal.
+
+**Como funcionam (técnica):** `AccessibilityService` lê o texto da tela do app de corrida → parser extrai valor, distância, tempo e endereços → janela flutuante (`SYSTEM_ALERT_WINDOW`) desenha o cartão. Exige celular em pt-BR e fonte padrão; fabricantes (Xiaomi, Samsung) matam o serviço em segundo plano — por isso usam serviço em primeiro plano e pedem isenção de bateria.
+
+**Reclamações comuns:** acessibilidade desligando sozinha, leitura errada do valor, app morto pela economia de bateria.
+
+**Riscos:** Uber processou a StopClub (liminar derrubada pelo TJ-SP; CADE reabriu investigação contra a Uber em jul/2026). Uber lista “apps não autorizados” como motivo de desativação. Google Play proíbe ações *autônomas* via Acessibilidade e exige aviso destacado + declaração no Console. Como o MApp é para uso pessoal (instalação direta/APK), o risco de loja é baixo, mas a regra de **não automatizar cliques** permanece.
+
+Fontes: rotapro.app, play.google.com (app.rotapro, br.com.rydex.app), gigu.app/help, appgoblin.info/apps/co.gigu.app, therideshareguy.com, migalhas.com.br, timesbrasil.com.br, uber.com/br/pt-br/drive/safety/deactivations, support.google.com/googleplay/android-developer/answer/10964491.
+
+---
+
+## 2. Requisitos (minhas necessidades)
+
+**Plataforma:** Android (minSdk 26). **Apps lidos:** Uber, 99, inDrive.
+
+| # | Requisito | Prioridade |
+|---|---|---|
+| R1 | Ler ofertas e calcular R$/km, R$/hora, lucro líquido | MVP |
+| R2 | Semáforo com filtros configuráveis e múltiplos perfis | MVP |
+| R3 | **Mini mapa no cartão da oferta:** minha posição, coleta e destino | MVP |
+| R4 | **Editor de zonas:** desenhar polígonos no mapa da cidade (zona perigosa, alta demanda, etc.) | MVP |
+| R5 | Alerta quando coleta/destino cai dentro de uma zona (cor + voz) | MVP |
+| R6 | Controle financeiro: ganhos, gastos, combustível, lucro, metas | MVP |
+| R7 | Histórico de ofertas e corridas | v1 |
+| R8 | Relatórios: melhores horários/dias, R$/km médio, mapa das melhores regiões | v1 |
+| R9 | Backup/exportação CSV | v1 |
+
+---
+
+## 3. Arquitetura
+
+**Stack:** Kotlin · Jetpack Compose (Material 3) · Room · Coroutines/Flow · osmdroid (mapa OpenStreetMap, sem chave de API) · `android.location.Geocoder` (endereço → coordenada, nativo e gratuito) · Fused Location.
+
+```
+app/src/main/java/br/com/mapp/
+├── core/        # Domínio puro (sem Android): modelos, motor de avaliação, geometria
+├── reader/      # AccessibilityService + parsers por plataforma (Uber, 99, inDrive)
+├── overlay/     # Serviço de janela flutuante: cartão semáforo + mini mapa
+├── maps/        # Editor de zonas, geocodificação, utilidades osmdroid
+├── data/        # Room: entidades, DAOs, repositórios
+├── finance/     # Telas de ganhos/gastos/metas e relatórios
+└── ui/          # MainActivity, navegação, tema, configurações, permissões
+```
+
+**Fluxo de uma oferta**
+```
+App Uber/99/inDrive  →  OfferAccessibilityService  →  OfferParser (por plataforma)
+   →  RawOffer  →  Geocoder (coleta/destino)  →  OfferEvaluator (perfil ativo + zonas)
+   →  OfferBus (SharedFlow)  →  OverlayService (cartão + mini mapa)  →  Room (histórico)
+```
+
+**Decisões**
+- `core/` não importa nada do Android → testável em JVM puro.
+- Cada plataforma tem seu parser isolado; mudança de layout da Uber não quebra a 99.
+- Comunicação reader → overlay por um `SharedFlow` em processo (`OfferBus`), sem broadcasts.
+- Mapas com osmdroid para não depender de chave/fatura do Google Maps.
+- Toda automação de clique é proibida no código (o serviço não declara `canPerformGestures`).
+
+---
+
+## 4. Desenvolvimento com subagentes
+
+O projeto é desenvolvido com **subagentes do Claude Code**, cada um com contexto próprio (definidos em `.claude/agents/`):
+
+| Subagente | Responsável por |
+|---|---|
+| `arquiteto` | Contratos entre módulos, `core/`, Gradle, decisões |
+| `leitor-ofertas` | `reader/` — Acessibilidade e parsers |
+| `overlay-mapa` | `overlay/` e `maps/` — cartão, mini mapa, editor de zonas |
+| `financeiro` | `data/` e `finance/` — Room, ganhos/gastos, relatórios |
+| `qa-revisor` | Revisão, testes e consistência entre módulos |
+
+As regras compartilhadas ficam em `CLAUDE.md`.
+
+---
+
+## 5. Como rodar
+
+1. Abra a pasta no **Android Studio** (Ladybug ou mais novo) e deixe o Gradle sincronizar.
+2. Rode no celular (cabo USB ou Wi-Fi debug).
+3. No app: conceda **Sobrepor outros apps**, **Localização** e ative o **serviço de Acessibilidade “MApp”**. Desative a otimização de bateria para o MApp.
+4. Configure custos do carro e um perfil de filtro; desenhe suas zonas em *Configurações → Zonas*.
+
+O GitHub Actions (`.github/workflows/android.yml`) compila e roda os testes a cada push e gera o APK como artefato.
+
+---
+
+## 6. Roadmap
+
+- **Fase 1 – MVP:** R1–R6, testes de parser com textos reais de ofertas.
+- **Fase 2:** histórico, relatórios, mapa de calor das melhores regiões, CSV.
+- **Fase 3:** jornada (cronômetro), manutenção por odômetro, backup em nuvem.
+
+**Calibração necessária:** os parsers começam com padrões genéricos (`R$ 12,50`, `4,2 km`, `12 min`). Para precisão, capture textos reais das ofertas com o modo *Depuração de leitura* (salva o texto bruto no histórico) e ajuste/adicione casos de teste.
+
+---
+
+## 7. Status
+
+| Data | Marco |
+|---|---|
+| 11/11/2026 | Pesquisa, requisitos, arquitetura e esqueleto do projeto criados |
+| 11/11/2026 | MVP implementado por subagentes: leitor (Uber/99/inDrive), overlay com semáforo + mini mapa + voz, editor de zonas, Room, finanças, relatórios, perfis, custos. 43 testes JVM passando. **Pendente:** 1º build no Android Studio/CI e calibrar parsers com ofertas reais (`OfferAccessibilityService.debugCapture = true`). |
+
+**Pendências conhecidas:** exportar CSV (R9); persistir `zoneHits` e marcar oferta aceita no histórico; testes de `Format.parse` e `PolygonCodec`; após o 1º build, versionar `app/schemas/` do Room.
