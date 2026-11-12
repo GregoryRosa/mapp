@@ -12,7 +12,7 @@ Documentação completa (pesquisa, requisitos, arquitetura, roadmap): **README.m
 ## Contratos entre módulos
 | Quem | Expõe | Consumido por |
 |---|---|---|
-| `core/bus/OfferBus` | `publish(RawOffer)`, `raw`, `publishEvaluated()`, `evaluated`, `clear()`, `hasListeners` (copiloto ligado?) | reader → overlay |
+| `core/bus/OfferBus` | `publish(RawOffer)`, `raw`, `publishEvaluated()`, `evaluated`, `clear()`, `hasListeners` (copiloto ligado?), `publishTripStage()`, `tripStages` (corrida aceita/finalizada) | reader → overlay |
 | `core/engine/OfferEvaluator` | `evaluate(raw, profile, cost, zones, pickup, dropoff)` | overlay |
 | `data/DataModule.create(context): Repositories` | implementações de `core/repo/*` | `MappApp.repos` |
 | `overlay/OverlayService` | `companion fun start(ctx)`, `stop(ctx)` | ui/HomeScreen |
@@ -29,7 +29,7 @@ Documentação completa (pesquisa, requisitos, arquitetura, roadmap): **README.m
 Reader lê a tela por duas fontes — texto (árvore de Acessibilidade) e imagem (`reader/ScreenOcr`: captura da janela do app de corrida + OCR no aparelho, só com `OfferBus.hasListeners`) — e passa os textos ao parser (`parse(texts, fromOcr)`) → `OfferBus.publish(raw)` → `overlay/OfferPipeline` (geocodifica, carrega perfil ativo/custos/zonas, avalia, grava histórico) → `OfferBus.publishEvaluated` → overlay desenha cartão + mini mapa. Quando a oferta some: `OfferBus.clear()`. `RawOffer.category` = tipo lido no topo do cartão (UberX, Comfort, Black, Elétrico, Pop...); fica fora da identidade da oferta (o OCR nem sempre o lê).
 
 ## Jornada
-Painel do ícone "M" → ▶ Iniciar/⏸ Pausar/⏹ Encerrar. Com a jornada rodando o `OverlayService` liga o GPS preciso (`LocationProvider.fixes`) e soma km pelo `Odometer`. Corrida pega = "+1" no cartão ou "+1 Contar última" no painel (o MApp não sabe sozinho se a corrida foi aceita). Parar o copiloto pausa a jornada.
+Painel do ícone "M" → ▶ Iniciar/⏸ Pausar/⏹ Encerrar. Com a jornada rodando o `OverlayService` liga o GPS preciso (`LocationProvider.fixes`) e soma km pelo `Odometer`. Corrida pega é contada **sozinha**: o leitor reconhece as telas depois da oferta (`reader/parser/TripScreens` — Uber: "Encontro com <nome>" = aceita, "Como foi a viagem?"/"Avaliar usuário" = finalizada; `TripStageTracker` avisa só na troca de etapa) e publica `TripStage` no `OfferBus`; o `OverlayService` conta a última oferta vista há até 90 s. "+1" no cartão / "+1 Contar última" no painel continuam como reserva (sem contar em dobro). Parar o copiloto pausa a jornada.
 
 ## Subagentes (`.claude/agents/`)
 - `arquiteto` — core/, Gradle, manifest, ui/, contratos.
