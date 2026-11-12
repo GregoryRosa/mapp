@@ -10,6 +10,8 @@ object OverlayPrefs {
     const val KEY_CARD_X = "card_x"
     const val KEY_CARD_Y = "card_y"
     const val KEY_CARD_MINIMIZED = "card_minimized"
+    const val KEY_BUBBLE_X = "bubble_x"
+    const val KEY_BUBBLE_Y = "bubble_y"
 
     fun of(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)

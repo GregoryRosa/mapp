@@ -101,6 +101,40 @@ class OfferParsersTest {
         assertNull(UberParser.parse(listOf("Ganhos de hoje", "R$ 152,30", "Você está online")))
     }
 
+    // Textos REAIS (prints de 12/11/2026, Uber Driver, Viamão/Porto Alegre).
+    private val uberTelaInicial = listOf(
+        "R$ 0,00", "+R$ 4", "1-3 min", "+R$ 4", "Procurando viagens",
+    )
+    private val uberCartaoReal = listOf(
+        "Comfort", "Exclusivo", "R$ 14,41", "Est. de R$1,40/km", "+10% de ganhos Uber Pro",
+        "9 min • 3.9 km", "R. Araras, Parque Indio Jari, Viamão", "4,92 (640)",
+        "16 minutos • 6.4 km", "Rua Atenas, 70, Morro Santana, Porto Alegre", "Aceitar",
+    )
+
+    @Test fun uber_tela_inicial_sem_chamada_nao_e_oferta() {
+        assertNull(UberParser.parse(uberTelaInicial))
+        assertNull(UberParser.parse(listOf("R$ 85,20", "+R$ 4", "1-3 min", "Procurando viagens")))
+    }
+
+    private fun assertCartaoReal(texts: List<String>) {
+        val o = UberParser.parse(texts)!!
+        assertEquals(14.41, o.price, eps)
+        assertEquals(9, o.pickupMin)
+        assertEquals(3.9, o.pickupKm!!, eps)
+        assertEquals(16, o.tripMin)
+        assertEquals(6.4, o.tripKm!!, eps)
+        assertEquals("R. Araras, Parque Indio Jari, Viamão", o.pickupAddress)
+        assertEquals("Rua Atenas, 70, Morro Santana, Porto Alegre", o.dropoffAddress)
+        assertEquals(4.92, o.passengerRating!!, eps)
+    }
+
+    @Test fun uber_cartao_real_sozinho() = assertCartaoReal(uberCartaoReal)
+
+    @Test fun uber_cartao_real_por_cima_da_tela_inicial() {
+        assertCartaoReal(uberTelaInicial + uberCartaoReal)
+        assertCartaoReal(listOf("R$ 85,20", "+R$ 4", "1-3 min") + uberCartaoReal + listOf("+R$ 6", "2-4 min"))
+    }
+
     @Test fun sem_valor_nao_e_oferta() {
         assertNull(UberParser.parse(listOf("UberX", "4 min (1,2 km) de distância", "Rua A, 10 - Centro")))
         assertNull(UberParser.parse(emptyList()))

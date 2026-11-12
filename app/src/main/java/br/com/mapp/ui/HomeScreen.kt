@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -28,6 +29,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -58,6 +60,7 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
     ) { refresh++ }
 
     val p = remember(refresh) { Perms.check(ctx) }
+    val running by OverlayService.running.collectAsState()
 
     Scaffold(topBar = { TopAppBar(title = { Text("MApp – Copiloto") }) }) { pad ->
         Column(
@@ -89,9 +92,45 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(enabled = p.overlay && p.location, onClick = { OverlayService.start(ctx) }) { Text("Iniciar copiloto") }
-                OutlinedButton(onClick = { OverlayService.stop(ctx) }) { Text("Parar") }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        if (running) "🟢 Copiloto ATIVO" else "⚪ Copiloto parado",
+                        style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        if (running) "O ícone \"M\" flutuante fica por cima da Uber/99/inDrive: toque nele para ajustes rápidos."
+                        else "Toque em Iniciar para analisar as ofertas.",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    )
+                    if (!p.accessibility) {
+                        Text(
+                            "⚠️ Sem o leitor de Acessibilidade ativo o MApp não vê as chamadas.",
+                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    if (running) {
+                        OutlinedButton(onClick = {
+                            OverlayService.stop(ctx)
+                            Toast.makeText(ctx, "Copiloto parado", Toast.LENGTH_SHORT).show()
+                        }, modifier = Modifier.fillMaxWidth()) { Text("Parar copiloto") }
+                    } else {
+                        Button(onClick = {
+                            val missing = buildList {
+                                if (!p.overlay) add("Sobrepor outros apps")
+                                if (!p.location) add("Localização")
+                            }
+                            if (missing.isNotEmpty()) {
+                                Toast.makeText(ctx, "Ative antes: " + missing.joinToString(" e "), Toast.LENGTH_LONG).show()
+                            } else {
+                                OverlayService.start(ctx)
+                                if (!p.accessibility) {
+                                    Toast.makeText(ctx, "Copiloto iniciado, mas ative a Acessibilidade (leitor)", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }, modifier = Modifier.fillMaxWidth()) { Text("Iniciar copiloto") }
+                    }
+                }
             }
 
             Text("Menu", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)

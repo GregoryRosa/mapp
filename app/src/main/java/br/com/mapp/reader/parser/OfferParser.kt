@@ -27,6 +27,9 @@ object OfferParsers {
  * Busca = par com "de distância"/1º par; viagem = par com "Viagem"/2º par.
  */
 object UberParser : BaseOfferParser(Platform.UBER) {
+    // Na Uber o cartão da oferta aparece por cima da tela inicial (ganhos "R$ 0,00", "1-3 min", "+R$ 4"):
+    // lê só o bloco do cartão.
+    override val scopeToOfferBlock = true
     override val nonAddressTexts = listOf(
         "UberX", "Comfort", "Black", "Uber Black", "Uber Flash", "Flash", "Moto", "Uber Moto", "Juntos",
         "Priority", "Prioridade", "Bag", "Exclusivo", "Viagem", "Aceitar", "Corresponder",
@@ -94,6 +97,15 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
     /** Textos exatos que nunca são endereço (categorias, botões). */
     protected open val nonAddressTexts: List<String> = emptyList()
 
+    /** Botões que só existem no cartão de oferta (minúsculas, sem acento). Delimitam o fim do bloco. */
+    protected open val acceptKeywords: List<String> = listOf("aceitar", "accept", "corresponder", "aceite")
+
+    /**
+     * true = antes de ler, recorta só o bloco do cartão: do preço mais próximo ANTES do 1º par
+     * completo (tempo + km) até o botão Aceitar. Evita misturar textos da tela de fundo.
+     */
+    protected open val scopeToOfferBlock: Boolean = false
+
     /** Se só existe UM par sem rótulo, ele é a viagem (true) ou a busca (false)? CALIBRAR. */
     protected open val singleUnlabeledLegIsTrip: Boolean = true
 
@@ -102,15 +114,17 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
 
     override fun parse(texts: List<String>): RawOffer? {
         // Textos repetidos (ex.: contentDescription do pai que repete os filhos) entram uma vez só.
-        val lines = ParseUtils.splitLines(texts).distinct()
+        val all = ParseUtils.splitLines(texts).distinct()
+        val lines = if (scopeToOfferBlock) offerBlock(all) ?: return null else all
         val price = pickPrice(lines) ?: return null
 
         val legs = extractLegs(lines)
         val (pickup, trip) = classify(legs)
         val (pickupAddress, dropoffAddress) = pickAddresses(lines, legs, pickup, trip)
 
-        // Só preço não basta (ex.: "Ganhos de hoje R$ 120,00" na tela inicial).
-        if (legs.isEmpty() && pickupAddress == null && dropoffAddress == null) return null
+        // Só preço não basta (ex.: "Ganhos de hoje R$ 120,00" ou "R$ 0,00" + "1-3 min" na tela inicial):
+        // precisa de um par completo (tempo + km) ou de um endereço.
+        if (legs.none { !it.partial } && pickupAddress == null && dropoffAddress == null) return null
 
         return RawOffer(
             platform = platform,
@@ -122,8 +136,30 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
             pickupAddress = pickupAddress,
             dropoffAddress = dropoffAddress,
             passengerRating = lines.firstNotNullOfOrNull { ParseUtils.parseRating(it) },
-            rawText = lines.joinToString("\n"),
+            rawText = all.joinToString("\n"), // texto completo da tela: útil para calibrar
         )
+    }
+
+    // ------------------------------------------------------------------ bloco do cartão
+
+    private fun isAcceptButton(line: String): Boolean {
+        val f = ParseUtils.fold(line).trim()
+        return f.length <= 25 && acceptKeywords.any { f.startsWith(it) }
+    }
+
+    /** Valor > 0 que não é acréscimo ("+R$ 4"). */
+    private fun realPrice(line: String): Double? = ParseUtils.findMoney(line)
+        .firstOrNull { !line.substring(0, it.start).trimEnd().endsWith('+') && it.value > 0.0 }?.value
+
+    /** Recorte do cartão da oferta, ou null se não há par completo (tela sem oferta). */
+    fun offerBlock(lines: List<String>): List<String>? {
+        val firstFull = extractLegs(lines).filter { !it.partial }.minOfOrNull { it.line } ?: return null
+        val candidates = (firstFull downTo 0)
+        val start = candidates.firstOrNull { ParseUtils.isMoneyOnly(lines[it]) && realPrice(lines[it]) != null }
+            ?: candidates.firstOrNull { realPrice(lines[it]) != null }
+            ?: return null
+        val accept = (firstFull until lines.size).firstOrNull { isAcceptButton(lines[it]) }
+        return lines.subList(start, (accept ?: lines.lastIndex) + 1)
     }
 
     // ------------------------------------------------------------------ preço
@@ -140,7 +176,9 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
             }
             if (priority >= bestPriority) return@forEach
             // Ignora acréscimos "+R$ 3,00".
-            val m = ParseUtils.findMoney(line).firstOrNull { !line.substring(0, it.start).trimEnd().endsWith('+') }
+            // Ignora acréscimos "+R$ 3,00" e valores zerados ("R$ 0,00" dos ganhos do dia).
+            val m = ParseUtils.findMoney(line)
+                .firstOrNull { !line.substring(0, it.start).trimEnd().endsWith('+') && it.value > 0.0 }
                 ?: return@forEach
             best = m.value
             bestPriority = priority
