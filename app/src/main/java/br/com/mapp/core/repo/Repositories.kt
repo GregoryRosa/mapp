@@ -43,6 +43,13 @@ interface OfferHistoryRepository {
     suspend fun record(offer: EvaluatedOffer): Long
     fun recent(limit: Int = 200): Flow<List<OfferRecord>>
     fun between(fromMillis: Long, toMillis: Long): Flow<List<OfferRecord>>
+    /**
+     * Marca a oferta (identificada por raw.capturedAt + preço) como aceita ou não (null = sem informação).
+     * Se ela ainda não foi gravada, a marca vale quando [record] for chamado.
+     */
+    suspend fun setAccepted(offer: EvaluatedOffer, accepted: Boolean?)
+    /** Marca pelo id do registro (ajuste manual na tela de histórico). */
+    suspend fun setAcceptedById(id: Long, accepted: Boolean?)
 }
 
 enum class EntryKind { INCOME, EXPENSE }

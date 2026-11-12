@@ -40,6 +40,37 @@ class ReportMathTest {
         accepted = null,
     )
 
+    @Test fun resumo_das_aceitas_ignora_nao_aceitas_e_sem_marca() {
+        fun rec(price: Double, km: Double, min: Int, profit: Double?, accepted: Boolean?) = OfferRecord(
+            id = 0,
+            evaluated = EvaluatedOffer(
+                raw = RawOffer(Platform.UBER, price, capturedAt = t(9, 8)),
+                metrics = OfferMetrics(km, min, null, null, profit, null),
+                signal = Signal.GREEN,
+                reasons = emptyList(),
+            ),
+            accepted = accepted,
+        )
+        val list = listOf(
+            rec(20.0, 10.0, 20, 12.0, true),
+            rec(30.0, 10.0, 40, null, true),
+            rec(99.0, 5.0, 10, 50.0, false),
+            rec(15.0, 5.0, 10, 8.0, null),
+        )
+        val s = ReportMath.summarizeAccepted(list)
+        assertEquals(2, s.count)
+        assertEquals(50.0, s.total, 1e-9)
+        assertEquals(12.0, s.profit!!, 1e-9)
+        assertEquals(2.5, s.avgPerKm!!, 1e-9)
+        assertEquals(50.0, s.avgPerHour!!, 1e-9)
+        assertEquals(2, ReportMath.accepted(list).size)
+
+        val none = ReportMath.summarizeAccepted(list.filter { it.accepted != true })
+        assertEquals(0, none.count)
+        assertNull(none.profit)
+        assertNull(none.avgPerKm)
+    }
+
     @Test fun resumo_soma_ganhos_gastos_lucro_e_km() {
         val s = ReportMath.summarize(
             listOf(

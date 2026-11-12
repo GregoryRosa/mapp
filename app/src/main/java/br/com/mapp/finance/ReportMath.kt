@@ -31,6 +31,16 @@ data class HourBucket(val startHour: Int, val endHour: Int, val total: Double)
 
 data class HourStat(val hour: Int, val avgPerKm: Double, val offers: Int)
 
+/** Corridas aceitas num período: quantidade, soma dos valores e do lucro líquido, médias. */
+data class AcceptedSummary(
+    val count: Int,
+    val total: Double,
+    /** Soma do lucro líquido das corridas que têm lucro calculado; null se nenhuma tem. */
+    val profit: Double?,
+    val avgPerKm: Double?,
+    val avgPerHour: Double?,
+)
+
 data class OfferSummary(
     val count: Int,
     val avgPerKm: Double?,
@@ -180,6 +190,23 @@ object ReportMath {
             avgPerKm = if (km > 0) priceKm / km else null,
             avgPerHour = if (min > 0) priceMin / min * 60.0 else null,
             signals = signalCounts(offers),
+        )
+    }
+
+    /** Só as ofertas marcadas como aceitas. */
+    fun accepted(offers: List<OfferRecord>): List<OfferRecord> = offers.filter { it.accepted == true }
+
+    /** Resumo das corridas aceitas (ignora as não aceitas da lista). */
+    fun summarizeAccepted(offers: List<OfferRecord>): AcceptedSummary {
+        val list = accepted(offers)
+        val profits = list.mapNotNull { it.evaluated.metrics.netProfit }
+        val avg = summarizeOffers(list)
+        return AcceptedSummary(
+            count = list.size,
+            total = list.sumOf { it.evaluated.raw.price },
+            profit = if (profits.isEmpty()) null else profits.sum(),
+            avgPerKm = avg.avgPerKm,
+            avgPerHour = avg.avgPerHour,
         )
     }
 

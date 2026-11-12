@@ -91,6 +91,12 @@ interface OfferDao {
 
     @Query("SELECT * FROM offers WHERE capturedAt BETWEEN :fromMillis AND :toMillis ORDER BY capturedAt DESC, id DESC")
     fun between(fromMillis: Long, toMillis: Long): Flow<List<OfferEntity>>
+
+    @Query("UPDATE offers SET accepted = :accepted WHERE capturedAt = :capturedAt AND price = :price")
+    suspend fun setAccepted(capturedAt: Long, price: Double, accepted: Boolean?): Int
+
+    @Query("UPDATE offers SET accepted = :accepted WHERE id = :id")
+    suspend fun setAcceptedById(id: Long, accepted: Boolean?)
 }
 
 @Dao

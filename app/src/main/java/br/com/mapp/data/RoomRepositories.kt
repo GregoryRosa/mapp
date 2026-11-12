@@ -13,6 +13,8 @@ import br.com.mapp.core.repo.ZoneRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /*
  * Implementações Room dos contratos de core/repo. Flows do Room e funções suspend rodam
@@ -47,7 +49,25 @@ class RoomZoneRepository(private val dao: ZoneDao) : ZoneRepository {
 }
 
 class RoomOfferHistoryRepository(private val dao: OfferDao) : OfferHistoryRepository {
-    override suspend fun record(offer: EvaluatedOffer): Long = dao.insert(offer.toEntity())
+    // Aceite que chegou antes de a oferta ser gravada (a gravação espera a geocodificação).
+    private val lock = Mutex()
+    private val pending = HashMap<Pair<Long, Double>, Boolean?>()
+
+    override suspend fun record(offer: EvaluatedOffer): Long = lock.withLock {
+        val key = offer.raw.capturedAt to offer.raw.price
+        val accepted = if (pending.containsKey(key)) pending.remove(key) else null
+        dao.insert(offer.toEntity(accepted))
+    }
+
+    override suspend fun setAccepted(offer: EvaluatedOffer, accepted: Boolean?) = lock.withLock {
+        val key = offer.raw.capturedAt to offer.raw.price
+        if (dao.setAccepted(key.first, key.second, accepted) == 0) {
+            if (pending.size > PENDING_MAX) pending.clear()
+            pending[key] = accepted
+        }
+    }
+
+    override suspend fun setAcceptedById(id: Long, accepted: Boolean?) = dao.setAcceptedById(id, accepted)
 
     override fun recent(limit: Int): Flow<List<OfferRecord>> =
         dao.recent(limit).map { list -> list.map { it.toRecord() } }
@@ -55,6 +75,10 @@ class RoomOfferHistoryRepository(private val dao: OfferDao) : OfferHistoryReposi
     /** Intervalo inclusivo [fromMillis, toMillis]. */
     override fun between(fromMillis: Long, toMillis: Long): Flow<List<OfferRecord>> =
         dao.between(fromMillis, toMillis).map { list -> list.map { it.toRecord() } }
+
+    private companion object {
+        const val PENDING_MAX = 50
+    }
 }
 
 class RoomFinanceRepository(
