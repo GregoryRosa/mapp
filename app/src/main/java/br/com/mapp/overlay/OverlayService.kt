@@ -26,11 +26,13 @@ import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.RawOffer
 import br.com.mapp.core.model.Zone
 import br.com.mapp.core.model.ZoneHit
+import br.com.mapp.core.model.ZoneType
 import br.com.mapp.core.shift.Odometer
 import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.core.shift.ShiftTrip
 import br.com.mapp.maps.LocationProvider
+import br.com.mapp.maps.PinStore
 import br.com.mapp.reader.ReaderStatus
 import br.com.mapp.ui.MainActivity
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -110,6 +112,7 @@ class OverlayService : LifecycleService() {
         }
         pushShift()
         lifecycleScope.launch { ReaderStatus.state.collect { bubble?.updateReader(it) } }
+        lifecycleScope.launch { PinStore.pins(this@OverlayService).collect { bubble?.updatePins(it.size) } }
         lifecycleScope.launch {
             MappApp.repos.profiles.all()
                 .combine(MappApp.repos.profiles.active()) { all, active -> all to active }
@@ -185,7 +188,28 @@ class OverlayService : LifecycleService() {
             refreshCountButton()
             toast("Última corrida removida")
         }
+
+        override fun markPin(type: ZoneType) {
+            if (pinPending) return
+            val loc = location ?: return
+            if (!loc.hasPermission()) { toast("Permita a localização para marcar o local"); return }
+            pinPending = true
+            // Posição na hora do toque (GPS preciso, até 4 s); sem resposta, usa a última conhecida.
+            val quick = loc.lastKnown
+            lifecycleScope.launch {
+                try {
+                    val here = loc.current(timeoutMs = PIN_FIX_MS, precise = true) ?: quick
+                    if (here == null) { toast("Sem localização agora — tente de novo"); return@launch }
+                    PinStore.add(this@OverlayService, type, here)
+                    toast("📍 ${type.label} marcada. Desenhe a zona depois em Zonas")
+                } finally {
+                    pinPending = false
+                }
+            }
+        }
     }
+
+    private var pinPending = false
 
     // ------------------------------------------------------------------ jornada
 
@@ -425,6 +449,7 @@ class OverlayService : LifecycleService() {
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP = "br.com.mapp.overlay.STOP"
         private const val SHIFT_TICK_MS = 30_000L
+        private const val PIN_FIX_MS = 4_000L
 
         private val _running = MutableStateFlow(false)
         /** true enquanto o copiloto (serviço) está ativo — a tela inicial mostra o estado. */

@@ -21,6 +21,7 @@ Documentação completa (pesquisa, requisitos, arquitetura, roadmap): **README.m
 | `core/card/CardLayout` + `CardValues` | linhas do cabeçalho do cartão (`place`, `remove`, `encode/decode`), valores e cores por informação | overlay/CardHeaderView, ui/CardStyleScreen |
 | `overlay/OverlayPrefs` | `cardLayout(ctx)`, `setCardLayout(ctx, l)` (estilo do cartão salvo) | overlay, ui/CardStyleScreen |
 | `core/shift/*` | `Shift` (jornada: play/pausa, km GPS, corridas), `ShiftMath.summary/lines`, `Odometer`, `ShiftCodec` | overlay, ui/HomeScreen |
+| `core/pin/*` + `maps/PinStore` | `ZonePin` (pin rápido: tipo + ponto), `ZonePins.circle`, `ZonePinCodec`; `PinStore.pins/add/remove` (SharedPreferences) | overlay/OverlayService (📍 no painel), maps/ZoneEditor |
 | `overlay/ShiftTracker` | `current(ctx)`, `last(ctx)`, `start/pause/end`, `addKm`, `addTrip`, `undoLastTrip` (salvo em SharedPreferences) | overlay/OverlayService, ui/HomeScreen |
 | Telas `@Composable fun XScreen(onBack: () -> Unit)` | `finance/`: Finance, Reports, History, Profiles, Vehicle · `maps/`: ZoneEditor · `ui/`: CardStyle | ui/MainActivity |
 
