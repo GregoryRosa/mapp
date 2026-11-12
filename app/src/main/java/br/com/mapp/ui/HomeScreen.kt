@@ -1,6 +1,8 @@
 package br.com.mapp.ui
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -44,6 +46,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import br.com.mapp.overlay.OverlayService
 import br.com.mapp.reader.OfferAccessibilityService
+import br.com.mapp.reader.ReaderStatus
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,6 +64,7 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
 
     val p = remember(refresh) { Perms.check(ctx) }
     val running by OverlayService.running.collectAsState()
+    val reader by ReaderStatus.state.collectAsState()
 
     Scaffold(topBar = { TopAppBar(title = { Text("MApp – Copiloto") }) }) { pad ->
         Column(
@@ -130,6 +134,38 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                             }
                         }, modifier = Modifier.fillMaxWidth()) { Text("Iniciar copiloto") }
                     }
+                }
+            }
+
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Leitor de corridas", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
+                    Text(if (reader.connected) "✅ Conectado" else "⚠️ Desconectado")
+                    Text(
+                        "Última leitura: ${reader.lastPlatform ?: "—"} ${ReaderStatus.ago(reader.lastEventAt)} " +
+                            "(${reader.lastTextCount} textos)",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        "Última tela com R$: ${ReaderStatus.ago(reader.lastMoneyAt)}" +
+                            if (reader.lastMoneyAt > 0) (if (reader.lastMoneyRecognized) " → oferta reconhecida" else " → NÃO reconhecida") else "",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    )
+                    reader.lastOffer?.let {
+                        Text("Última oferta: $it (${ReaderStatus.ago(reader.lastOfferAt)})", style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
+                    }
+                    if (!reader.connected) {
+                        Text(
+                            "Se a Acessibilidade aparecer bloqueada (\"Configuração restrita\"): Configurações → Apps → MApp → " +
+                                "menu ⋮ → \"Permitir configurações restritas\" e ative de novo o leitor MApp.",
+                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    OutlinedButton(onClick = {
+                        val cm = ctx.getSystemService(ClipboardManager::class.java)
+                        cm?.setPrimaryClip(ClipData.newPlainText("MApp leitura", ReaderStatus.report()))
+                        Toast.makeText(ctx, "Leitura copiada. Cole no chat do Claude.", Toast.LENGTH_LONG).show()
+                    }, modifier = Modifier.fillMaxWidth()) { Text("📋 Copiar última leitura") }
                 }
             }
 

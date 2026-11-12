@@ -41,6 +41,12 @@ class OfferAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         Log.i(TAG, "Leitor de ofertas conectado")
+        ReaderStatus.setConnected(true)
+    }
+
+    override fun onUnbind(intent: android.content.Intent?): Boolean {
+        ReaderStatus.setConnected(false)
+        return super.onUnbind(intent)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -53,6 +59,7 @@ class OfferAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         if (offerVisible) clearOffer()
+        ReaderStatus.setConnected(false)
         super.onDestroy()
     }
 
@@ -70,6 +77,7 @@ class OfferAccessibilityService : AccessibilityService() {
                 Log.d(TAG, "[${platform.label}] " + texts.joinToString(" | "))
             }
             val parsed = if (texts.isEmpty()) null else OfferParsers.forPlatform(platform).parse(texts)
+            ReaderStatus.onRead(platform.label, texts, parsed?.let(::summary))
             lastPlatform = platform
             lastTexts = texts
             lastParsed = parsed
@@ -108,6 +116,13 @@ class OfferAccessibilityService : AccessibilityService() {
         offerVisible = false
         lastOfferKey = null
         OfferBus.clear()
+    }
+
+    private fun summary(o: RawOffer): String = buildString {
+        append(String.format(java.util.Locale.forLanguageTag("pt-BR"), "R$ %.2f", o.price))
+        o.pickupKm?.let { append(" · busca $it km") }
+        o.tripKm?.let { append(" · viagem $it km") }
+        o.tripMin?.let { append(" / $it min") }
     }
 
     // ------------------------------------------------------------------ leitura da árvore

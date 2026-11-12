@@ -15,7 +15,11 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.widget.Toast
 import br.com.mapp.core.model.FilterProfile
+import br.com.mapp.reader.ReaderStatus
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -47,6 +51,7 @@ class QuickBubbleView(
     private var panelAttached = false
     private var profile: FilterProfile = FilterProfile()
     private var profileCount = 1
+    private var reader: ReaderStatus.Snapshot = ReaderStatus.Snapshot()
 
     // ------------------------------------------------------------------ bolha
 
@@ -88,6 +93,7 @@ class QuickBubbleView(
     private val pickupValue = text(15f, bold = true)
     private val minPriceValue = text(15f, bold = true)
     private val voiceButton = button("") { actions.toggleVoice(); refreshVoice() }
+    private val readerText = text(12f, color = SECONDARY)
 
     private val panel = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -100,6 +106,8 @@ class QuickBubbleView(
         minimumWidth = dp(PANEL_WIDTH_DP)
 
         addView(text(12f, color = SECONDARY).apply { text = "AJUSTES RÁPIDOS" })
+        addView(readerText, fullWidth(4))
+        addView(button("📋 Copiar última leitura") { copyReading() }, fullWidth(4))
         addView(row(
             button("‹") { actions.previousProfile() },
             profileName,
@@ -146,6 +154,7 @@ class QuickBubbleView(
 
     init {
         installDrag()
+        paintBubble()
         refreshVoice()
         bindProfile()
     }
@@ -169,6 +178,13 @@ class QuickBubbleView(
         bindProfile()
     }
 
+    fun updateReader(snapshot: ReaderStatus.Snapshot) {
+        val wasConnected = reader.connected
+        reader = snapshot
+        if (panelAttached) bindReader()
+        if (wasConnected != snapshot.connected) paintBubble()
+    }
+
     fun destroy() {
         closePanel()
         if (bubbleAttached) {
@@ -185,6 +201,7 @@ class QuickBubbleView(
         if (panelAttached) return
         refreshVoice()
         bindProfile()
+        bindReader()
         val dm = context.resources.displayMetrics
         val width = dp(PANEL_WIDTH_DP)
         val bubbleOnRight = bubbleParams.x + dp(BUBBLE_DP) / 2 > dm.widthPixels / 2
@@ -211,6 +228,30 @@ class QuickBubbleView(
         perHourValue.text = p.minPerHour?.let { money(it) } ?: "—"
         pickupValue.text = p.maxPickupKm?.let { String.format(PT_BR, "%.1f km", it) } ?: "—"
         minPriceValue.text = p.minPrice?.let { money(it) } ?: "—"
+    }
+
+    private fun bindReader() {
+        val r = reader
+        readerText.text = buildString {
+            append(if (r.connected) "✅ Leitor conectado" else "⚠️ Leitor DESLIGADO – ative a Acessibilidade")
+            append("\nÚltima leitura: ${r.lastPlatform ?: "—"} ${ReaderStatus.ago(r.lastEventAt)} (${r.lastTextCount} textos)")
+            append("\nÚltima tela com R$: ${ReaderStatus.ago(r.lastMoneyAt)}")
+            if (r.lastMoneyAt > 0) append(if (r.lastMoneyRecognized) " → oferta reconhecida" else " → NÃO reconhecida")
+        }
+        readerText.setTextColor(if (r.connected) SECONDARY else YELLOW)
+    }
+
+    private fun copyReading() {
+        val cm = context.getSystemService(ClipboardManager::class.java)
+        cm?.setPrimaryClip(ClipData.newPlainText("MApp leitura", ReaderStatus.report()))
+        Toast.makeText(context, "Leitura copiada. Cole no chat do Claude.", Toast.LENGTH_LONG).show()
+    }
+
+    /** Verde = leitor ligado; cinza com "!" = Acessibilidade desligada. */
+    private fun paintBubble() {
+        val ok = reader.connected
+        bubble.text = if (ok) "M" else "M!"
+        (bubble.background as? GradientDrawable)?.setColor(if (ok) GREEN else GRAY)
     }
 
     private fun refreshVoice() {
@@ -348,6 +389,8 @@ class QuickBubbleView(
         private val SECONDARY = 0xFFBDBDBD.toInt()
         private val GREEN = 0xFF2E7D32.toInt()
         private val RED = 0xFFC62828.toInt()
+        private val GRAY = 0xFF616161.toInt()
+        private val YELLOW = 0xFFFFD54F.toInt()
         private val PANEL_BG = 0xF2202124.toInt()
         private val BUTTON_BG = 0xFF3C4043.toInt()
 

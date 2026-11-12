@@ -27,9 +27,33 @@ object ParseUtils {
     /** Remove caracteres invisíveis, troca espaços especiais (NBSP etc.) por espaço simples e apara. */
     fun normalize(text: String): String = text.replace(INVISIBLE, "").replace(SPACES, " ").trim()
 
-    /** Quebra cada texto em linhas, normaliza e descarta vazias. */
-    fun splitLines(texts: List<String>): List<String> =
-        texts.flatMap { it.split('\n', '\r') }.map(::normalize).filter { it.isNotEmpty() }
+    // Linha só com separador ("•", "·", "|"): a Uber às vezes entrega "6 min", "•", "1.6 km" em nós separados.
+    private val SEPARATOR_ONLY = Regex("""^[\s·•|,\-–—/~:()\[\]]+$""")
+    private val CURRENCY_ONLY = Regex("""^R\$$""", RegexOption.IGNORE_CASE)
+    private val NUMBER_ONLY = Regex("""^\d[\d.,]*$""")
+
+    /**
+     * Quebra cada texto em linhas, normaliza e descarta vazias e separadores soltos.
+     * Junta "R$" + "24,54" quando vêm em nós separados.
+     */
+    fun splitLines(texts: List<String>): List<String> {
+        val raw = texts.flatMap { it.split('\n', '\r') }.map(::normalize)
+            .filter { it.isNotEmpty() && !SEPARATOR_ONLY.matches(it) }
+        val out = ArrayList<String>(raw.size)
+        var i = 0
+        while (i < raw.size) {
+            val cur = raw[i]
+            val next = raw.getOrNull(i + 1)
+            if (CURRENCY_ONLY.matches(cur) && next != null && NUMBER_ONLY.matches(next)) {
+                out += "R$ $next"
+                i += 2
+            } else {
+                out += cur
+                i++
+            }
+        }
+        return out
+    }
 
     /** Minúsculas e sem acentos — só para comparar palavras-chave. */
     fun fold(text: String): String =

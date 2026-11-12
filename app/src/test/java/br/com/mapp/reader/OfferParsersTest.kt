@@ -135,6 +135,34 @@ class OfferParsersTest {
         assertCartaoReal(listOf("R$ 85,20", "+R$ 4", "1-3 min") + uberCartaoReal + listOf("+R$ 6", "2-4 min"))
     }
 
+    @Test fun uber_cartao_real_uberx_tela_cheia() {
+        val o = UberParser.parse(listOf(
+            "UberX", "Exclusivo", "R$ 24,54", "Est. de R$1,50/km", "+10% de ganhos Uber Pro",
+            "6 min • 1.6 km", "Av. Sen. Salgado Filho, Passo do Sabão, Viamão", "4,90 (989)",
+            "29 minutos • 14.8 km", "R. Dona Laura, 320, Bairro Rio Branco, Porto Alegre", "Aceitar",
+        ))!!
+        assertEquals(24.54, o.price, eps)
+        assertEquals(6, o.pickupMin)
+        assertEquals(1.6, o.pickupKm!!, eps)
+        assertEquals(29, o.tripMin)
+        assertEquals(14.8, o.tripKm!!, eps)
+        assertEquals("Av. Sen. Salgado Filho, Passo do Sabão, Viamão", o.pickupAddress)
+        assertEquals("R. Dona Laura, 320, Bairro Rio Branco, Porto Alegre", o.dropoffAddress)
+    }
+
+    @Test fun uber_textos_em_pedacos() {
+        // Mesmo cartão com moeda, tempo, separador e km em nós separados.
+        val o = UberParser.parse(listOf(
+            "UberX", "R$", "24,54", "6 min", "•", "1.6 km", "Av. Sen. Salgado Filho, Passo do Sabão, Viamão",
+            "29 minutos", "•", "14.8 km", "R. Dona Laura, 320, Bairro Rio Branco, Porto Alegre", "Aceitar",
+        ))!!
+        assertEquals(24.54, o.price, eps)
+        assertEquals(6, o.pickupMin)
+        assertEquals(1.6, o.pickupKm!!, eps)
+        assertEquals(29, o.tripMin)
+        assertEquals(14.8, o.tripKm!!, eps)
+    }
+
     @Test fun sem_valor_nao_e_oferta() {
         assertNull(UberParser.parse(listOf("UberX", "4 min (1,2 km) de distância", "Rua A, 10 - Centro")))
         assertNull(UberParser.parse(emptyList()))

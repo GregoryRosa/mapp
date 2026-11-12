@@ -26,6 +26,7 @@ import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.RawOffer
 import br.com.mapp.core.model.Zone
 import br.com.mapp.maps.LocationProvider
+import br.com.mapp.reader.ReaderStatus
 import br.com.mapp.ui.MainActivity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -84,6 +85,7 @@ class OverlayService : LifecycleService() {
         if (Settings.canDrawOverlays(this)) {
             bubble = QuickBubbleView(ctx, windowManager!!, bubbleActions).also { it.show() }
         }
+        lifecycleScope.launch { ReaderStatus.state.collect { bubble?.updateReader(it) } }
         lifecycleScope.launch {
             MappApp.repos.profiles.all()
                 .combine(MappApp.repos.profiles.active()) { all, active -> all to active }
