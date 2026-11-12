@@ -106,7 +106,7 @@ As regras compartilhadas ficam em `CLAUDE.md`.
 3. No app: conceda **Sobrepor outros apps**, **Localização** e ative o **serviço de Acessibilidade “MApp”**. Desative a otimização de bateria para o MApp.
 4. Configure custos do carro e um perfil de filtro; desenhe suas zonas em *Configurações → Zonas*.
 
-O GitHub Actions (`.github/workflows/android.yml`) compila e roda os testes a cada push e gera o APK como artefato.
+O GitHub Actions (`.github/workflows/android.yml`) compila e roda os testes a cada push e publica o APK em **Releases → ultima-versao** (https://github.com/GregoryRosa/mapp/releases/tag/ultima-versao).
 
 ---
 
@@ -125,6 +125,7 @@ O GitHub Actions (`.github/workflows/android.yml`) compila e roda os testes a ca
 | Data | Marco |
 |---|---|
 | 11/11/2026 | Pesquisa, requisitos, arquitetura e esqueleto do projeto criados |
-| 11/11/2026 | MVP implementado por subagentes: leitor (Uber/99/inDrive), overlay com semáforo + mini mapa + voz, editor de zonas, Room, finanças, relatórios, perfis, custos. 43 testes JVM passando. **Pendente:** 1º build no Android Studio/CI e calibrar parsers com ofertas reais (`OfferAccessibilityService.debugCapture = true`). |
+| 11/11/2026 | MVP implementado por subagentes: leitor (Uber/99/inDrive), overlay com semáforo + mini mapa + voz, editor de zonas, Room, finanças, relatórios, perfis, custos. 43 testes JVM passando. **Pendente:** calibrar parsers com ofertas reais (`OfferAccessibilityService.debugCapture = true`). |
+| 12/11/2026 | Projeto no GitHub (GregoryRosa/mapp); 1º build no CI passou; APK publicado na release `ultima-versao` a cada push. |
 
 **Pendências conhecidas:** exportar CSV (R9); persistir `zoneHits` e marcar oferta aceita no histórico; testes de `Format.parse` e `PolygonCodec`; após o 1º build, versionar `app/schemas/` do Room.
