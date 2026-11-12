@@ -66,14 +66,50 @@ object ParseUtils {
         RegexOption.IGNORE_CASE,
     )
     private val OCR_AFTER_KM = Regex("""(\d\s*km)\s*""" + OCR_SEPARATORS + """\s*(?=\d)""", RegexOption.IGNORE_CASE)
+    // Ponto/sinal solto antes do número no começo da linha: ".5 minutos• 2.7 km".
+    private val OCR_LEADING_PUNCT = Regex("""^[.·•*,:;'`]+\s*(?=\d)""")
+    // "1" lido como "l" ou "I" num número de tempo/distância: "4 min•l6 km" (era "1.6 km").
+    private val OCR_L_AS_ONE = Regex("""(?<![\p{L}\d])[lI](?=(?:[.,]?\d+(?:[.,]\d+)?)?\s*(?:km|min)(?!\p{L}))""")
+    // Distância inteira de 2–3 dígitos logo depois do tempo: pode ter perdido o ponto ("16 km" = 1.6).
+    private val OCR_INT_KM_AFTER_MIN = Regex(
+        """((?:minutos|minuto|mins|min)\s*•\s*)(\d{2,3})(\s*km)(?![\p{L}\d])""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /** Acima disto (km por minuto = 120 km/h) o trecho não existe: o OCR engoliu o ponto decimal. */
+    private const val MAX_KM_PER_MIN = 2.0
 
     /** Conserta os erros mais comuns do OCR em linhas de tempo/distância. Não mexe nas outras linhas. */
     fun cleanOcrLine(text: String): String {
         var t = normalize(text)
         t = OCR_LEADING_ICON.replace(t, "")
+        t = OCR_LEADING_PUNCT.replace(t, "")
+        t = OCR_L_AS_ONE.replace(t, "1")
         t = OCR_AFTER_MIN.replace(t) { it.groupValues[1] + " • " }
         t = OCR_AFTER_KM.replace(t) { it.groupValues[1] + " • " }
-        return t
+        return restoreLostDecimal(t)
+    }
+
+    /**
+     * "4 min • 16 km": 16 km em 4 min (240 km/h) não existe — o OCR perdeu o ponto de "1.6 km".
+     * Só mexe quando o tempo está só em minutos e a velocidade fica impossível.
+     */
+    private fun restoreLostDecimal(line: String): String {
+        val m = OCR_INT_KM_AFTER_MIN.find(line) ?: return line
+        val kmStart = m.range.first + m.groupValues[1].length
+        val minutes = findDurations(line.substring(0, kmStart)).lastOrNull()?.value ?: return line
+        if (minutes <= 0 || minutes >= 60) return line
+        val digits = m.groupValues[2]
+        if (digits.toDouble() / minutes <= MAX_KM_PER_MIN) return line
+        return line.replaceRange(kmStart, kmStart + digits.length, digits.dropLast(1) + "." + digits.last())
+    }
+
+    private val PER_KM_AFTER = Regex("""^\s*/\s*km""", RegexOption.IGNORE_CASE)
+
+    /** Taxa por km mostrada pelo app ("Est. de R$1,96/km" = preço ÷ km totais), ou null. */
+    fun findPerKmRate(lines: List<String>): Double? = lines.firstNotNullOfOrNull { line ->
+        val t = normalize(line)
+        findMoney(t).firstOrNull { PER_KM_AFTER.containsMatchIn(t.substring(it.end)) }?.value?.takeIf { it > 0 }
     }
 
     // Botão que só existe no cartão de oferta (minúsculas, sem acento).

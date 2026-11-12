@@ -195,6 +195,40 @@ class OcrParsingTest {
         assertFalse(ParseUtils.isRate("R$ 18,40, 4 min (1,2 km)", "R$ 18,40".length))
     }
 
+    // ------------------------------------------------------------------ ML Kit no aparelho (12/11/2026, 13:43)
+
+    // Diagnóstico real: "1.6 km" da busca saiu "l6 km" e o "5" da viagem ganhou um ponto na frente.
+    private val priorityMlKit = listOf(
+        "Ginásio do", "Oswaldo", "040", "Jrtente", "CTL-Santa ls bel", "oneira", "UPA", "Ate",
+        "2 Priority Exclusivo", "ue", "R$ 8,43", "Est. de R$1,96/km", "+10% de ganhos Uber Pro",
+        "+R$ 196 incluída para retirada", "4 min l6 km", "R. Ângelo Silveira, Lomba do Sabão,", "Viamão",
+        "* 4,92 (962)", ".5 minutos• 2.7 km", "Rua Dolores Duran, 240,", "Agronomia, Porto Alegre", "Aceitar",
+    )
+
+    @Test fun mlkit_busca_com_l_no_lugar_do_1_e_ponto_perdido() {
+        val o = UberParser.parse(priorityMlKit, fromOcr = true)!!
+        assertEquals(8.43, o.price, eps)
+        assertEquals(4, o.pickupMin)
+        assertEquals(1.6, o.pickupKm!!, eps)
+        assertEquals(5, o.tripMin)
+        assertEquals(2.7, o.tripKm!!, eps)
+        assertEquals("R. Ângelo Silveira, Lomba do Sabão, Viamão", o.pickupAddress)
+        assertEquals("Rua Dolores Duran, 240, Agronomia, Porto Alegre", o.dropoffAddress)
+        // Mesmo quadro com "•" entre tempo e km.
+        val comPonto = priorityMlKit.map { if (it == "4 min l6 km") "4 min•l6 km" else it }
+        assertEquals(1.6, UberParser.parse(comPonto, fromOcr = true)!!.pickupKm!!, eps)
+    }
+
+    @Test fun mlkit_km_da_busca_ilegivel_vem_da_taxa_por_km() {
+        // Busca sem km legível: 8,43 ÷ 1,96 = 4,3 km no total − 2,7 da viagem = 1,6.
+        val ilegivel = priorityMlKit.map { if (it == "4 min l6 km") "4 min •" else it }
+        val o = UberParser.parse(ilegivel, fromOcr = true)!!
+        assertEquals(1.6, o.pickupKm!!, eps)
+        assertEquals(2.7, o.tripKm!!, eps)
+        assertEquals(1.96, ParseUtils.findPerKmRate(listOf("Est. de R$1,96/km"))!!, eps)
+        assertNull(ParseUtils.findPerKmRate(listOf("R$ 8,43", "+R$ 1,96 incluída para retirada")))
+    }
+
     // ------------------------------------------------------------------ limpeza de linha
 
     @Test fun limpa_erros_comuns_do_ocr() {
@@ -203,6 +237,12 @@ class OcrParsingTest {
         assertEquals("9 min • 3.9 km", ParseUtils.cleanOcrLine("(E) 9 min «3.9 km"))
         assertEquals("29 minutos • 14.8 km", ParseUtils.cleanOcrLine("[0] 29 minutos * 14.8 km"))
         assertEquals("1,4 km • 4 min", ParseUtils.cleanOcrLine("1,4 km.4 min"))
+        assertEquals("4 min • 1.6 km", ParseUtils.cleanOcrLine("4 min•l6 km"))
+        assertEquals("4 min • 1.6 km", ParseUtils.cleanOcrLine("4 min l6 km"))
+        assertEquals("5 minutos • 2.7 km", ParseUtils.cleanOcrLine(".5 minutos• 2.7 km"))
+        // Velocidade possível: não mexe.
+        assertEquals("29 minutos • 14 km", ParseUtils.cleanOcrLine("29 minutos • 14 km"))
+        assertEquals("1 h 5 min • 75 km", ParseUtils.cleanOcrLine("1 h 5 min • 75 km"))
         // Não mexe em quem não é tempo/distância com número colado.
         assertEquals("4 min (1,2 km) de distância", ParseUtils.cleanOcrLine("4 min (1,2 km) de distância"))
         assertEquals("0,8 km", ParseUtils.cleanOcrLine("0,8 km"))

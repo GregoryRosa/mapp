@@ -151,13 +151,24 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
             price = price,
             tripKm = trip?.km,
             tripMin = trip?.minutes,
-            pickupKm = pickup?.km,
+            pickupKm = pickup?.km ?: pickupKmFromRate(lines, price, trip?.km),
             pickupMin = pickup?.minutes,
             pickupAddress = pickupAddress,
             dropoffAddress = dropoffAddress,
             passengerRating = lines.firstNotNullOfOrNull { ParseUtils.parseRating(it) },
             rawText = all.joinToString("\n"), // texto completo da tela: útil para calibrar
         )
+    }
+
+    /**
+     * Km da busca ilegível (ex.: OCR leu "l6 km"): a Uber mostra "Est. de R$1,96/km" = preço ÷ (busca +
+     * viagem), então busca = preço ÷ taxa − viagem. A taxa vem arredondada: resultado com 1 casa.
+     */
+    private fun pickupKmFromRate(lines: List<String>, price: Double, tripKm: Double?): Double? {
+        if (tripKm == null) return null
+        val rate = ParseUtils.findPerKmRate(lines) ?: return null
+        val pickup = Math.round((price / rate - tripKm) * 10) / 10.0
+        return pickup.takeIf { it in 0.1..MAX_DERIVED_PICKUP_KM }
     }
 
     // ------------------------------------------------------------------ bloco do cartão
@@ -408,5 +419,6 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
 
     private companion object {
         const val MAX_ADDRESS_LINES = 3
+        const val MAX_DERIVED_PICKUP_KM = 30.0
     }
 }
