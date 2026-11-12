@@ -120,21 +120,24 @@ class QuickBubbleView(
 
     private var day: ShiftSummary? = null
     private var labelsAttached = false
-    private val costLabel = dayLabel(MUTED)
-    private val profitLabel = dayLabel(MUTED)
-    private val kmLabel = dayLabel(MUTED)
+    private val kmLabel = dayLabel(DAY_KM)
+    private val costLabel = dayLabel(DAY_COST)
+    private val profitLabel = dayLabel(DAY_PROFIT)
 
-    /** Custo em cima do "M"; lucro e km embaixo. Pequeno, sem fundo, não recebe toques. */
+    /**
+     * Só números, centralizados com o "M": km e custo em cima, lucro embaixo.
+     * Contorno preto para ler em fundo claro; sem fundo e não recebe toques.
+     */
     private val labelsRoot = FrameLayout(context).apply {
-        addView(costLabel, labelParams(top = 0))
-        addView(profitLabel, labelParams(top = LABEL_LINE_DP + BUBBLE_DP))
-        addView(kmLabel, labelParams(top = LABEL_LINE_DP + BUBBLE_DP + LABEL_LINE_DP))
+        addView(kmLabel, labelParams(top = 0))
+        addView(costLabel, labelParams(top = LABEL_LINE_DP))
+        addView(profitLabel, labelParams(top = 2 * LABEL_LINE_DP + BUBBLE_DP))
         visibility = View.GONE
     }
 
     private val labelsParams = WindowManager.LayoutParams(
         dp(LABEL_WIDTH_DP),
-        dp(LABEL_LINE_DP + BUBBLE_DP + 2 * LABEL_LINE_DP),
+        dp(3 * LABEL_LINE_DP + BUBBLE_DP),
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
@@ -787,23 +790,20 @@ class QuickBubbleView(
 
     // ------------------------------------------------------------------ resumo do dia
 
-    /** Textos alinhados pela borda da tela em que o "M" está (assim não saem da tela). */
+    /** Textos centralizados com o "M" (a janela pode sair um pouco da tela; os números são curtos). */
     private fun placeLabels() {
-        val onRight = bubbleParams.x + dp(BUBBLE_DP) / 2 > context.resources.displayMetrics.widthPixels / 2
-        labelsParams.x = if (onRight) bubbleParams.x + dp(BUBBLE_DP) - dp(LABEL_WIDTH_DP) else bubbleParams.x
-        labelsParams.y = bubbleParams.y - dp(LABEL_LINE_DP)
-        val g = (if (onRight) Gravity.END else Gravity.START) or Gravity.CENTER_VERTICAL
-        listOf(costLabel, profitLabel, kmLabel).forEach { it.gravity = g }
+        labelsParams.x = bubbleParams.x + dp(BUBBLE_DP) / 2 - dp(LABEL_WIDTH_DP) / 2
+        labelsParams.y = bubbleParams.y - dp(2 * LABEL_LINE_DP)
     }
 
     private fun bindDay() {
         val d = day
         labelsRoot.visibility = if (d == null) View.GONE else View.VISIBLE
         if (d == null) return
-        costLabel.text = "custo ${ShiftMath.money(d.cost)}"
-        profitLabel.text = "lucro ${ShiftMath.money(d.profit)}"
-        profitLabel.setTextColor(if (d.profit >= 0) MUTED_GREEN else MUTED_RED)
-        kmLabel.text = ShiftMath.km(d.totalKm)
+        kmLabel.text = ShiftMath.num(d.totalKm, 1)
+        costLabel.text = ShiftMath.num(d.cost, 2)
+        profitLabel.text = ShiftMath.num(d.profit, 2)
+        profitLabel.color = if (d.profit >= 0) DAY_PROFIT else DAY_LOSS
     }
 
     // ------------------------------------------------------------------ views
@@ -859,14 +859,8 @@ class QuickBubbleView(
             addView(button("+") { plus() })
         }
 
-    /** Texto miúdo (tamanho fixo em dp, para caber na janela mesmo com fonte grande) com sombra para ler no mapa. */
-    private fun dayLabel(color: Int) = TextView(context).apply {
-        setTextSize(TypedValue.COMPLEX_UNIT_DIP, 10f)
-        setTextColor(color)
-        maxLines = 1
-        includeFontPadding = false
-        setShadowLayer(3f * density, 0f, 0f, 0xE6000000.toInt())
-    }
+    /** Número pequeno (tamanho fixo em dp, cabe na janela mesmo com fonte grande) com contorno preto. */
+    private fun dayLabel(color: Int) = OutlineLabel(context, 11f * density, 3f * density).apply { this.color = color }
 
     private fun labelParams(top: Int) = FrameLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -904,7 +898,7 @@ class QuickBubbleView(
         private const val TAG = "MApp/Bubble"
         private const val BUBBLE_DP = 52
         private const val LABEL_LINE_DP = 14
-        private const val LABEL_WIDTH_DP = 110
+        private const val LABEL_WIDTH_DP = 96
         private const val PANEL_WIDTH_DP = 290
         private const val CONFIRM_MS = 4_000L
         private const val HOLD_TO_END_MS = 3_000L
@@ -926,9 +920,10 @@ class QuickBubbleView(
         private val BLUE = 0xFF1565C0.toInt()
         private val BUTTON_BG = 0xFF3C4043.toInt()
         private val RING_BG = 0xF0000000.toInt()
-        private val MUTED = 0xB3FFFFFF.toInt()
-        private val MUTED_GREEN = 0xC0A5D6A7.toInt()
-        private val MUTED_RED = 0xC0EF9A9A.toInt()
+        private val DAY_KM = 0xFFF2F2F2.toInt()
+        private val DAY_COST = 0xFFFFCC80.toInt()
+        private val DAY_PROFIT = 0xFF8EE69A.toInt()
+        private val DAY_LOSS = 0xFFFF8A80.toInt()
         private val GRAY_LIGHT = 0xFF9E9E9E.toInt()
         private val NEON_GREEN = 0xFF00E64D.toInt()
         private val NEON_YELLOW = 0xFFFFD600.toInt()
@@ -1094,4 +1089,38 @@ private class HoldRing(color: Int, private val width: Float) : Drawable() {
     override fun setColorFilter(colorFilter: ColorFilter?) { paint.colorFilter = colorFilter }
     @Deprecated("Deprecated in Java")
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+}
+
+/** Texto de uma linha centralizado, com contorno (traço preto por baixo do preenchimento). */
+private class OutlineLabel(context: Context, sizePx: Float, outlinePx: Float) : View(context) {
+    var text: String = ""
+        set(value) { if (field != value) { field = value; invalidate() } }
+    var color: Int = 0xFFFFFFFF.toInt()
+        set(value) { if (field != value) { field = value; invalidate() } }
+
+    private val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = outlinePx
+        strokeJoin = Paint.Join.ROUND
+        setColor(0xF0000000.toInt())
+        textSize = sizePx
+        typeface = Typeface.DEFAULT_BOLD
+        textAlign = Paint.Align.CENTER
+    }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        textSize = sizePx
+        typeface = Typeface.DEFAULT_BOLD
+        textAlign = Paint.Align.CENTER
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        if (text.isEmpty()) return
+        val x = width / 2f
+        val fm = fill.fontMetrics
+        val y = height / 2f - (fm.ascent + fm.descent) / 2f
+        canvas.drawText(text, x, y, outline)
+        fill.color = color
+        canvas.drawText(text, x, y, fill)
+    }
 }
