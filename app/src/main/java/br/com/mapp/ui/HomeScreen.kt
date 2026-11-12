@@ -65,12 +65,35 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
     val p = remember(refresh) { Perms.check(ctx) }
     val running by OverlayService.running.collectAsState()
     val reader by ReaderStatus.state.collectAsState()
+    // Versão instalada, sempre à vista: muda a cada APK novo.
+    val version = remember { ReaderStatus.versionOf(ctx) }
+    val updatedFrom = remember { versionChange(ctx, version) }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("MApp – Copiloto") }) }) { pad ->
+    Scaffold(
+        topBar = {
+            TopAppBar(title = {
+                Column {
+                    Text("MApp – Copiloto")
+                    Text("Versão $version", style = androidx.compose.material3.MaterialTheme.typography.labelMedium)
+                }
+            })
+        },
+    ) { pad ->
         Column(
             Modifier.fillMaxSize().padding(pad).padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (updatedFrom != null) {
+                Card(Modifier.fillMaxWidth()) {
+                    Text(
+                        "✅ Atualização instalada: versão $version" +
+                            if (updatedFrom.isNotEmpty()) " (antes era a $updatedFrom)" else "",
+                        modifier = Modifier.padding(16.dp),
+                        style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                    )
+                }
+            }
+
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Permissões", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
@@ -140,19 +163,12 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Leitor de corridas", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
-                    Text(if (reader.connected) "✅ Conectado" else "⚠️ Desconectado")
-                    Text(
-                        "Última leitura: ${reader.lastPlatform ?: "—"} ${ReaderStatus.ago(reader.lastEventAt)} " +
-                            "(${reader.lastTextCount} textos)",
-                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                    )
-                    Text(
-                        "Última tela com R$: ${ReaderStatus.ago(reader.lastMoneyAt)}" +
-                            if (reader.lastMoneyAt > 0) (if (reader.lastMoneyRecognized) " → oferta reconhecida" else " → NÃO reconhecida") else "",
-                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                    )
-                    reader.lastOffer?.let {
-                        Text("Última oferta: $it (${ReaderStatus.ago(reader.lastOfferAt)})", style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
+                    ReaderStatus.lines(reader, running).forEachIndexed { i, line ->
+                        if (i == 0) {
+                            Text(line)
+                        } else {
+                            Text(line, style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
+                        }
                     }
                     if (!reader.connected) {
                         Text(
@@ -163,9 +179,9 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                     }
                     OutlinedButton(onClick = {
                         val cm = ctx.getSystemService(ClipboardManager::class.java)
-                        cm?.setPrimaryClip(ClipData.newPlainText("MApp leitura", ReaderStatus.report()))
-                        Toast.makeText(ctx, "Leitura copiada. Cole no chat do Claude.", Toast.LENGTH_LONG).show()
-                    }, modifier = Modifier.fillMaxWidth()) { Text("📋 Copiar última leitura") }
+                        cm?.setPrimaryClip(ClipData.newPlainText("MApp diagnóstico", ReaderStatus.report(ctx)))
+                        Toast.makeText(ctx, "Diagnóstico copiado. Cole no chat do Claude.", Toast.LENGTH_LONG).show()
+                    }, modifier = Modifier.fillMaxWidth()) { Text("📋 Copiar diagnóstico") }
                 }
             }
 
@@ -183,6 +199,18 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
             )
         }
     }
+}
+
+/**
+ * Compara a versão instalada com a vista na última abertura (e guarda a atual). Devolve a versão
+ * anterior se mudou ("" na primeira vez), ou null se é a mesma — aí não há aviso de atualização.
+ */
+private fun versionChange(ctx: Context, current: String): String? {
+    val prefs = ctx.getSharedPreferences("mapp_ui", Context.MODE_PRIVATE)
+    val last = prefs.getString("last_version", null)
+    if (last == current) return null
+    prefs.edit().putString("last_version", current).apply()
+    return last ?: ""
 }
 
 @Composable

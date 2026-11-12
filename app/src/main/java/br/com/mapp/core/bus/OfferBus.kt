@@ -18,6 +18,12 @@ object OfferBus {
     /** Última oferta avaliada (null = nenhuma oferta na tela). */
     val evaluated: StateFlow<EvaluatedOffer?> = _evaluated.asStateFlow()
 
+    /**
+     * true enquanto alguém consome [raw] (copiloto ligado). O leitor só captura a imagem da tela
+     * nesse caso — com o copiloto parado não há por que gastar bateria.
+     */
+    val hasListeners: Boolean get() = _raw.subscriptionCount.value > 0
+
     /** Oferta atualmente na tela (null após clear). Evita mostrar avaliação atrasada de oferta que já sumiu. */
     @Volatile private var current: RawOffer? = null
 

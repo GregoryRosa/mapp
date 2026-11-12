@@ -55,6 +55,35 @@ object ParseUtils {
         return out
     }
 
+    // ---------------------------------------------------------------- texto vindo de imagem (OCR)
+
+    private const val OCR_SEPARATORS = """[.·•*«»°:;,|\-–—]*"""
+    // Ícone do cartão lido como letra antes do número: "O] 6 min", "[0] 29 minutos", "(E) 9 min".
+    private val OCR_LEADING_ICON = Regex("""^[\[(]?[OoQ0@©eE+][\])]?\s*(?=\d+\s*(?:min|h\b|km))""")
+    // "6 min1.6km", "9 min.3.9 km", "29 minutos·14.8km": o "•" entre tempo e distância some ou vira outro sinal.
+    private val OCR_AFTER_MIN = Regex(
+        """(\d\s*(?:minutos|minuto|mins|min))\s*""" + OCR_SEPARATORS + """\s*(?=\d)""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val OCR_AFTER_KM = Regex("""(\d\s*km)\s*""" + OCR_SEPARATORS + """\s*(?=\d)""", RegexOption.IGNORE_CASE)
+
+    /** Conserta os erros mais comuns do OCR em linhas de tempo/distância. Não mexe nas outras linhas. */
+    fun cleanOcrLine(text: String): String {
+        var t = normalize(text)
+        t = OCR_LEADING_ICON.replace(t, "")
+        t = OCR_AFTER_MIN.replace(t) { it.groupValues[1] + " • " }
+        t = OCR_AFTER_KM.replace(t) { it.groupValues[1] + " • " }
+        return t
+    }
+
+    // Botão que só existe no cartão de oferta (minúsculas, sem acento).
+    val ACCEPT_KEYWORDS: List<String> = listOf("aceitar", "accept", "corresponder", "aceite")
+
+    fun isAcceptLine(line: String, keywords: List<String> = ACCEPT_KEYWORDS): Boolean {
+        val f = fold(line).trim()
+        return f.length <= 25 && keywords.any { f.startsWith(it) }
+    }
+
     /** Minúsculas e sem acentos — só para comparar palavras-chave. */
     fun fold(text: String): String =
         Normalizer.normalize(text, Normalizer.Form.NFD).replace(COMBINING, "").lowercase()
@@ -93,14 +122,23 @@ object ParseUtils {
     // ---------------------------------------------------------------- dinheiro
 
     // "R$ 12,50", "R$12.50", "R$ 1.234,56", "R$ 1,234.56", "R$ 18".
+    // 2ª alternativa: OCR às vezes lê "R$" como "RS"/"R5" — só vale com centavos ("RS 24,54"),
+    // para não confundir com rodovia ("RS 040", "RS-118").
     private val MONEY = Regex(
-        """R\$\s*(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)(?!\d)""",
+        """R\$\s*(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)(?!\d)""" +
+            """|(?<![\p{L}\d])R[S5]\s?(\d{1,4},\d{2})(?![\d,.])""",
         RegexOption.IGNORE_CASE,
     )
 
     fun findMoney(text: String): List<Measure> = MONEY.findAll(text).mapNotNull { m ->
-        parseNumber(m.groupValues[1], allowGrouping = true)?.let { Measure(it, m.range.first, m.range.last + 1) }
+        val raw = m.groupValues[1].ifEmpty { m.groupValues[2] }
+        parseNumber(raw, allowGrouping = true)?.let { Measure(it, m.range.first, m.range.last + 1) }
     }.toList()
+
+    private val RATE_AFTER = Regex("""^\s*(?:/|por\s)?\s*(?:km|h\b|hora|min)""", RegexOption.IGNORE_CASE)
+
+    /** O valor que termina em [moneyEnd] é uma taxa ("R$1,50/km", "R$ 30/h"), não o preço da corrida? */
+    fun isRate(text: String, moneyEnd: Int): Boolean = RATE_AFTER.containsMatchIn(text.substring(moneyEnd))
 
     /** Primeiro valor em R$ do texto, ou null. */
     fun parseMoney(text: String): Double? = findMoney(normalize(text)).firstOrNull()?.value
@@ -189,7 +227,8 @@ object ParseUtils {
         RegexOption.IGNORE_CASE,
     )
     // Texto que é só "4,93" ou "4,93 (120)". Exige 2 casas para não confundir com "1,2" solto.
-    private val RATING_ALONE = Regex("""^([1-5][.,]\d{2})(?:\s*\(\d+\))?$""")
+    // A estrela pode chegar do OCR como "x", "*", "+": "x 4,90 (989)", "*x 4,92(640)".
+    private val RATING_ALONE = Regex("""^[\s*+xX×»›·•|~^'"\-]{0,4}([1-5][.,]\d{2})(?:\s*\(\d[\d.]*\))?$""")
 
     /** Nota do passageiro (1,0–5,0): "★ 4,92", "4,9 ★ (213)", "Nota 4,93", "4,93". */
     fun parseRating(text: String): Double? {
@@ -245,10 +284,32 @@ object ParseUtils {
         if (parseRating(t) != null) return false
         val folded = fold(t)
         if (blocked.any { fold(it) == folded }) return false
-        if (NON_ADDRESS_WORDS.any { folded.contains(it) }) return false
+        // "Av. Pixinguinha" começa com tipo de logradouro: é endereço mesmo contendo "pix".
         if (STREET_PREFIX.containsMatchIn(t)) return true
+        if (NON_ADDRESS_WORDS.any { folded.contains(it) }) return false
         if (WORD.findAll(t).count() < 2) return false
         return t.contains(',') || DASH_SEPARATOR.containsMatchIn(t)
+    }
+
+    private val LONG_WORD = Regex("""\p{L}{4,}""")
+    private val ADDRESS_CHARS = Regex("""^[\p{L}\d\s,.\-–'’ºª°/()&]+$""")
+
+    /**
+     * Pode ser um pedaço de endereço? O OCR quebra endereços longos em 2–3 linhas
+     * ("Av. Sen. Salgado Filho, Passo do" + "Sabão, Viamão"); a continuação não parece endereço sozinha.
+     */
+    fun isAddressPart(text: String, blocked: Collection<String> = emptyList()): Boolean {
+        val t = normalize(text)
+        if (t.length !in 3..80 || t.count { it.isLetter() } < 3) return false
+        if (!ADDRESS_CHARS.matches(t)) return false
+        if (hasMoney(t) || findDistances(t).isNotEmpty() || findDurations(t).isNotEmpty()) return false
+        if (parseRating(t) != null) return false
+        val folded = fold(t)
+        if (blocked.any { fold(it) == folded }) return false
+        if (STREET_PREFIX.containsMatchIn(t)) return true
+        if (NON_ADDRESS_WORDS.any { folded.contains(it) }) return false
+        // Restos de botão/ícone mal lidos ("te UR") não têm vírgula nem palavra de 4+ letras.
+        return t.contains(',') || DASH_SEPARATOR.containsMatchIn(t) || LONG_WORD.containsMatchIn(t)
     }
 
     /** Remove rótulos como "Destino:" e devolve o endereço com o papel indicado, se parecer endereço. */

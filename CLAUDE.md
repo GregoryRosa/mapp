@@ -6,21 +6,22 @@ Documentação completa (pesquisa, requisitos, arquitetura, roadmap): **README.m
 1. **Nunca automatizar cliques.** Proibido `performAction`, `dispatchGesture`, `canPerformGestures`. O app só lê e mostra.
 2. `core/` é Kotlin puro: **nenhum import `android.*`**. Toda regra de negócio fica lá e tem teste em `app/src/test`.
 3. Contratos em `core/model/Models.kt` e `core/repo/Repositories.kt` só mudam via subagente `arquiteto` (e atualizando este arquivo).
-4. Dados ficam no aparelho (Room). Sem envio para servidores, exceto tiles do OSM e o Geocoder do sistema.
+4. Dados ficam no aparelho (Room). Sem envio para servidores, exceto tiles do OSM e o Geocoder do sistema. Imagens capturadas para OCR nunca são gravadas em disco; o OCR (ML Kit) usa modelo embutido e seu canal de estatísticas fica removido no manifest.
 5. Textos de UI em pt-BR. Kotlin oficial, Compose + Material 3.
 
 ## Contratos entre módulos
 | Quem | Expõe | Consumido por |
 |---|---|---|
-| `core/bus/OfferBus` | `publish(RawOffer)`, `raw`, `publishEvaluated()`, `evaluated`, `clear()` | reader → overlay |
+| `core/bus/OfferBus` | `publish(RawOffer)`, `raw`, `publishEvaluated()`, `evaluated`, `clear()`, `hasListeners` (copiloto ligado?) | reader → overlay |
 | `core/engine/OfferEvaluator` | `evaluate(raw, profile, cost, zones, pickup, dropoff)` | overlay |
 | `data/DataModule.create(context): Repositories` | implementações de `core/repo/*` | `MappApp.repos` |
 | `overlay/OverlayService` | `companion fun start(ctx)`, `stop(ctx)` | ui/HomeScreen |
 | `reader/OfferAccessibilityService` | serviço declarado no manifest | sistema |
+| `reader/ReaderStatus` | `state`, `lines()`, `report(ctx)`, `versionOf(ctx)` (diagnóstico, só em memória) | ui/HomeScreen, overlay/QuickBubbleView |
 | Telas `@Composable fun XScreen(onBack: () -> Unit)` | `finance/`: Finance, Reports, History, Profiles, Vehicle · `maps/`: ZoneEditor | ui/MainActivity |
 
 ## Fluxo da oferta
-Reader lê tela → `OfferBus.publish(raw)` → `overlay/OfferPipeline` (geocodifica, carrega perfil ativo/custos/zonas, avalia, grava histórico) → `OfferBus.publishEvaluated` → overlay desenha cartão + mini mapa. Quando a oferta some: `OfferBus.clear()`.
+Reader lê a tela por duas fontes — texto (árvore de Acessibilidade) e imagem (`reader/ScreenOcr`: captura da janela do app de corrida + OCR no aparelho, só com `OfferBus.hasListeners`) — e passa os textos ao parser (`parse(texts, fromOcr)`) → `OfferBus.publish(raw)` → `overlay/OfferPipeline` (geocodifica, carrega perfil ativo/custos/zonas, avalia, grava histórico) → `OfferBus.publishEvaluated` → overlay desenha cartão + mini mapa. Quando a oferta some: `OfferBus.clear()`.
 
 ## Subagentes (`.claude/agents/`)
 - `arquiteto` — core/, Gradle, manifest, ui/, contratos.

@@ -105,9 +105,9 @@ class QuickBubbleView(
         elevation = dp(8).toFloat()
         minimumWidth = dp(PANEL_WIDTH_DP)
 
-        addView(text(12f, color = SECONDARY).apply { text = "AJUSTES RÁPIDOS" })
+        addView(text(12f, color = SECONDARY).apply { text = "MApp ${ReaderStatus.versionOf(context)} · AJUSTES RÁPIDOS" })
         addView(readerText, fullWidth(4))
-        addView(button("📋 Copiar última leitura") { copyReading() }, fullWidth(4))
+        addView(button("📋 Copiar diagnóstico") { copyReading() }, fullWidth(4))
         addView(row(
             button("‹") { actions.previousProfile() },
             profileName,
@@ -232,19 +232,15 @@ class QuickBubbleView(
 
     private fun bindReader() {
         val r = reader
-        readerText.text = buildString {
-            append(if (r.connected) "✅ Leitor conectado" else "⚠️ Leitor DESLIGADO – ative a Acessibilidade")
-            append("\nÚltima leitura: ${r.lastPlatform ?: "—"} ${ReaderStatus.ago(r.lastEventAt)} (${r.lastTextCount} textos)")
-            append("\nÚltima tela com R$: ${ReaderStatus.ago(r.lastMoneyAt)}")
-            if (r.lastMoneyAt > 0) append(if (r.lastMoneyRecognized) " → oferta reconhecida" else " → NÃO reconhecida")
-        }
+        // O painel só existe com o copiloto ligado.
+        readerText.text = ReaderStatus.lines(r, copilotRunning = true).joinToString("\n")
         readerText.setTextColor(if (r.connected) SECONDARY else YELLOW)
     }
 
     private fun copyReading() {
         val cm = context.getSystemService(ClipboardManager::class.java)
-        cm?.setPrimaryClip(ClipData.newPlainText("MApp leitura", ReaderStatus.report()))
-        Toast.makeText(context, "Leitura copiada. Cole no chat do Claude.", Toast.LENGTH_LONG).show()
+        cm?.setPrimaryClip(ClipData.newPlainText("MApp diagnóstico", ReaderStatus.report(context)))
+        Toast.makeText(context, "Diagnóstico copiado. Cole no chat do Claude.", Toast.LENGTH_LONG).show()
     }
 
     /** Verde = leitor ligado; cinza com "!" = Acessibilidade desligada. */
@@ -382,7 +378,7 @@ class QuickBubbleView(
         private const val TAG = "MApp/Bubble"
         private const val BUBBLE_DP = 52
         private const val PANEL_WIDTH_DP = 260
-        private const val PANEL_HEIGHT_DP = 440
+        private const val PANEL_HEIGHT_DP = 520
 
         private val PT_BR: Locale = Locale.forLanguageTag("pt-BR")
         private val WHITE = 0xFFFFFFFF.toInt()

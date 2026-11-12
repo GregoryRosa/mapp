@@ -2,5 +2,5 @@
 <resources>
     <string name="app_name">MApp</string>
     <string name="accessibility_label">MApp – Leitor de ofertas</string>
-    <string name="accessibility_description">O MApp lê o texto das ofertas de corrida da Uber, 99 e inDrive para calcular R$/km, R$/hora e mostrar o mini mapa. O MApp nunca toca na tela nem aceita ou recusa corridas por você. Nenhum dado sai do seu celular.</string>
+    <string name="accessibility_description">O MApp lê as ofertas de corrida da Uber, 99 e inDrive para calcular R$/km, R$/hora e mostrar o mini mapa. Quando o app de corrida não entrega a oferta como texto, o MApp captura a imagem da janela desse app e reconhece o texto no próprio celular — a imagem não é salva nem enviada. O MApp nunca toca na tela nem aceita ou recusa corridas por você. Nenhum dado sai do seu celular.</string>
 </resources>

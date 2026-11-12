@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -52,5 +53,12 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Janela flutuante com análise de ofertas de corrida" />
         </service>
+
+        <!-- O reconhecimento de texto (ML Kit) roda só no aparelho. Este serviço é o canal por onde a
+             biblioteca mandaria estatísticas de uso ao Google: removido para manter a regra de que
+             nada sai do celular (CLAUDE.md, regra 4). -->
+        <service
+            android:name="com.google.android.datatransport.runtime.backends.TransportBackendDiscovery"
+            tools:node="remove" />
     </application>
 </manifest>

@@ -8,8 +8,20 @@ import br.com.mapp.core.model.RawOffer
 interface OfferParser {
     val platform: Platform
 
-    /** Devolve null se os textos não formam uma oferta (sem valor em R$, ou sem distância/tempo/endereço). */
-    fun parse(texts: List<String>): RawOffer?
+    /**
+     * Devolve null se os textos não formam uma oferta (sem valor em R$, ou sem distância/tempo/endereço).
+     *
+     * [fromOcr] = os textos vieram da imagem da tela (OCR), não da árvore de Acessibilidade: endereços
+     * chegam quebrados em 2–3 linhas, há ruído de ícones e a regra é mais rígida (botão de aceitar
+     * ou os dois trechos completos).
+     */
+    fun parse(texts: List<String>, fromOcr: Boolean = false): RawOffer?
+
+    /**
+     * A tela ainda mostra [offer]? (algum trecho tempo+km igual ao dela). Serve para não "perder" a
+     * oferta quando parte do cartão está coberta e o preço não pôde ser lido.
+     */
+    fun stillShows(texts: List<String>, offer: RawOffer): Boolean
 }
 
 object OfferParsers {
@@ -98,7 +110,7 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
     protected open val nonAddressTexts: List<String> = emptyList()
 
     /** Botões que só existem no cartão de oferta (minúsculas, sem acento). Delimitam o fim do bloco. */
-    protected open val acceptKeywords: List<String> = listOf("aceitar", "accept", "corresponder", "aceite")
+    protected open val acceptKeywords: List<String> = ParseUtils.ACCEPT_KEYWORDS
 
     /**
      * true = antes de ler, recorta só o bloco do cartão: do preço mais próximo ANTES do 1º par
@@ -109,22 +121,30 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
     /** Se só existe UM par sem rótulo, ele é a viagem (true) ou a busca (false)? CALIBRAR. */
     protected open val singleUnlabeledLegIsTrip: Boolean = true
 
-    // Entre tempo e distância de um mesmo par só pode haver separadores: "4 min (1,2 km)", "3 min · 0,9 km".
-    private val pairGap = Regex("""^[\s()\[\]·•|,\-–—/~:]*$""")
+    // Entre tempo e distância de um mesmo par só pode haver sinais (nunca letras ou números):
+    // "4 min (1,2 km)", "3 min · 0,9 km", e o que o OCR fizer do "•" ("6 min « 1.6 km", "29 minutos * 14.8 km").
+    private val pairGap = Regex("""^[^\p{L}\d]{0,6}$""")
 
-    override fun parse(texts: List<String>): RawOffer? {
-        // Textos repetidos (ex.: contentDescription do pai que repete os filhos) entram uma vez só.
-        val all = ParseUtils.splitLines(texts).distinct()
-        val lines = if (scopeToOfferBlock) offerBlock(all) ?: return null else all
+    override fun parse(texts: List<String>, fromOcr: Boolean): RawOffer? {
+        val split = ParseUtils.splitLines(texts)
+        // Árvore: textos repetidos (contentDescription do pai que repete os filhos) entram uma vez só.
+        // OCR: não há repetição, e linhas iguais ("Porto Alegre" nos dois endereços) precisam ficar.
+        val all = if (fromOcr) split.map(ParseUtils::cleanOcrLine) else split.distinct()
+        val lines = if (scopeToOfferBlock) offerBlock(all, dedupe = !fromOcr) ?: return null else all
         val price = pickPrice(lines) ?: return null
 
-        val legs = extractLegs(lines)
+        val legs = extractLegs(lines, dedupe = !fromOcr)
         val (pickup, trip) = classify(legs)
-        val (pickupAddress, dropoffAddress) = pickAddresses(lines, legs, pickup, trip)
+        val (pickupAddress, dropoffAddress) =
+            (if (fromOcr) wrappedAddresses(lines, pickup, trip) else null) ?: pickAddresses(lines, legs, pickup, trip)
 
         // Só preço não basta (ex.: "Ganhos de hoje R$ 120,00" ou "R$ 0,00" + "1-3 min" na tela inicial):
         // precisa de um par completo (tempo + km) ou de um endereço.
-        if (legs.none { !it.partial } && pickupAddress == null && dropoffAddress == null) return null
+        val fullLegs = legs.count { !it.partial }
+        if (fullLegs == 0 && pickupAddress == null && dropoffAddress == null) return null
+        // Imagem tem mais ruído (mapa, outras telas): só é oferta com o botão de aceitar ou com os
+        // dois trechos completos (busca + viagem).
+        if (fromOcr && fullLegs < 2 && lines.none(::isAcceptButton)) return null
 
         return RawOffer(
             platform = platform,
@@ -142,18 +162,29 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
 
     // ------------------------------------------------------------------ bloco do cartão
 
-    private fun isAcceptButton(line: String): Boolean {
-        val f = ParseUtils.fold(line).trim()
-        return f.length <= 25 && acceptKeywords.any { f.startsWith(it) }
+    override fun stillShows(texts: List<String>, offer: RawOffer): Boolean {
+        val lines = ParseUtils.splitLines(texts).map(ParseUtils::cleanOcrLine)
+        return extractLegs(lines, dedupe = false).any { leg ->
+            !leg.partial && (
+                (leg.km == offer.tripKm && leg.minutes == offer.tripMin) ||
+                    (leg.km == offer.pickupKm && leg.minutes == offer.pickupMin)
+                )
+        }
     }
 
-    /** Valor > 0 que não é acréscimo ("+R$ 4"). */
-    private fun realPrice(line: String): Double? = ParseUtils.findMoney(line)
-        .firstOrNull { !line.substring(0, it.start).trimEnd().endsWith('+') && it.value > 0.0 }?.value
+    private fun isAcceptButton(line: String): Boolean = ParseUtils.isAcceptLine(line, acceptKeywords)
+
+    /**
+     * Valor da corrida numa linha: maior que zero ("R$ 0,00" = ganhos do dia), sem ser acréscimo
+     * ("+R$ 4") nem taxa ("R$1,50/km").
+     */
+    private fun realPrice(line: String): Double? = ParseUtils.findMoney(line).firstOrNull {
+        it.value > 0.0 && !line.substring(0, it.start).trimEnd().endsWith('+') && !ParseUtils.isRate(line, it.end)
+    }?.value
 
     /** Recorte do cartão da oferta, ou null se não há par completo (tela sem oferta). */
-    fun offerBlock(lines: List<String>): List<String>? {
-        val firstFull = extractLegs(lines).filter { !it.partial }.minOfOrNull { it.line } ?: return null
+    fun offerBlock(lines: List<String>, dedupe: Boolean = true): List<String>? {
+        val firstFull = extractLegs(lines, dedupe).filter { !it.partial }.minOfOrNull { it.line } ?: return null
         val candidates = (firstFull downTo 0)
         val start = candidates.firstOrNull { ParseUtils.isMoneyOnly(lines[it]) && realPrice(lines[it]) != null }
             ?: candidates.firstOrNull { realPrice(lines[it]) != null }
@@ -175,12 +206,7 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
                 else -> 1
             }
             if (priority >= bestPriority) return@forEach
-            // Ignora acréscimos "+R$ 3,00".
-            // Ignora acréscimos "+R$ 3,00" e valores zerados ("R$ 0,00" dos ganhos do dia).
-            val m = ParseUtils.findMoney(line)
-                .firstOrNull { !line.substring(0, it.start).trimEnd().endsWith('+') && it.value > 0.0 }
-                ?: return@forEach
-            best = m.value
+            best = realPrice(line) ?: return@forEach
             bestPriority = priority
         }
         return best
@@ -192,7 +218,8 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
     private class Item(val dim: Dim, val m: Measure)
     private class Group(val minutes: Int?, val km: Double?, val start: Int, val end: Int)
 
-    fun extractLegs(lines: List<String>): List<Leg> {
+    /** [dedupe]: junta pares iguais repetidos (só faz sentido na árvore, onde pai e filho repetem o texto). */
+    fun extractLegs(lines: List<String>, dedupe: Boolean = true): List<Leg> {
         val perLine = lines.mapIndexed { i, line -> legsInLine(line, i) }
 
         // Junta "3 min" e "1,2 km" quando vêm em linhas vizinhas, cada uma sozinha.
@@ -223,6 +250,7 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
             leg.copy(kind = kind)
         }
 
+        if (!dedupe) return labeled
         // Mesmo par repetido (texto do pai + do filho): fica o primeiro, herdando o rótulo se faltar.
         val out = mutableListOf<Leg>()
         for (leg in labeled) {
@@ -235,8 +263,12 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
 
     private fun legsInLine(line: String, index: Int): List<Leg> {
         if (ParseUtils.hasStreetPrefix(line)) return emptyList() // "Rodovia SP-280, km 25" não é distância
+        // Número que faz parte de um valor em R$ não é distância ("Est. de R$1,50 km" = taxa por km).
+        val money = ParseUtils.findMoney(line)
         val items = (ParseUtils.findDurations(line).map { Item(Dim.MIN, it) } +
-            ParseUtils.findDistances(line).map { Item(Dim.KM, it) }).sortedBy { it.m.start }
+            ParseUtils.findDistances(line).map { Item(Dim.KM, it) })
+            .filter { item -> money.none { it.start < item.m.end && item.m.start < it.end } }
+            .sortedBy { it.m.start }
         if (items.isEmpty()) return emptyList()
 
         val groups = mutableListOf<Group>()
@@ -307,7 +339,9 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
         return listOf("de ", "da ", "do ", "away", "trip").any { f.startsWith(it) }
     }
 
-    fun classify(legs: List<Leg>): Pair<Leg?, Leg?> {
+    fun classify(all: List<Leg>): Pair<Leg?, Leg?> {
+        // Com dois pares completos (tempo + km), pedaços soltos ("1-3 min" do mapa) não entram na conta.
+        val legs = if (all.count { !it.partial } >= 2) all.filter { !it.partial } else all
         var pickup = legs.firstOrNull { it.kind == LegKind.PICKUP }
         var trip = legs.firstOrNull { it.kind == LegKind.TRIP }
         val free = legs.filter { it.kind == null }.toMutableList()
@@ -323,6 +357,30 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
     }
 
     // ------------------------------------------------------------------ endereços
+
+    /**
+     * OCR: no layout "trecho → endereço → trecho → endereço" (cartão da Uber) cada endereço são as
+     * linhas de texto logo abaixo do seu trecho, juntas. Devolve null se o layout não for esse.
+     */
+    private fun wrappedAddresses(lines: List<String>, pickup: Leg?, trip: Leg?): Pair<String?, String?>? {
+        if (pickup == null || trip == null || pickup.lineEnd >= trip.line) return null
+        val first = joinAddressLines(lines, pickup.lineEnd + 1, trip.line) ?: return null
+        return first to joinAddressLines(lines, trip.lineEnd + 1, lines.size)
+    }
+
+    private fun joinAddressLines(lines: List<String>, from: Int, until: Int): String? {
+        val parts = ArrayList<String>(MAX_ADDRESS_LINES)
+        var i = from
+        while (i < until && parts.size < MAX_ADDRESS_LINES && !isAcceptButton(lines[i]) &&
+            ParseUtils.isAddressPart(lines[i], nonAddressTexts)
+        ) {
+            parts += lines[i]
+            i++
+        }
+        if (parts.isEmpty()) return null
+        val joined = parts.joinToString(" ")
+        return ParseUtils.extractAddress(joined, nonAddressTexts)?.address ?: joined
+    }
 
     private fun pickAddresses(lines: List<String>, legs: List<Leg>, pickup: Leg?, trip: Leg?): Pair<String?, String?> {
         val found = lines.mapIndexedNotNull { i, line ->
@@ -346,5 +404,9 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
         if (pickupAddress == null) pickupAddress = pool.removeFirstOrNull()?.second
         if (dropoffAddress == null) dropoffAddress = pool.removeFirstOrNull()?.second
         return pickupAddress to dropoffAddress
+    }
+
+    private companion object {
+        const val MAX_ADDRESS_LINES = 3
     }
 }

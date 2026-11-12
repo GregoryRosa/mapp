@@ -5,6 +5,10 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// Cada APK gerado pelo CI ganha um número novo (o número da execução do GitHub Actions). Ele aparece
+// na tela inicial do app e no título da release: é assim que se confere se a atualização entrou.
+val ciRun: Int? = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+
 android {
     namespace = "br.com.mapp"
     compileSdk = 35
@@ -13,8 +17,10 @@ android {
         applicationId = "br.com.mapp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = ciRun ?: 1
+        versionName = if (ciRun != null) "0.2.$ciRun" else "0.2-dev"
+        // Só celulares ARM: o OCR traz bibliotecas nativas por arquitetura e o APK ficaria o dobro.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     // Chave fixa: todo APK do CI sai com a mesma assinatura e instala por cima da versão anterior.
@@ -68,6 +74,7 @@ dependencies {
     implementation(libs.coroutines.android)
     implementation(libs.osmdroid)
     implementation(libs.play.location)
+    implementation(libs.mlkit.text)
 
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)

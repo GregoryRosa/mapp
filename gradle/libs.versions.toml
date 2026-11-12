@@ -11,6 +11,7 @@ room = "2.6.1"
 coroutines = "1.9.0"
 osmdroid = "6.1.20"
 playLocation = "21.3.0"
+mlkitText = "16.0.1"
 junit = "4.13.2"
 
 [libraries]
@@ -34,6 +35,8 @@ coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-androi
 coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 osmdroid = { module = "org.osmdroid:osmdroid-android", version.ref = "osmdroid" }
 play-location = { module = "com.google.android.gms:play-services-location", version.ref = "playLocation" }
+# Reconhecimento de texto no aparelho, com o modelo dentro do APK (não baixa nada depois de instalado).
+mlkit-text = { module = "com.google.mlkit:text-recognition", version.ref = "mlkitText" }
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]

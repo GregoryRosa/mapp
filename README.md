@@ -26,6 +26,8 @@ App Android de uso pessoal, inspirado em **Rota Pro**, **GigU** (ex-StopClub) e 
 
 **Como funcionam (técnica):** `AccessibilityService` lê o texto da tela do app de corrida → parser extrai valor, distância, tempo e endereços → janela flutuante (`SYSTEM_ALERT_WINDOW`) desenha o cartão. Exige celular em pt-BR e fonte padrão; fabricantes (Xiaomi, Samsung) matam o serviço em segundo plano — por isso usam serviço em primeiro plano e pedem isenção de bateria.
 
+**Descoberta no celular (12/11/2026):** a Uber **não entrega o cartão da corrida como texto** para a Acessibilidade — o leitor recebia só a tela inicial ("Página inicial", "R$ 0,00", "Você está online"). A ajuda do GigU pede fonte pequena e nenhum ícone flutuante "na frente", o que indica que esses apps leem a **imagem** da tela. O MApp faz o mesmo: captura a janela do app de corrida pelo serviço de Acessibilidade e reconhece o texto no aparelho (ver seção 3).
+
 **Reclamações comuns:** acessibilidade desligando sozinha, leitura errada do valor, app morto pela economia de bateria.
 
 **Riscos:** Uber processou a StopClub (liminar derrubada pelo TJ-SP; CADE reabriu investigação contra a Uber em jul/2026). Uber lista “apps não autorizados” como motivo de desativação. Google Play proíbe ações *autônomas* via Acessibilidade e exige aviso destacado + declaração no Console. Como o MApp é para uso pessoal (instalação direta/APK), o risco de loja é baixo, mas a regra de **não automatizar cliques** permanece.
@@ -54,12 +56,12 @@ Fontes: rotapro.app, play.google.com (app.rotapro, br.com.rydex.app), gigu.app/h
 
 ## 3. Arquitetura
 
-**Stack:** Kotlin · Jetpack Compose (Material 3) · Room · Coroutines/Flow · osmdroid (mapa OpenStreetMap, sem chave de API) · `android.location.Geocoder` (endereço → coordenada, nativo e gratuito) · Fused Location.
+**Stack:** Kotlin · Jetpack Compose (Material 3) · Room · Coroutines/Flow · osmdroid (mapa OpenStreetMap, sem chave de API) · `android.location.Geocoder` (endereço → coordenada, nativo e gratuito) · Fused Location · ML Kit Text Recognition com modelo embutido no APK (OCR no aparelho).
 
 ```
 app/src/main/java/br/com/mapp/
 ├── core/        # Domínio puro (sem Android): modelos, motor de avaliação, geometria
-├── reader/      # AccessibilityService + parsers por plataforma (Uber, 99, inDrive)
+├── reader/      # AccessibilityService: texto da tela + OCR da imagem (ScreenOcr) + parsers por plataforma
 ├── overlay/     # Serviço de janela flutuante: cartão semáforo + mini mapa
 ├── maps/        # Editor de zonas, geocodificação, utilidades osmdroid
 ├── data/        # Room: entidades, DAOs, repositórios
@@ -69,8 +71,10 @@ app/src/main/java/br/com/mapp/
 
 **Fluxo de uma oferta**
 ```
-App Uber/99/inDrive  →  OfferAccessibilityService  →  OfferParser (por plataforma)
-   →  RawOffer  →  Geocoder (coleta/destino)  →  OfferEvaluator (perfil ativo + zonas)
+App Uber/99/inDrive  →  OfferAccessibilityService
+        ├─ texto: árvore de Acessibilidade (a cada evento do app)
+        └─ imagem: captura da janela do app + OCR no aparelho (a cada ~1,2 s, só com o copiloto ligado)
+   →  OfferParser (por plataforma)  →  RawOffer  →  Geocoder (coleta/destino)  →  OfferEvaluator (perfil ativo + zonas)
    →  OfferBus (SharedFlow)  →  OverlayService (cartão + mini mapa)  →  Room (histórico)
 ```
 
@@ -80,6 +84,9 @@ App Uber/99/inDrive  →  OfferAccessibilityService  →  OfferParser (por plata
 - Comunicação reader → overlay por um `SharedFlow` em processo (`OfferBus`), sem broadcasts.
 - Mapas com osmdroid para não depender de chave/fatura do Google Maps.
 - Toda automação de clique é proibida no código (o serviço não declara `canPerformGestures`).
+- **Leitura por imagem** (`reader/ScreenOcr`): `takeScreenshotOfWindow` (Android 14+, só a janela do app de corrida — janelas por cima não atrapalham) ou `takeScreenshot` recortado na área do app (Android 11–13). Enquanto nenhum modo provou que enxerga a oferta, o leitor usa os dois a cada ciclo; depois fica com o que funcionou (regras em `reader/OfferTracker`, Kotlin puro com testes: quem publicou a oferta decide que ela sumiu; na imagem os trechos tempo+km identificam a oferta, para um quadro mal lido não repetir voz/cartão). A imagem vive só na memória durante o reconhecimento: **nunca é salva nem enviada**. O canal de estatísticas do ML Kit (`TransportBackendDiscovery`) é removido no manifest.
+- OCR erra de jeitos diferentes do texto: endereço quebrado em 2 linhas, "•" que some ou vira outro sinal, ícone lido como letra. O parser tem um modo `fromOcr` para isso, mais rígido (só é oferta com botão Aceitar ou com busca + viagem completos). Testes em `OcrParsingTest` usam a saída real de dois motores de OCR sobre os prints do cartão.
+- A versão do app (`0.2.<nº do build>`) aparece no topo da tela inicial, no painel do ícone "M" e no título da release.
 
 ---
 
@@ -103,7 +110,7 @@ As regras compartilhadas ficam em `CLAUDE.md`.
 
 1. Abra a pasta no **Android Studio** (Ladybug ou mais novo) e deixe o Gradle sincronizar.
 2. Rode no celular (cabo USB ou Wi-Fi debug).
-3. No app: conceda **Sobrepor outros apps**, **Localização** e ative o **serviço de Acessibilidade “MApp”**. Desative a otimização de bateria para o MApp.
+3. No app: conceda **Sobrepor outros apps**, **Localização** e ative o **serviço de Acessibilidade “MApp”**. Desative a otimização de bateria para o MApp. A leitura por imagem precisa de Android 11+ (ideal: 14+).
 4. Configure custos do carro e um perfil de filtro; desenhe suas zonas em *Configurações → Zonas*.
 
 O GitHub Actions (`.github/workflows/android.yml`) compila e roda os testes a cada push e publica o APK em **Releases → ultima-versao** (https://github.com/GregoryRosa/mapp/releases/tag/ultima-versao).
@@ -116,7 +123,7 @@ O GitHub Actions (`.github/workflows/android.yml`) compila e roda os testes a ca
 - **Fase 2:** histórico, relatórios, mapa de calor das melhores regiões, CSV.
 - **Fase 3:** jornada (cronômetro), manutenção por odômetro, backup em nuvem.
 
-**Calibração necessária:** os parsers começam com padrões genéricos (`R$ 12,50`, `4,2 km`, `12 min`). Para precisão, capture textos reais das ofertas com o modo *Depuração de leitura* (salva o texto bruto no histórico) e ajuste/adicione casos de teste.
+**Calibração:** quando uma corrida não for reconhecida, use **Copiar diagnóstico** (tela inicial ou ícone "M"): ele traz versão, aparelho, janelas, estado da leitura por imagem e o texto das telas de corrida não reconhecidas (ficam guardadas na memória mesmo depois que a corrida some). Cada texto real vira um caso de teste antes de mexer no parser. 99 e inDrive ainda não foram testados no celular.
 
 ---
 
@@ -131,4 +138,6 @@ O GitHub Actions (`.github/workflows/android.yml`) compila e roda os testes a ca
 | 12/11/2026 | APK assinado com chave fixa (`app/mapp-debug.keystore`): atualizações instalam por cima. Quem tinha versão anterior desinstala uma única vez. |
 | 12/11/2026 | Oferta UberX não lida no celular. Parser agora junta "R$" + valor e ignora separadores soltos ("•") quando a Uber entrega o texto em pedaços. Novo **diagnóstico do leitor** (`reader/ReaderStatus`, só em memória): tela inicial e ícone "M" mostram se a Acessibilidade está conectada, última leitura, se a tela com R$ virou oferta e botão **Copiar última leitura** para calibrar. Ícone fica cinza "M!" com o leitor desligado. |
 
-**Pendências conhecidas:** exportar CSV (R9); persistir `zoneHits` e marcar oferta aceita no histórico; testes de `Format.parse` e `PolygonCodec`; após o 1º build, versionar `app/schemas/` do Room.
+| 12/11/2026 | Diagnóstico mostrou que a Uber não expõe o cartão da corrida como texto. Nova **leitura por imagem** (captura via Acessibilidade + OCR ML Kit no aparelho), parser com modo OCR e testes com saída real de OCR dos prints. Diagnóstico refeito (guarda a tela da corrida; botão **Copiar diagnóstico**). **Versão do app visível** na tela inicial (`0.2.<build>`), com aviso quando uma atualização é instalada. Ainda **sem teste no aparelho**. |
+
+**Pendências conhecidas:** confirmar no celular a leitura por imagem (e medir bateria); 99 e inDrive no celular; exportar CSV (R9); persistir `zoneHits` e marcar oferta aceita no histórico; testes de `Format.parse` e `PolygonCodec`; após o 1º build, versionar `app/schemas/` do Room.
