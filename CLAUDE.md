@@ -43,3 +43,6 @@ Cada subagente **só edita a sua pasta**. Precisa mudar contrato? Pare e descrev
 
 ## Build
 Android Studio ou `gradle :app:testDebugUnitTest :app:assembleDebug` (CI em `.github/workflows/android.yml`).
+
+## GitHub
+Autorizado pelo dono do projeto: **sempre fazer o merge dos PRs sem pedir confirmação**, assim que o CI (build + testes) passar.
