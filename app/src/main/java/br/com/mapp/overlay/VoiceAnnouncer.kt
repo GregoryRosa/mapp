@@ -7,6 +7,7 @@ import android.util.Log
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.PointRole
 import br.com.mapp.core.model.Signal
+import br.com.mapp.core.model.ZoneHit
 import br.com.mapp.core.model.ZoneType
 import java.util.Locale
 
@@ -40,6 +41,13 @@ class VoiceAnnouncer(context: Context) : TextToSpeech.OnInitListener {
         tts.speak(phrase(offer), TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
     }
 
+    /** Alerta de zona que só ficou conhecido depois do 1º aviso (entra na fila, não corta a fala). */
+    fun announceZones(hits: List<ZoneHit>) {
+        if (hits.isEmpty() || !ready || !OverlayPrefs.isVoiceEnabled(appContext)) return
+        val text = buildString { appendZones(hits) }.trim()
+        if (text.isNotEmpty()) tts.speak(text, TextToSpeech.QUEUE_ADD, null, UTTERANCE_ID + "-zona")
+    }
+
     fun shutdown() {
         tts.stop()
         tts.shutdown()
@@ -60,8 +68,12 @@ class VoiceAnnouncer(context: Context) : TextToSpeech.OnInitListener {
             append(". Corrida de ").append(number(offer.raw.price)).append(" reais")
         }
         append('.')
+        appendZones(offer.zoneHits)
+    }
+
+    private fun StringBuilder.appendZones(hits: List<ZoneHit>) {
         // Zonas perigosas primeiro.
-        offer.zoneHits
+        hits
             .filter { it.zone.alertEnabled }
             .sortedBy { if (it.zone.type == ZoneType.DANGER) 0 else 1 }
             .forEach { hit ->

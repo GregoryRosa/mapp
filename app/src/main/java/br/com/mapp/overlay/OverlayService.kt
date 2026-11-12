@@ -25,6 +25,7 @@ import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.RawOffer
 import br.com.mapp.core.model.Zone
+import br.com.mapp.core.model.ZoneHit
 import br.com.mapp.maps.LocationProvider
 import br.com.mapp.reader.ReaderStatus
 import br.com.mapp.ui.MainActivity
@@ -53,6 +54,7 @@ class OverlayService : LifecycleService() {
     private var zones: List<Zone> = emptyList()
     private var shownKey: RawOffer? = null
     private var dismissedKey: RawOffer? = null
+    private var announcedZones: Set<ZoneHit> = emptySet()
 
     override fun onCreate() {
         super.onCreate()
@@ -174,12 +176,20 @@ class OverlayService : LifecycleService() {
             card?.dismiss()
             return
         }
-        val key = offer.raw.identity()
+        // Endereço lido depois (quadro mais completo) não é oferta nova: nada de repetir a voz.
+        val key = offer.raw.identity().copy(pickupAddress = null, dropoffAddress = null)
         if (key == dismissedKey) return // usuário fechou o cartão desta oferta
 
+        val alertZones = offer.zoneHits.filter { it.zone.alertEnabled }.toSet()
         if (key != shownKey) {
             shownKey = key
+            announcedZones = alertZones
             voice?.announce(offer)
+        } else if (!announcedZones.containsAll(alertZones)) {
+            // Zonas chegam na 2ª etapa (depois da geocodificação): avisa só o que é novo.
+            val fresh = alertZones - announcedZones
+            announcedZones = announcedZones + alertZones
+            voice?.announceZones(fresh.toList())
         }
 
         if (!Settings.canDrawOverlays(this)) {

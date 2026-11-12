@@ -132,7 +132,7 @@ object MapViews {
     fun addDropoff(map: MapView, point: GeoPoint): Marker =
         addMarker(map, point, label = "B", color = COLOR_DROPOFF, title = "Destino")
 
-    /** Desenha zonas + posição atual + A + B e enquadra os pontos. Usado pelo mini mapa. */
+    /** Desenha zonas + posição atual + A + B e enquadra os pontos. Usado pelo mini mapa. Devolve o marcador da posição. */
     fun renderOffer(
         map: MapView,
         zones: List<Zone>,
@@ -140,14 +140,15 @@ object MapViews {
         pickup: GeoPoint?,
         dropoff: GeoPoint?,
         marginDp: Int = 28,
-    ) {
+    ): Marker? {
         clear(map)
         addZones(map, zones)
-        current?.let { addCurrentPosition(map, it) }
+        val here = current?.let { addCurrentPosition(map, it) }
         pickup?.let { addPickup(map, it) }
         dropoff?.let { addDropoff(map, it) }
         map.invalidate()
         frame(map, listOfNotNull(current, pickup, dropoff), marginDp)
+        return here
     }
 
     /**
