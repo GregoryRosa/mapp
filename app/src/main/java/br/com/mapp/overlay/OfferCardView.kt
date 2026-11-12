@@ -2,11 +2,10 @@ package br.com.mapp.overlay
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.SharedPreferences
 import android.graphics.PixelFormat
 import android.graphics.Typeface
-import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
-import android.text.TextUtils
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -18,21 +17,20 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import br.com.mapp.core.model.EvaluatedOffer
+import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.model.PointRole
-import br.com.mapp.core.model.Signal
 import br.com.mapp.core.model.Zone
 import br.com.mapp.core.model.ZoneType
 import br.com.mapp.maps.MapViews
 import br.com.mapp.maps.toOsm
 import org.osmdroid.views.overlay.Marker
-import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 
 /**
- * Cartão flutuante (View tradicional, sem XML/Compose): semáforo, valores, motivos,
- * alertas de zona e mini mapa. Arrastável pela barra de título; não bloqueia toques fora dele.
+ * Cartão flutuante (View tradicional, sem XML/Compose): cabeçalho na cor do semáforo com as
+ * informações escolhidas em "Estilo do cartão" ([CardHeaderView]), alertas de zona e mini mapa. Arrastável pela barra de título; não bloqueia toques fora dele.
  * Reutilizável: [dismiss] só tira da tela; [destroy] libera o mapa.
  */
 class OfferCardView(
@@ -52,38 +50,19 @@ class OfferCardView(
     private var mapKey: Any? = null
     private var hereMarker: Marker? = null
 
-    // ---- Cabeçalho (faixa do semáforo) ----
-    private val signalText = text(12f, bold = true)
-    private val platformText = text(12f)
-    private val priceText = text(22f, bold = true)
+    // ---- Cabeçalho (cor do semáforo + as duas linhas de "Estilo do cartão") ----
     private val minimizeButton = headerButton("–", "Minimizar") { toggleMinimized() }
     private val closeButton = headerButton("✕", "Fechar") { onClose() }
-    private val header = LinearLayout(context).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(12), dp(4), dp(4), dp(4))
-        val labels = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(signalText)
-            addView(platformText)
-        }
-        addView(labels, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        addView(View(context), LinearLayout.LayoutParams(dp(12), 1, 1f))
-        addView(priceText)
-        addView(minimizeButton)
-        addView(closeButton)
+    private val headerView = CardHeaderView(context, listOf(minimizeButton, closeButton))
+    private val header = headerView.view
+    private var profile: FilterProfile? = null
+
+    /** Muda o estilo na tela do app: o cartão aberto já mostra o novo. */
+    private val layoutListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == OverlayPrefs.KEY_CARD_LAYOUT) offer?.let { headerView.bind(it, profile, OverlayPrefs.cardLayout(context)) }
     }
 
-    // ---- Corpo ----
-    private val perKmValue = text(18f, bold = true)
-    private val perHourValue = text(18f, bold = true)
-    private val netValue = text(18f, bold = true)
-    private val netLabel = text(11f, color = SECONDARY)
-    private val totalsText = text(12f, color = SECONDARY)
-    private val addressText = text(12f, color = SECONDARY).apply {
-        maxLines = 2
-        ellipsize = TextUtils.TruncateAt.END
-    }
+    // ---- Corpo: alertas e mini mapa (endereços já aparecem na própria Uber) ----
     private val reasonsBox = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val mapNote = text(11f, color = SECONDARY).apply {
         text = "Coleta/destino ainda não localizados no mapa"
@@ -95,16 +74,7 @@ class OfferCardView(
     private val body = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(12), dp(8), dp(12), dp(12))
-        val stats = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(statCell(perKmValue, text(11f, color = SECONDARY).apply { text = "R$/km" }), weighted())
-            addView(statCell(perHourValue, text(11f, color = SECONDARY).apply { text = "R$/hora" }), weighted())
-            addView(statCell(netValue, netLabel), weighted())
-        }
-        addView(stats)
-        addView(totalsText, topMargin(6))
-        addView(addressText, topMargin(4))
-        addView(reasonsBox, topMargin(6))
+        addView(reasonsBox)
         addView(mapView, LinearLayout.LayoutParams(dp(CARD_WIDTH_DP - 24), dp(MAP_HEIGHT_DP)).apply { topMargin = dp(8) })
         addView(mapNote, topMargin(2))
     }
@@ -122,7 +92,7 @@ class OfferCardView(
     }
 
     private val params = WindowManager.LayoutParams(
-        WindowManager.LayoutParams.WRAP_CONTENT,
+        dp(CARD_WIDTH_DP), // largura fixa: textos longos não esticam o cartão
         WindowManager.LayoutParams.WRAP_CONTENT,
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -139,15 +109,17 @@ class OfferCardView(
     init {
         installDrag(header)
         header.setOnClickListener { toggleMinimized() }
+        prefs.registerOnSharedPreferenceChangeListener(layoutListener)
         applyMinimized()
     }
 
     val isShowing: Boolean get() = attached
 
     /** Mostra (ou atualiza) o cartão com a oferta avaliada. */
-    fun show(offer: EvaluatedOffer, current: GeoPoint?, zones: List<Zone>) {
+    fun show(offer: EvaluatedOffer, profile: FilterProfile?, current: GeoPoint?, zones: List<Zone>) {
         if (destroyed) return
         this.offer = offer
+        this.profile = profile
         this.current = current
         this.zones = zones
         bind(offer)
@@ -194,6 +166,7 @@ class OfferCardView(
 
     fun destroy() {
         dismiss()
+        prefs.unregisterOnSharedPreferenceChangeListener(layoutListener)
         if (!destroyed) mapView.onDetach()
         destroyed = true
     }
@@ -201,42 +174,7 @@ class OfferCardView(
     // ---------------------------------------------------------------------
 
     private fun bind(o: EvaluatedOffer) {
-        val bg = signalColor(o.signal)
-        val fg = if (o.signal == Signal.YELLOW) DARK_TEXT else PRIMARY
-        header.background = ColorDrawable(bg)
-        listOf(signalText, platformText, priceText, minimizeButton, closeButton).forEach { it.setTextColor(fg) }
-        signalText.text = when (o.signal) {
-            Signal.GREEN -> "VERDE"
-            Signal.YELLOW -> "AMARELO"
-            Signal.RED -> "VERMELHO"
-        }
-        platformText.text = o.raw.platform.label
-        priceText.text = money(o.raw.price)
-
-        val m = o.metrics
-        perKmValue.text = number(m.perKm, 2)
-        perHourValue.text = number(m.perHour, 0)
-        netValue.text = m.netProfit?.let { money(it) } ?: "—"
-        netValue.setTextColor(if ((m.netProfit ?: 0.0) < 0) DANGER_TEXT else PRIMARY)
-        netLabel.text = m.netPerKm?.let { "Lucro líq. (${number(it, 2)}/km)" } ?: "Lucro líquido"
-
-        totalsText.text = buildString {
-            append("Total: ").append(number(m.totalKm, 1)).append(" km · ")
-            append(m.totalMin?.toString() ?: "—").append(" min")
-            if (o.raw.pickupKm != null || o.raw.pickupMin != null) {
-                append("  |  Busca: ").append(number(o.raw.pickupKm, 1)).append(" km · ")
-                append(o.raw.pickupMin?.toString() ?: "—").append(" min")
-            }
-            o.raw.passengerRating?.let { append("  |  ★ ").append(number(it, 2)) }
-        }
-
-        val addresses = listOfNotNull(
-            o.raw.pickupAddress?.takeIf { it.isNotBlank() }?.let { "A: $it" },
-            o.raw.dropoffAddress?.takeIf { it.isNotBlank() }?.let { "B: $it" },
-        )
-        addressText.text = addresses.joinToString("\n")
-        addressText.visibility = if (addresses.isEmpty()) View.GONE else View.VISIBLE
-
+        headerView.bind(o, profile, OverlayPrefs.cardLayout(context))
         bindReasons(o)
         applyMinimized()
         if (!minimized) renderMap()
@@ -269,6 +207,7 @@ class OfferCardView(
         val missing = (!o.raw.pickupAddress.isNullOrBlank() && o.pickup == null) ||
             (!o.raw.dropoffAddress.isNullOrBlank() && o.dropoff == null)
         mapNote.visibility = if (missing) View.VISIBLE else View.GONE
+        applyMinimized()
         if (!hasPoints) return
         // Mesmos pontos e zonas: o mapa já está certo (redesenhar recarrega tiles e trava o cartão).
         val key = Triple(o.pickup, o.dropoff, zones)
@@ -292,10 +231,11 @@ class OfferCardView(
     }
 
     private fun applyMinimized() {
-        body.visibility = if (minimized) View.GONE else View.VISIBLE
+        // Sem alerta e sem mapa o corpo some: fica só o cabeçalho com os números.
+        val hasContent = listOf(reasonsBox, mapView, mapNote).any { it.visibility == View.VISIBLE }
+        body.visibility = if (minimized || !hasContent) View.GONE else View.VISIBLE
         minimizeButton.text = if (minimized) "▢" else "–"
-        minimizeButton.contentDescription = if (minimized) "Expandir" else "Minimizar"
-        root.minimumWidth = if (minimized) 0 else dp(CARD_WIDTH_DP)
+        minimizeButton.contentDescription = if (minimized) "Mostrar mapa" else "Esconder mapa"
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -390,18 +330,10 @@ class OfferCardView(
         setOnClickListener { onClick() }
     }
 
-    private fun statCell(value: TextView, label: TextView) = LinearLayout(context).apply {
-        orientation = LinearLayout.VERTICAL
-        addView(value)
-        addView(label)
-    }
-
     private fun reasonLine(content: String, color: Int, bold: Boolean = false) = text(13f, color = color, bold = bold).apply {
         text = content
         setPadding(0, dp(1), 0, dp(1))
     }
-
-    private fun weighted() = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
 
     private fun topMargin(marginDp: Int) = LinearLayout.LayoutParams(
         ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -413,26 +345,12 @@ class OfferCardView(
         const val CARD_WIDTH_DP = 300
         const val MAP_HEIGHT_DP = 180
 
-        val PT_BR: Locale = Locale.forLanguageTag("pt-BR")
-
         val CARD_BG = 0xF0202124.toInt()
         val PRIMARY = 0xFFFFFFFF.toInt()
         val SECONDARY = 0xFFBDBDBD.toInt()
-        val DARK_TEXT = 0xFF212121.toInt()
         val DANGER_TEXT = 0xFFFF5252.toInt()
         val WARNING_TEXT = 0xFFFFD54F.toInt()
         val HIGH_DEMAND_TEXT = 0xFF69F0AE.toInt()
         val CUSTOM_TEXT = 0xFF64B5F6.toInt()
-
-        fun signalColor(signal: Signal): Int = when (signal) {
-            Signal.GREEN -> 0xFF2E7D32.toInt()
-            Signal.YELLOW -> 0xFFF9A825.toInt()
-            Signal.RED -> 0xFFC62828.toInt()
-        }
-
-        fun money(v: Double): String = "R$ " + String.format(PT_BR, "%.2f", v)
-
-        fun number(v: Double?, decimals: Int): String =
-            v?.let { String.format(PT_BR, "%.${decimals}f", it) } ?: "—"
     }
 }

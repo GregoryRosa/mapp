@@ -18,7 +18,9 @@ Documentação completa (pesquisa, requisitos, arquitetura, roadmap): **README.m
 | `overlay/OverlayService` | `companion fun start(ctx)`, `stop(ctx)` | ui/HomeScreen |
 | `reader/OfferAccessibilityService` | serviço declarado no manifest | sistema |
 | `reader/ReaderStatus` | `state`, `lines()`, `report(ctx)`, `versionOf(ctx)` (diagnóstico, só em memória) | ui/HomeScreen, overlay/QuickBubbleView |
-| Telas `@Composable fun XScreen(onBack: () -> Unit)` | `finance/`: Finance, Reports, History, Profiles, Vehicle · `maps/`: ZoneEditor | ui/MainActivity |
+| `core/card/CardLayout` + `CardValues` | linhas do cabeçalho do cartão (`place`, `remove`, `encode/decode`), valores e cores por informação | overlay/CardHeaderView, ui/CardStyleScreen |
+| `overlay/OverlayPrefs` | `cardLayout(ctx)`, `setCardLayout(ctx, l)` (estilo do cartão salvo) | overlay, ui/CardStyleScreen |
+| Telas `@Composable fun XScreen(onBack: () -> Unit)` | `finance/`: Finance, Reports, History, Profiles, Vehicle · `maps/`: ZoneEditor · `ui/`: CardStyle | ui/MainActivity |
 
 ## Fluxo da oferta
 Reader lê a tela por duas fontes — texto (árvore de Acessibilidade) e imagem (`reader/ScreenOcr`: captura da janela do app de corrida + OCR no aparelho, só com `OfferBus.hasListeners`) — e passa os textos ao parser (`parse(texts, fromOcr)`) → `OfferBus.publish(raw)` → `overlay/OfferPipeline` (geocodifica, carrega perfil ativo/custos/zonas, avalia, grava histórico) → `OfferBus.publishEvaluated` → overlay desenha cartão + mini mapa. Quando a oferta some: `OfferBus.clear()`.

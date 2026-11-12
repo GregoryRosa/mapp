@@ -14,8 +14,8 @@ import java.util.Locale
 
 /**
  * Diagnóstico do leitor (só em memória, nunca sai do aparelho). Mostra na tela inicial e no ícone
- * flutuante se a Acessibilidade está conectada e como anda a leitura, e monta o texto do botão
- * "Copiar diagnóstico" — que guarda a tela da corrida mesmo depois que ela some, para calibrar o parser.
+ * flutuante se a Acessibilidade está conectada e como anda a leitura. [report] monta um relatório
+ * completo (guarda a tela da corrida mesmo depois que ela some), sem botão no app por enquanto.
  */
 object ReaderStatus {
 

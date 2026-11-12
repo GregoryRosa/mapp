@@ -1,8 +1,6 @@
 package br.com.mapp.ui
 
 import android.Manifest
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -177,11 +175,6 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                             style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
                         )
                     }
-                    OutlinedButton(onClick = {
-                        val cm = ctx.getSystemService(ClipboardManager::class.java)
-                        cm?.setPrimaryClip(ClipData.newPlainText("MApp diagnóstico", ReaderStatus.report(ctx)))
-                        Toast.makeText(ctx, "Diagnóstico copiado. Cole no chat do Claude.", Toast.LENGTH_LONG).show()
-                    }, modifier = Modifier.fillMaxWidth()) { Text("📋 Copiar diagnóstico") }
                 }
             }
 
@@ -190,6 +183,7 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
             MenuButton("Relatórios") { onNavigate(Routes.REPORTS) }
             MenuButton("Histórico de ofertas") { onNavigate(Routes.HISTORY) }
             MenuButton("Perfis de filtro") { onNavigate(Routes.PROFILES) }
+            MenuButton("Estilo do cartão") { onNavigate(Routes.CARD_STYLE) }
             MenuButton("Custos do veículo") { onNavigate(Routes.VEHICLE) }
             MenuButton("Zonas no mapa") { onNavigate(Routes.ZONES) }
 
