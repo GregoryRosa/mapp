@@ -37,7 +37,12 @@ class OfferCardView(
     private val context: Context,
     private val windowManager: WindowManager,
     private val onClose: () -> Unit,
+    /** "+1": conta esta oferta como corrida pega na jornada. */
+    private val onCount: () -> Unit = {},
 ) {
+    /** Botão "+1" do cabeçalho: só aparece com jornada iniciada. */
+    enum class CountState { HIDDEN, READY, DONE }
+
     private val prefs = OverlayPrefs.of(context)
     private val density = context.resources.displayMetrics.density
 
@@ -53,7 +58,10 @@ class OfferCardView(
     // ---- Cabeçalho (cor do semáforo + as duas linhas de "Estilo do cartão") ----
     private val minimizeButton = headerButton("–", "Minimizar") { toggleMinimized() }
     private val closeButton = headerButton("✕", "Fechar") { onClose() }
-    private val headerView = CardHeaderView(context, listOf(minimizeButton, closeButton))
+    private val countButton = headerButton("+1", "Contar corrida na jornada") { onCount() }.apply {
+        visibility = View.GONE
+    }
+    private val headerView = CardHeaderView(context, listOf(countButton, minimizeButton, closeButton))
     private val header = headerView.view
     private var profile: FilterProfile? = null
 
@@ -114,6 +122,13 @@ class OfferCardView(
     }
 
     val isShowing: Boolean get() = attached
+
+    /** READY = "+1" (contar); DONE = "✓" (já contada); HIDDEN = sem jornada. */
+    fun setCountState(state: CountState) {
+        countButton.visibility = if (state == CountState.HIDDEN) View.GONE else View.VISIBLE
+        countButton.text = if (state == CountState.DONE) "✓" else "+1"
+        countButton.contentDescription = if (state == CountState.DONE) "Corrida já contada" else "Contar corrida na jornada"
+    }
 
     /** Mostra (ou atualiza) o cartão com a oferta avaliada. */
     fun show(offer: EvaluatedOffer, profile: FilterProfile?, current: GeoPoint?, zones: List<Zone>) {

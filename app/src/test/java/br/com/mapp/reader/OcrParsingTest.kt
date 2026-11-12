@@ -56,6 +56,7 @@ class OcrParsingTest {
     @Test fun uberx_ppocr_sem_espacos() {
         val o = UberParser.parse(uberxPpOcr, fromOcr = true)!!
         assertUberX(o)
+        assertEquals("UberX", o.category)
         assertEquals("Av.Sen.Salgado Filho, Passo do Sabao,Viamao", o.pickupAddress)
         assertEquals("R.DonaLaura,320,BairroRio Branco,PortoAlegre", o.dropoffAddress)
     }
@@ -118,6 +119,7 @@ class OcrParsingTest {
     @Test fun comfort_ppocr() {
         val o = UberParser.parse(comfortPpOcr, fromOcr = true)!!
         assertComfort(o)
+        assertEquals("Comfort", o.category)
         assertEquals("R.Araras,Pargue Indio Jari,Viamao", o.pickupAddress)
         assertEquals("RuaAtenas,70,MorroSantana, Porto Alegre", o.dropoffAddress)
     }

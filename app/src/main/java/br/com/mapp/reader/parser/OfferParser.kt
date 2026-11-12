@@ -46,6 +46,18 @@ object UberParser : BaseOfferParser(Platform.UBER) {
         "UberX", "Comfort", "Black", "Uber Black", "Uber Flash", "Flash", "Moto", "Uber Moto", "Juntos",
         "Priority", "Prioridade", "Bag", "Exclusivo", "Viagem", "Aceitar", "Corresponder",
     )
+    override val categoryAliases = mapOf(
+        "uberx" to "UberX",
+        "comfort" to "Comfort", "ubercomfort" to "Comfort",
+        "black" to "Black", "uberblack" to "Black", "blackbag" to "Black", "uberblackbag" to "Black",
+        "eletrico" to "Elétrico", "ubereletrico" to "Elétrico", "comforteletrico" to "Elétrico",
+        "green" to "Elétrico", "ubergreen" to "Elétrico", "planet" to "Elétrico", "uberplanet" to "Elétrico",
+        "flash" to "Flash", "uberflash" to "Flash", "flashmoto" to "Flash",
+        "moto" to "Moto", "ubermoto" to "Moto",
+        "priority" to "Prioridade", "prioridade" to "Prioridade", "uberpriority" to "Prioridade",
+        "juntos" to "Juntos", "uberjuntos" to "Juntos",
+        "bag" to "Bag", "uberxbag" to "Bag",
+    )
 }
 
 /**
@@ -57,6 +69,15 @@ object NinetyNineParser : BaseOfferParser(Platform.NINETY_NINE) {
     override val nonAddressTexts = listOf(
         "99Pop", "Pop", "99Comfort", "Comfort", "99Taxi", "Táxi", "Taxi", "99Moto", "Moto", "Pop Expresso",
         "99Entrega", "Entrega", "Negocia", "99 Negocia", "Aceitar", "Aceitar corrida",
+    )
+    override val categoryAliases = mapOf(
+        "99pop" to "Pop", "pop" to "Pop",
+        "popexpresso" to "Pop Expresso", "99popexpresso" to "Pop Expresso",
+        "99comfort" to "Comfort", "comfort" to "Comfort",
+        "99taxi" to "Táxi", "taxi" to "Táxi",
+        "99moto" to "Moto", "moto" to "Moto",
+        "99entrega" to "Entrega", "entrega" to "Entrega",
+        "99negocia" to "Negocia", "negocia" to "Negocia",
     )
 }
 
@@ -70,6 +91,10 @@ object NinetyNineParser : BaseOfferParser(Platform.NINETY_NINE) {
 object InDriveParser : BaseOfferParser(Platform.INDRIVE) {
     override val nonAddressTexts = listOf(
         "Cidade", "Moto", "Entrega", "Frete", "Intermunicipal", "Aceitar", "Oferecer seu preço",
+    )
+    override val categoryAliases = mapOf(
+        "cidade" to "Cidade", "moto" to "Moto", "entrega" to "Entrega", "frete" to "Frete",
+        "intermunicipal" to "Intermunicipal",
     )
 }
 
@@ -108,6 +133,12 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
 
     /** Textos exatos que nunca são endereço (categorias, botões). */
     protected open val nonAddressTexts: List<String> = emptyList()
+
+    /**
+     * Tipos de corrida: linha inteira (minúscula, sem acento, só letras e números) → nome mostrado.
+     * Ex.: "UberX", "Uberx" (OCR) e "Uber X" viram "uberx" → "UberX".
+     */
+    protected open val categoryAliases: Map<String, String> = emptyMap()
 
     /** Botões que só existem no cartão de oferta (minúsculas, sem acento). Delimitam o fim do bloco. */
     protected open val acceptKeywords: List<String> = ParseUtils.ACCEPT_KEYWORDS
@@ -156,6 +187,7 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
             pickupAddress = pickupAddress,
             dropoffAddress = dropoffAddress,
             passengerRating = lines.firstNotNullOfOrNull { ParseUtils.parseRating(it) },
+            category = detectCategory(all, extractLegs(all, dedupe = !fromOcr).filter { !it.partial }.minOfOrNull { it.line }),
             rawText = all.joinToString("\n"), // texto completo da tela: útil para calibrar
         )
     }
@@ -169,6 +201,25 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
         val rate = ParseUtils.findPerKmRate(lines) ?: return null
         val pickup = Math.round((price / rate - tripKm) * 10) / 10.0
         return pickup.takeIf { it in 0.1..MAX_DERIVED_PICKUP_KM }
+    }
+
+    // ------------------------------------------------------------------ tipo da corrida
+
+    /** Tipo da linha, ou null. Linhas longas (frases, endereços) nunca são tipo. */
+    fun categoryOf(line: String): String? {
+        val key = ParseUtils.fold(line).filter { it.isLetterOrDigit() }
+        if (key.isEmpty() || key.length > MAX_CATEGORY_CHARS) return null
+        return categoryAliases[key]
+    }
+
+    /**
+     * O tipo fica no topo do cartão, antes do preço: vale o último encontrado até [anchor] (1º par
+     * tempo + km da oferta). Sem nenhum antes, o primeiro da tela.
+     */
+    fun detectCategory(lines: List<String>, anchor: Int?): String? {
+        val hits = lines.mapIndexedNotNull { i, line -> categoryOf(line)?.let { i to it } }
+        if (hits.isEmpty()) return null
+        return (anchor?.let { a -> hits.lastOrNull { it.first <= a } } ?: hits.first()).second
     }
 
     // ------------------------------------------------------------------ bloco do cartão
@@ -420,5 +471,6 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
     private companion object {
         const val MAX_ADDRESS_LINES = 3
         const val MAX_DERIVED_PICKUP_KM = 30.0
+        const val MAX_CATEGORY_CHARS = 24
     }
 }

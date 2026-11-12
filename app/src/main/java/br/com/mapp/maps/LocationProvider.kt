@@ -9,6 +9,7 @@ import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
 import br.com.mapp.core.model.GeoPoint
+import br.com.mapp.core.shift.Fix
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -89,12 +90,45 @@ class LocationProvider private constructor(context: Context) {
         awaitClose { client.removeLocationUpdates(callback) }
     }
 
+    /**
+     * GPS preciso para o hodômetro da jornada (só enquanto a jornada está rodando: gasta mais
+     * bateria que [updates]).
+     */
+    @SuppressLint("MissingPermission")
+    fun fixes(intervalMs: Long = TRACK_INTERVAL_MS): Flow<Fix> = callbackFlow {
+        if (!hasPermission()) {
+            close()
+            return@callbackFlow
+        }
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, intervalMs)
+            .setMinUpdateIntervalMillis(intervalMs / 2)
+            .build()
+        val callback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                result.locations.forEach { loc ->
+                    val point = loc.toGeoPoint()
+                    lastKnown = point
+                    trySend(Fix(point, if (loc.hasAccuracy()) loc.accuracy else null, loc.time))
+                }
+            }
+        }
+        try {
+            client.requestLocationUpdates(request, callback, Looper.getMainLooper())
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Permissão de localização revogada", e)
+            close()
+            return@callbackFlow
+        }
+        awaitClose { client.removeLocationUpdates(callback) }
+    }
+
     private fun Location.toGeoPoint() = GeoPoint(latitude, longitude)
 
     companion object {
         private const val TAG = "MApp/Location"
         private const val CURRENT_TIMEOUT_MS = 5_000L
         private const val UPDATE_INTERVAL_MS = 15_000L
+        private const val TRACK_INTERVAL_MS = 5_000L
 
         @Volatile
         private var instance: LocationProvider? = null

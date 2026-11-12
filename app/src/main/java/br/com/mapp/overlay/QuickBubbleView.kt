@@ -14,8 +14,12 @@ import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import br.com.mapp.core.model.FilterProfile
+import br.com.mapp.core.shift.Shift
+import br.com.mapp.core.shift.ShiftMath
+import br.com.mapp.core.shift.ShiftSummary
 import br.com.mapp.reader.ReaderStatus
 import java.util.Locale
 import kotlin.math.abs
@@ -39,6 +43,14 @@ class QuickBubbleView(
         fun toggleVoice()
         fun openApp()
         fun stopCopilot()
+
+        // Jornada (▶ no painel do "M")
+        fun startShift()
+        fun pauseShift()
+        fun endShift()
+        /** Conta a última oferta vista como corrida pega. */
+        fun countLastOffer()
+        fun undoLastTrip()
     }
 
     private val prefs = OverlayPrefs.of(context)
@@ -49,6 +61,10 @@ class QuickBubbleView(
     private var profile: FilterProfile = FilterProfile()
     private var profileCount = 1
     private var reader: ReaderStatus.Snapshot = ReaderStatus.Snapshot()
+    private var shift: Shift? = null
+    private var summary: ShiftSummary? = null
+    private var lastOfferLabel: String? = null
+    private var confirmEnd = false
 
     // ------------------------------------------------------------------ bolha
 
@@ -92,18 +108,42 @@ class QuickBubbleView(
     private val voiceButton = button("") { actions.toggleVoice(); refreshVoice() }
     private val readerText = text(12f, color = SECONDARY)
 
+    // ---- Jornada ----
+    private val shiftState = text(14f, bold = true)
+    private val startButton = button("▶  Iniciar jornada", color = GREEN) { actions.startShift() }
+    private val pauseButton = button("⏸ Pausar") { actions.pauseShift() }
+    private val resumeButton = button("▶ Continuar", color = GREEN) { actions.startShift() }
+    private val endButton = button("⏹ Encerrar", color = RED) { onEndTapped() }
+    private val runningRow = row(pauseButton, endButton, labelWeight = false)
+    private val pausedRow = row(resumeButton, button("⏹ Encerrar", color = RED) { onEndTapped() }, labelWeight = false)
+    private val shiftMetrics = text(13f).apply { setLineSpacing(0f, 1.1f) }
+    private val lastOfferText = text(11f, color = SECONDARY)
+    private val tripRow = row(
+        button("+1 Contar última", color = BLUE) { actions.countLastOffer() },
+        button("↶ Desfazer") { actions.undoLastTrip() },
+        labelWeight = false,
+    )
+    private val shiftBox = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(10), dp(8), dp(10), dp(8))
+        background = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(SECTION_BG) }
+        addView(text(11f, color = SECONDARY).apply { text = "JORNADA" })
+        addView(shiftState)
+        addView(startButton, fullWidth(6))
+        addView(runningRow, fullWidth(4))
+        addView(pausedRow, fullWidth(4))
+        addView(shiftMetrics, fullWidth(6))
+        addView(tripRow, fullWidth(4))
+        addView(lastOfferText, fullWidth(2))
+    }
+
     private val panel = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(12), dp(10), dp(12), dp(10))
-        background = GradientDrawable().apply {
-            cornerRadius = dp(16).toFloat()
-            setColor(PANEL_BG)
-        }
-        elevation = dp(8).toFloat()
-        minimumWidth = dp(PANEL_WIDTH_DP)
 
         addView(text(12f, color = SECONDARY).apply { text = "MApp ${ReaderStatus.versionOf(context)} · AJUSTES RÁPIDOS" })
         addView(readerText, fullWidth(4))
+        addView(shiftBox, fullWidth(8))
         addView(row(
             button("‹") { actions.previousProfile() },
             profileName,
@@ -128,7 +168,17 @@ class QuickBubbleView(
             button("Parar copiloto", color = RED) { closePanel(); actions.stopCopilot() },
             labelWeight = false,
         ), fullWidth(6))
+    }
 
+    /** Painel rolável: com a jornada aberta ele pode passar da altura da tela. */
+    private val panelRoot = ScrollView(context).apply {
+        background = GradientDrawable().apply {
+            cornerRadius = dp(16).toFloat()
+            setColor(PANEL_BG)
+        }
+        elevation = dp(8).toFloat()
+        isVerticalScrollBarEnabled = true
+        addView(panel, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         // Toque fora do painel fecha o painel.
         setOnTouchListener { _, e ->
             if (e.actionMasked == MotionEvent.ACTION_OUTSIDE) { closePanel(); true } else false
@@ -136,7 +186,7 @@ class QuickBubbleView(
     }
 
     private val panelParams = WindowManager.LayoutParams(
-        WindowManager.LayoutParams.WRAP_CONTENT,
+        0,
         WindowManager.LayoutParams.WRAP_CONTENT,
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -153,6 +203,7 @@ class QuickBubbleView(
         paintBubble()
         refreshVoice()
         bindProfile()
+        bindShift()
     }
 
     // ------------------------------------------------------------------ API
@@ -181,6 +232,17 @@ class QuickBubbleView(
         if (wasConnected != snapshot.connected) paintBubble()
     }
 
+    /** Jornada atual (null = nenhuma), resumo e a última oferta que pode ser contada. */
+    fun updateShift(current: Shift?, sum: ShiftSummary?, lastOffer: String?) {
+        val wasActive = shift?.let { !it.paused }
+        shift = current
+        summary = sum
+        lastOfferLabel = lastOffer
+        if (current == null) confirmEnd = false
+        if (panelAttached) { bindShift(); relayoutPanel() }
+        if (wasActive != current?.let { !it.paused }) paintBubble()
+    }
+
     fun destroy() {
         closePanel()
         if (bubbleAttached) {
@@ -198,13 +260,15 @@ class QuickBubbleView(
         refreshVoice()
         bindProfile()
         bindReader()
+        bindShift()
         val dm = context.resources.displayMetrics
-        val width = dp(PANEL_WIDTH_DP)
+        val width = dp(PANEL_WIDTH_DP).coerceAtMost(dm.widthPixels - dp(BUBBLE_DP + 16))
+        panelParams.width = width
         val bubbleOnRight = bubbleParams.x + dp(BUBBLE_DP) / 2 > dm.widthPixels / 2
         panelParams.x = if (bubbleOnRight) max(0, bubbleParams.x - width - dp(8)) else bubbleParams.x + dp(BUBBLE_DP + 8)
-        panelParams.y = bubbleParams.y.coerceIn(0, max(0, dm.heightPixels - dp(PANEL_HEIGHT_DP)))
+        measurePanel()
         try {
-            windowManager.addView(panel, panelParams)
+            windowManager.addView(panelRoot, panelParams)
             panelAttached = true
         } catch (e: Exception) {
             Log.w(TAG, "Não foi possível abrir o painel", e)
@@ -213,10 +277,63 @@ class QuickBubbleView(
 
     private fun closePanel() {
         if (!panelAttached) return
-        try { windowManager.removeViewImmediate(panel) } catch (e: Exception) { Log.w(TAG, "Falha ao fechar painel", e) }
+        try { windowManager.removeViewImmediate(panelRoot) } catch (e: Exception) { Log.w(TAG, "Falha ao fechar painel", e) }
         panelAttached = false
+        confirmEnd = false
     }
 
+    /** Altura = conteúdo, limitada à tela (o resto rola); posição perto do ícone. */
+    private fun measurePanel() {
+        val dm = context.resources.displayMetrics
+        panel.measure(
+            View.MeasureSpec.makeMeasureSpec(panelParams.width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        val maxHeight = dm.heightPixels - dp(48)
+        panelParams.height = panel.measuredHeight.coerceAtMost(maxHeight)
+        panelParams.y = bubbleParams.y.coerceIn(0, max(0, dm.heightPixels - panelParams.height - dp(24)))
+    }
+
+    private fun relayoutPanel() {
+        measurePanel()
+        try { windowManager.updateViewLayout(panelRoot, panelParams) } catch (e: Exception) { Log.w(TAG, "Falha ao ajustar painel", e) }
+    }
+
+    // ------------------------------------------------------------------ jornada
+
+    private fun onEndTapped() {
+        if (!confirmEnd) {
+            confirmEnd = true
+            bindShift()
+            panel.postDelayed({ if (confirmEnd) { confirmEnd = false; bindShift() } }, CONFIRM_MS)
+            return
+        }
+        confirmEnd = false
+        actions.endShift()
+    }
+
+    private fun bindShift() {
+        val s = shift
+        val sum = summary
+        startButton.visibility = if (s == null) View.VISIBLE else View.GONE
+        runningRow.visibility = if (s != null && !s.paused) View.VISIBLE else View.GONE
+        pausedRow.visibility = if (s != null && s.paused) View.VISIBLE else View.GONE
+        shiftMetrics.visibility = if (s != null && sum != null) View.VISIBLE else View.GONE
+        tripRow.visibility = if (s != null) View.VISIBLE else View.GONE
+        lastOfferText.visibility = if (s != null) View.VISIBLE else View.GONE
+
+        shiftState.text = when {
+            s == null -> "Parada · toque ▶ ao começar a rodar"
+            s.paused -> "⏸ Pausada"
+            else -> "● Rodando"
+        }
+        shiftState.setTextColor(if (s != null && !s.paused) AMBER else WHITE)
+        val endLabel = if (confirmEnd) "Confirmar?" else "⏹ Encerrar"
+        endButton.text = endLabel
+        ((pausedRow as LinearLayout).getChildAt(1) as? TextView)?.text = endLabel
+        if (sum != null) shiftMetrics.text = ShiftMath.lines(sum).joinToString("\n")
+        lastOfferText.text = lastOfferLabel?.let { "Última oferta: $it" } ?: "Nenhuma oferta lida ainda"
+    }
     private fun bindProfile() {
         val p = profile
         profileName.text = if (profileCount > 1) p.name else "${p.name} (único)"
@@ -233,11 +350,15 @@ class QuickBubbleView(
         readerText.setTextColor(if (r.connected) SECONDARY else YELLOW)
     }
 
-    /** Verde = leitor ligado; cinza com "!" = Acessibilidade desligada. */
+    /** Verde = leitor ligado; cinza com "!" = Acessibilidade desligada. Anel âmbar = jornada rodando. */
     private fun paintBubble() {
         val ok = reader.connected
         bubble.text = if (ok) "M" else "M!"
-        (bubble.background as? GradientDrawable)?.setColor(if (ok) GREEN else GRAY)
+        val running = shift?.paused == false
+        (bubble.background as? GradientDrawable)?.apply {
+            setColor(if (ok) GREEN else GRAY)
+            setStroke(dp(if (running) 4 else 2), if (running) AMBER else WHITE)
+        }
     }
 
     private fun refreshVoice() {
@@ -367,8 +488,8 @@ class QuickBubbleView(
     companion object {
         private const val TAG = "MApp/Bubble"
         private const val BUBBLE_DP = 52
-        private const val PANEL_WIDTH_DP = 260
-        private const val PANEL_HEIGHT_DP = 520
+        private const val PANEL_WIDTH_DP = 290
+        private const val CONFIRM_MS = 4_000L
 
         private val PT_BR: Locale = Locale.forLanguageTag("pt-BR")
         private val WHITE = 0xFFFFFFFF.toInt()
@@ -378,6 +499,9 @@ class QuickBubbleView(
         private val GRAY = 0xFF616161.toInt()
         private val YELLOW = 0xFFFFD54F.toInt()
         private val PANEL_BG = 0xF2202124.toInt()
+        private val SECTION_BG = 0xFF2D2F33.toInt()
+        private val AMBER = 0xFFFFB300.toInt()
+        private val BLUE = 0xFF1565C0.toInt()
         private val BUTTON_BG = 0xFF3C4043.toInt()
 
         private fun money(v: Double): String = "R$ " + String.format(PT_BR, "%.2f", v)
