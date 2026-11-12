@@ -190,6 +190,7 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
             Text("Menu", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
             MenuButton("Ganhos e gastos") { onNavigate(Routes.FINANCE) }
             MenuButton("Relatórios") { onNavigate(Routes.REPORTS) }
+            MenuButton("Histórico de jornadas") { onNavigate(Routes.SHIFTS) }
             MenuButton("Histórico de ofertas") { onNavigate(Routes.HISTORY) }
             MenuButton("Perfis de filtro") { onNavigate(Routes.PROFILES) }
             MenuButton("Estilo do cartão") { onNavigate(Routes.CARD_STYLE) }

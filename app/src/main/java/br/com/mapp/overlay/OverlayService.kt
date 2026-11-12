@@ -178,7 +178,7 @@ class OverlayService : LifecycleService() {
         }
 
         override fun endShift() {
-            val ended = ShiftTracker.end(this@OverlayService) ?: return
+            val ended = ShiftTracker.end(this@OverlayService, costPerKm) ?: return
             countedKey = null
             val s = ShiftMath.summary(ended, costPerKm, System.currentTimeMillis())
             toast("Jornada encerrada: ${s.trips} corridas · lucro ${ShiftMath.money(s.profit)}")

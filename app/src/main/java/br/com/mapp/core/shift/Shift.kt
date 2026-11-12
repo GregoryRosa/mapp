@@ -45,6 +45,8 @@ data class Shift(
     val resumedAt: Long? = startedAt,
     val gpsKm: Double = 0.0,
     val trips: List<ShiftTrip> = emptyList(),
+    /** Custo/km do veículo no momento em que a jornada foi encerrada (null = usar o atual). */
+    val costPerKm: Double? = null,
 ) {
     val paused: Boolean get() = resumedAt == null
 
@@ -84,7 +86,9 @@ data class ShiftSummary(
 object ShiftMath {
     const val NO_CATEGORY = "Outros"
 
+    /** [costPerKm] vale só se a jornada não guardou o seu ([Shift.costPerKm], gravado ao encerrar). */
     fun summary(shift: Shift, costPerKm: Double, now: Long): ShiftSummary {
+        val costPerKm = shift.costPerKm ?: costPerKm
         val trips = shift.trips
         val revenue = trips.sumOf { it.price }
         val withTrip = trips.sumOf { it.tripKm ?: 0.0 }
@@ -117,6 +121,35 @@ object ShiftMath {
                 CategoryShare(label, list.size, list.size * 100.0 / trips.size, list.sumOf { it.price })
             }
             .sortedWith(compareByDescending<CategoryShare> { it.count }.thenByDescending { it.revenue })
+    }
+
+    /** Soma de várias jornadas (histórico: semana, mês). */
+    fun combine(list: List<ShiftSummary>): ShiftSummary {
+        val revenue = list.sumOf { it.revenue }
+        val total = list.sumOf { it.totalKm }
+        val hours = list.sumOf { it.hours }
+        val trips = list.sumOf { it.trips }
+        val withTrip = list.sumOf { it.kmWithTrip }
+        val cost = list.sumOf { it.cost }
+        val tripsWithKm = list.sumOf { s -> if (s.avgTripKm != null && s.avgTripKm > 0) s.kmWithTrip / s.avgTripKm else 0.0 }
+        val cats = list.flatMap { it.categories }.groupBy { it.label }
+            .map { (label, c) -> CategoryShare(label, c.sumOf { it.count }, 0.0, c.sumOf { it.revenue }) }
+            .map { it.copy(percent = if (trips > 0) it.count * 100.0 / trips else 0.0) }
+            .sortedWith(compareByDescending<CategoryShare> { it.count }.thenByDescending { it.revenue })
+        return ShiftSummary(
+            hours = hours,
+            trips = trips,
+            revenue = revenue,
+            totalKm = total,
+            kmWithTrip = withTrip,
+            kmWithoutTrip = max(0.0, total - withTrip),
+            cost = cost,
+            profit = revenue - cost,
+            perKm = if (total >= 0.1 && trips > 0) revenue / total else null,
+            perHour = if (hours >= 1.0 / 60 && trips > 0) revenue / hours else null,
+            avgTripKm = if (tripsWithKm >= 0.5) withTrip / tripsWithKm else null,
+            categories = cats,
+        )
     }
 
     /**
@@ -192,7 +225,7 @@ object ShiftCodec {
     private const val SEP = "\t"
 
     fun encode(s: Shift): String = buildString {
-        append(listOf("v1", s.startedAt, s.activeMs, s.resumedAt ?: "", s.gpsKm).joinToString(SEP))
+        append(listOf("v1", s.startedAt, s.activeMs, s.resumedAt ?: "", s.gpsKm, s.costPerKm ?: "").joinToString(SEP))
         s.trips.forEach { t ->
             append('\n')
             append(
@@ -213,6 +246,7 @@ object ShiftCodec {
                 activeMs = h[2].toLong(),
                 resumedAt = h[3].toLongOrNull(),
                 gpsKm = h[4].toDouble(),
+                costPerKm = h.getOrNull(5)?.toDoubleOrNull(),
                 trips = rows.drop(1).filter { it.isNotBlank() }.map { row ->
                     val c = row.split(SEP)
                     ShiftTrip(
@@ -229,6 +263,15 @@ object ShiftCodec {
             null
         }
     }
+
+    /** Separador entre jornadas da lista (caractere de controle que nunca aparece nos dados). */
+    private const val RECORD = "\u001E"
+
+    fun encodeList(list: List<Shift>): String = list.joinToString(RECORD) { encode(it) }
+
+    /** Jornadas ilegíveis são puladas (não apagam as outras). */
+    fun decodeList(text: String?): List<Shift> =
+        if (text.isNullOrBlank()) emptyList() else text.split(RECORD).mapNotNull { decode(it) }
 
     private fun clean(v: String?) = v?.replace('\t', ' ')?.replace('\n', ' ') ?: ""
 }
