@@ -32,9 +32,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk MApp.apk
+          # A versão (0.2.<nº desta execução>) vem do próprio APK: é a mesma que aparece na tela inicial do app.
+          VERSION=$(jq -r '.elements[0].versionName // empty' app/build/outputs/apk/debug/output-metadata.json 2>/dev/null || true)
+          VERSION=${VERSION:-0.2.$GITHUB_RUN_NUMBER}
+          cp app/build/outputs/apk/debug/app-debug.apk "MApp-$VERSION.apk"
           gh release delete ultima-versao --yes --cleanup-tag || true
-          gh release create ultima-versao MApp.apk \
-            --title "MApp – última versão (${GITHUB_SHA::7})" \
-            --notes "APK gerado automaticamente a partir do commit ${GITHUB_SHA::7}." \
+          gh release create ultima-versao "MApp-$VERSION.apk" \
+            --title "MApp – versão $VERSION" \
+            --notes "Versão $VERSION (commit ${GITHUB_SHA::7}). Depois de instalar, o mesmo número aparece no topo da tela inicial do MApp." \
             --prerelease
