@@ -1,10 +1,12 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 
 package br.com.mapp.finance
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -14,6 +16,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -31,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.com.mapp.MappApp
+import br.com.mapp.core.model.FuelType
 import br.com.mapp.core.model.VehicleCostConfig
 import kotlinx.coroutines.launch
 
@@ -66,8 +70,19 @@ fun VehicleScreen(onBack: () -> Unit) {
 
 @Composable
 private fun VehicleForm(initial: VehicleCostConfig, modifier: Modifier, onSave: (VehicleCostConfig) -> Unit) {
-    var fuel by remember(initial) { mutableStateOf(Format.input(initial.fuelPricePerLiter)) }
-    var kmPerLiter by remember(initial) { mutableStateOf(Format.input(initial.kmPerLiter)) }
+    var fuelType by remember(initial) { mutableStateOf(initial.fuelType) }
+    var fuel by remember(initial) { mutableStateOf(Format.input(initial.fuelPricePerUnit)) }
+    var kmPerLiter by remember(initial) { mutableStateOf(Format.input(initial.kmPerUnit)) }
+
+    // Trocar o tipo preenche preço/consumo típicos; voltar ao tipo salvo restaura os valores salvos.
+    fun selectType(type: FuelType) {
+        if (type == fuelType) return
+        fuelType = type
+        val price = if (type == initial.fuelType) initial.fuelPricePerUnit else type.suggestedPrice
+        val km = if (type == initial.fuelType) initial.kmPerUnit else type.suggestedKmPerUnit
+        fuel = Format.input(price)
+        kmPerLiter = Format.input(km)
+    }
     var maintenance by remember(initial) { mutableStateOf(Format.input(initial.maintenancePerKm)) }
     var depreciation by remember(initial) { mutableStateOf(Format.input(initial.depreciationPerKm)) }
 
@@ -78,7 +93,7 @@ private fun VehicleForm(initial: VehicleCostConfig, modifier: Modifier, onSave: 
     val config = if (fuelV != null && kmlV != null && kmlV > 0 && maintV != null && depV != null &&
         fuelV >= 0 && maintV >= 0 && depV >= 0
     ) {
-        VehicleCostConfig(fuelV, kmlV, maintV, depV)
+        VehicleCostConfig(fuelType, fuelV, kmlV, maintV, depV)
     } else {
         null
     }
@@ -90,8 +105,23 @@ private fun VehicleForm(initial: VehicleCostConfig, modifier: Modifier, onSave: 
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        NumberField("Preço do combustível", fuel, { fuel = it }, suffix = "R$/l")
-        NumberField("Consumo", kmPerLiter, { kmPerLiter = it }, suffix = "km/l")
+        Text("Combustível", style = MaterialTheme.typography.labelLarge)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FuelType.entries.forEach { t ->
+                FilterChip(selected = fuelType == t, onClick = { selectType(t) }, label = { Text(t.label) })
+            }
+        }
+        if (fuelType.isElectric) {
+            NumberField("Preço da energia (recarga)", fuel, { fuel = it }, suffix = fuelType.priceSuffix)
+            NumberField("Consumo", kmPerLiter, { kmPerLiter = it }, suffix = fuelType.consumptionSuffix)
+            Text(
+                "Use o preço do kWh da sua recarga (conta de luz em casa ou eletroposto) e a eficiência do carro em km/kWh.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        } else {
+            NumberField("Preço do ${fuelType.label.lowercase()}", fuel, { fuel = it }, suffix = fuelType.priceSuffix)
+            NumberField("Consumo", kmPerLiter, { kmPerLiter = it }, suffix = fuelType.consumptionSuffix)
+        }
         NumberField("Manutenção por km", maintenance, { maintenance = it }, suffix = "R$/km")
         NumberField("Depreciação por km", depreciation, { depreciation = it }, suffix = "R$/km")
 
@@ -107,7 +137,7 @@ private fun VehicleForm(initial: VehicleCostConfig, modifier: Modifier, onSave: 
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        "Combustível ${Format.perKm(config.fuelPricePerLiter / config.kmPerLiter)} + " +
+                        "${if (fuelType.isElectric) "Energia" else fuelType.label} ${Format.perKm(config.energyCostPerKm)} + " +
                             "manutenção ${Format.perKm(config.maintenancePerKm)} + " +
                             "depreciação ${Format.perKm(config.depreciationPerKm)}",
                         style = MaterialTheme.typography.bodySmall,

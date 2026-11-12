@@ -2,6 +2,7 @@ package br.com.mapp.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import br.com.mapp.core.model.FuelType
 import br.com.mapp.core.model.VehicleCostConfig
 import br.com.mapp.core.repo.Goals
 import br.com.mapp.core.repo.VehicleRepository
@@ -44,8 +45,10 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
     override fun config(): Flow<VehicleCostConfig> = observePrefs({ prefs }) {
         val d = VehicleCostConfig()
         VehicleCostConfig(
-            fuelPricePerLiter = getDouble(FUEL) ?: d.fuelPricePerLiter,
-            kmPerLiter = getDouble(KM_PER_LITER) ?: d.kmPerLiter,
+            fuelType = getString(FUEL_TYPE, null)
+                ?.let { name -> FuelType.entries.firstOrNull { it.name == name } } ?: d.fuelType,
+            fuelPricePerUnit = getDouble(FUEL) ?: d.fuelPricePerUnit,
+            kmPerUnit = getDouble(KM_PER_LITER) ?: d.kmPerUnit,
             maintenancePerKm = getDouble(MAINTENANCE) ?: d.maintenancePerKm,
             depreciationPerKm = getDouble(DEPRECIATION) ?: d.depreciationPerKm,
         )
@@ -54,8 +57,9 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
     override suspend fun save(config: VehicleCostConfig) {
         withContext(Dispatchers.IO) {
             prefs.edit()
-                .putDouble(FUEL, config.fuelPricePerLiter)
-                .putDouble(KM_PER_LITER, config.kmPerLiter)
+                .putString(FUEL_TYPE, config.fuelType.name)
+                .putDouble(FUEL, config.fuelPricePerUnit)
+                .putDouble(KM_PER_LITER, config.kmPerUnit)
                 .putDouble(MAINTENANCE, config.maintenancePerKm)
                 .putDouble(DEPRECIATION, config.depreciationPerKm)
                 .commit()
@@ -64,6 +68,9 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
 
     private companion object {
         const val FILE = "vehicle_cost"
+        const val FUEL_TYPE = "fuel_type"
+
+        // Chaves antigas mantidas (valem por litro ou por kWh conforme o tipo).
         const val FUEL = "fuel_price_per_liter"
         const val KM_PER_LITER = "km_per_liter"
         const val MAINTENANCE = "maintenance_per_km"
