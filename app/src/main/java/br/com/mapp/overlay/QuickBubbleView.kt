@@ -1,5 +1,6 @@
 package br.com.mapp.overlay
 
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
@@ -14,6 +15,7 @@ import android.graphics.drawable.GradientDrawable
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -114,6 +116,35 @@ class QuickBubbleView(
         title = "MApp – ícone"
     }
 
+    // ------------------------------------------------------------------ textos do dia (em volta do "M")
+
+    private var day: ShiftSummary? = null
+    private var labelsAttached = false
+    private val costLabel = dayLabel(MUTED)
+    private val profitLabel = dayLabel(MUTED)
+    private val kmLabel = dayLabel(MUTED)
+
+    /** Custo em cima do "M"; lucro e km embaixo. Pequeno, sem fundo, não recebe toques. */
+    private val labelsRoot = FrameLayout(context).apply {
+        addView(costLabel, labelParams(top = 0))
+        addView(profitLabel, labelParams(top = LABEL_LINE_DP + BUBBLE_DP))
+        addView(kmLabel, labelParams(top = LABEL_LINE_DP + BUBBLE_DP + LABEL_LINE_DP))
+        visibility = View.GONE
+    }
+
+    private val labelsParams = WindowManager.LayoutParams(
+        dp(LABEL_WIDTH_DP),
+        dp(LABEL_LINE_DP + BUBBLE_DP + 2 * LABEL_LINE_DP),
+        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        PixelFormat.TRANSLUCENT,
+    ).apply {
+        gravity = Gravity.TOP or Gravity.START
+        title = "MApp – resumo do dia"
+    }
+
     // ------------------------------------------------------------------ menu circular
 
     private var radialAttached = false
@@ -174,6 +205,18 @@ class QuickBubbleView(
     ).apply {
         gravity = Gravity.TOP or Gravity.START
         title = "MApp – menu"
+    }
+
+    // ---- ▶/⏸ segurado (estado; funções mais abaixo)
+    private val holdRing = HoldRing(NEON_RED, 4f * density)
+    private var holdAnim: ValueAnimator? = null
+    private var holdDone = false
+    private var holdLeft = false
+    private val endShiftRunnable = Runnable {
+        holdDone = true
+        stopHoldVisual()
+        shiftButton.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        actions.endShift()
     }
 
     // ------------------------------------------------------------------ painel
@@ -302,6 +345,7 @@ class QuickBubbleView(
 
     init {
         installDrag()
+        installHoldToEnd()
         paintBubble()
         refreshVoice()
         bindProfile()
@@ -319,7 +363,22 @@ class QuickBubbleView(
             bubbleAttached = true
         } catch (e: Exception) {
             Log.w(TAG, "Não foi possível mostrar o ícone (permissão de sobreposição?)", e)
+            return
         }
+        placeLabels()
+        try {
+            windowManager.addView(labelsRoot, labelsParams)
+            labelsAttached = true
+        } catch (e: Exception) {
+            Log.w(TAG, "Não foi possível mostrar o resumo do dia", e)
+        }
+        bindDay()
+    }
+
+    /** Resumo do dia (jornada atual ou a encerrada hoje); null = esconde os textos. */
+    fun updateDay(sum: ShiftSummary?) {
+        day = sum
+        bindDay()
     }
 
     fun updateProfile(active: FilterProfile, count: Int) {
@@ -356,6 +415,10 @@ class QuickBubbleView(
     fun destroy() {
         closeRadial()
         closePanel()
+        if (labelsAttached) {
+            try { windowManager.removeViewImmediate(labelsRoot) } catch (e: Exception) { Log.w(TAG, "Falha ao remover resumo", e) }
+            labelsAttached = false
+        }
         if (bubbleAttached) {
             try { windowManager.removeViewImmediate(bubble) } catch (e: Exception) { Log.w(TAG, "Falha ao remover ícone", e) }
             bubbleAttached = false
@@ -462,6 +525,7 @@ class QuickBubbleView(
     }
 
     private fun closeRadial() {
+        cancelHold()
         if (!radialAttached) return
         try { windowManager.removeViewImmediate(radialRoot) } catch (e: Exception) { Log.w(TAG, "Falha ao fechar menu", e) }
         radialAttached = false
@@ -473,13 +537,66 @@ class QuickBubbleView(
         shiftButton.setImageDrawable(NeonIcon(if (running) NeonIcon.Kind.PAUSE else NeonIcon.Kind.PLAY, NEON_YELLOW))
         shiftButton.contentDescription = when {
             s == null -> "Iniciar jornada"
-            running -> "Pausar jornada"
-            else -> "Continuar jornada"
+            running -> "Pausar jornada (segure 3 segundos para encerrar)"
+            else -> "Continuar jornada (segure 3 segundos para encerrar)"
         }
         tripButton.alpha = if (s != null) 1f else 0.4f
         val voiceOn = OverlayPrefs.isVoiceEnabled(context)
         voiceRound.setImageDrawable(NeonIcon(if (voiceOn) NeonIcon.Kind.VOICE_ON else NeonIcon.Kind.VOICE_OFF, NEON_PURPLE))
         voiceRound.contentDescription = if (voiceOn) "Voz ligada" else "Voz desligada"
+    }
+
+    // ------------------------------------------------------------------ ▶/⏸: toque = play/pausa, segurar 3 s = encerrar
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun installHoldToEnd() {
+        shiftButton.foreground = holdRing
+        shiftButton.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    holdDone = false
+                    holdLeft = false
+                    v.isPressed = true
+                    if (shift != null) startHold() // sem jornada não há o que encerrar
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val out = e.x < 0 || e.y < 0 || e.x > v.width || e.y > v.height
+                    if (out && !holdLeft) { holdLeft = true; v.isPressed = false; cancelHold() }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    v.isPressed = false
+                    cancelHold()
+                    if (!holdDone && !holdLeft) v.performClick() // toque simples: play/pausa
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> { v.isPressed = false; cancelHold(); true }
+                else -> false
+            }
+        }
+    }
+
+    /** Anel vermelho enche em volta do botão; completo = jornada encerrada. */
+    private fun startHold() {
+        cancelHold()
+        holdAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = HOLD_TO_END_MS
+            addUpdateListener { holdRing.progress = it.animatedValue as Float }
+            start()
+        }
+        shiftButton.postDelayed(endShiftRunnable, HOLD_TO_END_MS)
+    }
+
+    private fun cancelHold() {
+        shiftButton.removeCallbacks(endShiftRunnable)
+        stopHoldVisual()
+    }
+
+    private fun stopHoldVisual() {
+        holdAnim?.cancel()
+        holdAnim = null
+        holdRing.progress = 0f
     }
 
     // ------------------------------------------------------------------ painel
@@ -662,6 +779,31 @@ class QuickBubbleView(
     private fun updateBubble() {
         if (!bubbleAttached) return
         try { windowManager.updateViewLayout(bubble, bubbleParams) } catch (e: Exception) { Log.w(TAG, "Falha ao mover ícone", e) }
+        placeLabels()
+        if (labelsAttached) {
+            try { windowManager.updateViewLayout(labelsRoot, labelsParams) } catch (e: Exception) { Log.w(TAG, "Falha ao mover resumo", e) }
+        }
+    }
+
+    // ------------------------------------------------------------------ resumo do dia
+
+    /** Textos alinhados pela borda da tela em que o "M" está (assim não saem da tela). */
+    private fun placeLabels() {
+        val onRight = bubbleParams.x + dp(BUBBLE_DP) / 2 > context.resources.displayMetrics.widthPixels / 2
+        labelsParams.x = if (onRight) bubbleParams.x + dp(BUBBLE_DP) - dp(LABEL_WIDTH_DP) else bubbleParams.x
+        labelsParams.y = bubbleParams.y - dp(LABEL_LINE_DP)
+        val g = (if (onRight) Gravity.END else Gravity.START) or Gravity.CENTER_VERTICAL
+        listOf(costLabel, profitLabel, kmLabel).forEach { it.gravity = g }
+    }
+
+    private fun bindDay() {
+        val d = day
+        labelsRoot.visibility = if (d == null) View.GONE else View.VISIBLE
+        if (d == null) return
+        costLabel.text = "custo ${ShiftMath.money(d.cost)}"
+        profitLabel.text = "lucro ${ShiftMath.money(d.profit)}"
+        profitLabel.setTextColor(if (d.profit >= 0) MUTED_GREEN else MUTED_RED)
+        kmLabel.text = ShiftMath.km(d.totalKm)
     }
 
     // ------------------------------------------------------------------ views
@@ -717,6 +859,20 @@ class QuickBubbleView(
             addView(button("+") { plus() })
         }
 
+    /** Texto miúdo (tamanho fixo em dp, para caber na janela mesmo com fonte grande) com sombra para ler no mapa. */
+    private fun dayLabel(color: Int) = TextView(context).apply {
+        setTextSize(TypedValue.COMPLEX_UNIT_DIP, 10f)
+        setTextColor(color)
+        maxLines = 1
+        includeFontPadding = false
+        setShadowLayer(3f * density, 0f, 0f, 0xE6000000.toInt())
+    }
+
+    private fun labelParams(top: Int) = FrameLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        dp(LABEL_LINE_DP),
+    ).apply { topMargin = dp(top) }
+
     /** Botão redondo: fundo preto, anel neon e ícone da mesma cor. */
     private fun roundButton(
         kind: NeonIcon.Kind,
@@ -747,8 +903,11 @@ class QuickBubbleView(
     companion object {
         private const val TAG = "MApp/Bubble"
         private const val BUBBLE_DP = 52
+        private const val LABEL_LINE_DP = 14
+        private const val LABEL_WIDTH_DP = 110
         private const val PANEL_WIDTH_DP = 290
         private const val CONFIRM_MS = 4_000L
+        private const val HOLD_TO_END_MS = 3_000L
         private const val ITEM_DP = 56
         private const val RADIUS_DP = 118
         private const val RADIAL_SIZE_DP = 2 * (RADIUS_DP + ITEM_DP / 2 + 6)
@@ -767,6 +926,9 @@ class QuickBubbleView(
         private val BLUE = 0xFF1565C0.toInt()
         private val BUTTON_BG = 0xFF3C4043.toInt()
         private val RING_BG = 0xF0000000.toInt()
+        private val MUTED = 0xB3FFFFFF.toInt()
+        private val MUTED_GREEN = 0xC0A5D6A7.toInt()
+        private val MUTED_RED = 0xC0EF9A9A.toInt()
         private val GRAY_LIGHT = 0xFF9E9E9E.toInt()
         private val NEON_GREEN = 0xFF00E64D.toInt()
         private val NEON_YELLOW = 0xFFFFD600.toInt()
@@ -904,6 +1066,32 @@ private class NeonIcon(private val kind: Kind, color: Int) : Drawable() {
 
     override fun setAlpha(alpha: Int) { stroke.alpha = alpha; fill.alpha = alpha }
     override fun setColorFilter(colorFilter: ColorFilter?) { stroke.colorFilter = colorFilter; fill.colorFilter = colorFilter }
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+}
+
+/** Arco de progresso desenhado por cima do anel do botão (segurar para encerrar). */
+private class HoldRing(color: Int, private val width: Float) : Drawable() {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeWidth = width
+        this.color = color
+    }
+    private val oval = RectF()
+
+    var progress = 0f
+        set(value) { field = value.coerceIn(0f, 1f); invalidateSelf() }
+
+    override fun draw(canvas: Canvas) {
+        if (progress <= 0f) return
+        oval.set(bounds)
+        oval.inset(width / 2, width / 2)
+        canvas.drawArc(oval, -90f, 360f * progress, false, paint)
+    }
+
+    override fun setAlpha(alpha: Int) { paint.alpha = alpha }
+    override fun setColorFilter(colorFilter: ColorFilter?) { paint.colorFilter = colorFilter }
     @Deprecated("Deprecated in Java")
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
 }

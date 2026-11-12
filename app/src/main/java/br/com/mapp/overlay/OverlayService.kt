@@ -254,9 +254,13 @@ class OverlayService : LifecycleService() {
     }
 
     private fun pushShift() {
+        val now = System.currentTimeMillis()
         val shift: Shift? = ShiftTracker.current(this).value
-        val summary = shift?.let { ShiftMath.summary(it, costPerKm, System.currentTimeMillis()) }
+        val summary = shift?.let { ShiftMath.summary(it, costPerKm, now) }
         bubble?.updateShift(shift, summary, lastOffer?.let { offerLabel(it.raw) })
+        // Textos discretos junto ao "M": custo (em cima), lucro e km (embaixo) do dia.
+        val today = ShiftMath.ofToday(shift, ShiftTracker.last(this).value, now)
+        bubble?.updateDay(if (today === shift) summary else today?.let { ShiftMath.summary(it, costPerKm, now) })
     }
 
     private fun offerLabel(raw: RawOffer): String {
