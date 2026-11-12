@@ -105,4 +105,46 @@ class ShiftTest {
         assertNull(ShiftMath.ofToday(null, ontem, now, zone))            // encerrada ontem: nada
         assertNull(ShiftMath.ofToday(null, null, now, zone))
     }
+
+    // ------------------------------------------------------------------ histórico de jornadas
+
+    @Test fun custo_do_dia_fica_guardado_na_jornada() {
+        val shift = Shift(startedAt = 0, gpsKm = 10.0, trips = listOf(trip("UberX", 30.0, 1.0, 5.0)), costPerKm = 1.0)
+        assertEquals(10.0, ShiftMath.summary(shift, costPerKm = 5.0, now = h).cost, eps)
+        assertEquals(50.0, ShiftMath.summary(shift.copy(costPerKm = null), costPerKm = 5.0, now = h).cost, eps)
+        assertEquals(shift, ShiftCodec.decode(ShiftCodec.encode(shift)))
+    }
+
+    @Test fun lista_de_jornadas_ida_e_volta() {
+        val a = Shift(startedAt = 1, resumedAt = null, gpsKm = 3.0, trips = listOf(trip("Pop", 10.0, null, 4.0)))
+        val b = Shift(startedAt = 2, resumedAt = null, costPerKm = 0.8)
+        assertEquals(listOf(a, b), ShiftCodec.decodeList(ShiftCodec.encodeList(listOf(a, b))))
+        assertEquals(emptyList<Shift>(), ShiftCodec.decodeList(null))
+        // Formato antigo (sem custo/km no cabeçalho) continua legível.
+        assertEquals(Shift(startedAt = 7, resumedAt = null), ShiftCodec.decode("v1\t7\t0\t\t0.0"))
+    }
+
+    @Test fun soma_de_varias_jornadas() {
+        val d1 = ShiftMath.summary(
+            Shift(startedAt = 0, activeMs = h, resumedAt = null, gpsKm = 20.0,
+                trips = listOf(trip("UberX", 20.0, 1.0, 8.0), trip("Comfort", 20.0, 1.0, 4.0))),
+            costPerKm = 0.5, now = 0,
+        )
+        val d2 = ShiftMath.summary(
+            Shift(startedAt = 0, activeMs = h, resumedAt = null, gpsKm = 30.0, trips = listOf(trip("UberX", 20.0, 2.0, 6.0))),
+            costPerKm = 0.5, now = 0,
+        )
+        val t = ShiftMath.combine(listOf(d1, d2))
+        assertEquals(2.0, t.hours, eps)
+        assertEquals(3, t.trips)
+        assertEquals(60.0, t.revenue, eps)
+        assertEquals(50.0, t.totalKm, eps)
+        assertEquals(25.0, t.cost, eps)
+        assertEquals(35.0, t.profit, eps)
+        assertEquals(1.2, t.perKm!!, eps)
+        assertEquals(30.0, t.perHour!!, eps)
+        assertEquals(6.0, t.avgTripKm!!, eps)
+        assertEquals("UberX", t.categories[0].label)
+        assertEquals(2.0 * 100 / 3, t.categories[0].percent, eps)
+    }
 }

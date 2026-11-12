@@ -17,9 +17,13 @@ object ShiftTracker {
     private const val NAME = "mapp_shift"
     private const val KEY_CURRENT = "current"
     private const val KEY_LAST = "last"
+    private const val KEY_HISTORY = "history"
+    /** Jornadas guardadas no histórico (~1 ano de trabalho diário). */
+    private const val HISTORY_MAX = 400
 
     private val _current = MutableStateFlow<Shift?>(null)
     private val _last = MutableStateFlow<Shift?>(null)
+    private val _history = MutableStateFlow<List<Shift>>(emptyList())
     private var prefs: SharedPreferences? = null
 
     /** Jornada atual (null = nenhuma). */
@@ -28,19 +32,42 @@ object ShiftTracker {
     /** Última jornada encerrada (tela inicial). */
     fun last(ctx: Context): StateFlow<Shift?> { load(ctx); return _last.asStateFlow() }
 
+    /** Jornadas encerradas, da mais nova para a mais antiga. */
+    fun history(ctx: Context): StateFlow<List<Shift>> { load(ctx); return _history.asStateFlow() }
+
+    /** Apaga uma jornada do histórico (identificada pelo início). */
+    @Synchronized
+    fun deleteFromHistory(ctx: Context, startedAt: Long) {
+        load(ctx)
+        val list = _history.value.filterNot { it.startedAt == startedAt }
+        _history.value = list
+        val edit = prefs?.edit()?.putString(KEY_HISTORY, ShiftCodec.encodeList(list))
+        if (_last.value?.startedAt == startedAt) {
+            _last.value = null
+            edit?.remove(KEY_LAST)
+        }
+        edit?.apply()
+    }
+
     fun start(ctx: Context, now: Long = System.currentTimeMillis()) =
         update(ctx) { it?.resume(now) ?: Shift(startedAt = now) }
 
     fun pause(ctx: Context, now: Long = System.currentTimeMillis()) = update(ctx) { it?.pause(now) }
 
-    /** Encerra e guarda como "última jornada". */
+    /** Encerra, guarda como "última jornada" e no histórico (com o custo/km de agora). */
     @Synchronized
-    fun end(ctx: Context, now: Long = System.currentTimeMillis()): Shift? {
+    fun end(ctx: Context, costPerKm: Double? = null, now: Long = System.currentTimeMillis()): Shift? {
         load(ctx)
-        val ended = _current.value?.pause(now) ?: return null
+        val ended = _current.value?.pause(now)?.copy(costPerKm = costPerKm) ?: return null
+        val list = (listOf(ended) + _history.value).take(HISTORY_MAX)
         _current.value = null
         _last.value = ended
-        prefs?.edit()?.remove(KEY_CURRENT)?.putString(KEY_LAST, ShiftCodec.encode(ended))?.apply()
+        _history.value = list
+        prefs?.edit()
+            ?.remove(KEY_CURRENT)
+            ?.putString(KEY_LAST, ShiftCodec.encode(ended))
+            ?.putString(KEY_HISTORY, ShiftCodec.encodeList(list))
+            ?.apply()
         return ended
     }
 
@@ -67,6 +94,9 @@ object ShiftTracker {
         val p = ctx.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
         _current.value = ShiftCodec.decode(p.getString(KEY_CURRENT, null))
         _last.value = ShiftCodec.decode(p.getString(KEY_LAST, null))
+        // Versões antigas só guardavam a última jornada: ela vira o 1º item do histórico.
+        _history.value = ShiftCodec.decodeList(p.getString(KEY_HISTORY, null))
+            .ifEmpty { listOfNotNull(_last.value) }
         prefs = p
     }
 }

@@ -22,8 +22,8 @@ Documentação completa (pesquisa, requisitos, arquitetura, roadmap): **README.m
 | `overlay/OverlayPrefs` | `cardLayout(ctx)`, `setCardLayout(ctx, l)` (estilo do cartão salvo) | overlay, ui/CardStyleScreen |
 | `core/shift/*` | `Shift` (jornada: play/pausa, km GPS, corridas), `ShiftMath.summary/lines`, `Odometer`, `ShiftCodec` | overlay, ui/HomeScreen |
 | `core/pin/*` + `maps/PinStore` | `ZonePin` (pin rápido: tipo + ponto), `ZonePins.circle`, `ZonePinCodec`; `PinStore.pins/add/remove` (SharedPreferences) | overlay/OverlayService (📍 no painel), maps/ZoneEditor |
-| `overlay/ShiftTracker` | `current(ctx)`, `last(ctx)`, `start/pause/end`, `addKm`, `addTrip`, `undoLastTrip` (salvo em SharedPreferences) | overlay/OverlayService, ui/HomeScreen |
-| Telas `@Composable fun XScreen(onBack: () -> Unit)` | `finance/`: Finance, Reports, History, Profiles, Vehicle · `maps/`: ZoneEditor · `ui/`: CardStyle | ui/MainActivity |
+| `overlay/ShiftTracker` | `current(ctx)`, `last(ctx)`, `history(ctx)`, `start/pause/end(ctx, costPerKm)`, `addKm`, `addTrip`, `undoLastTrip`, `deleteFromHistory` (salvo em SharedPreferences; histórico até 400 jornadas) | overlay/OverlayService, ui/HomeScreen, ui/ShiftHistory |
+| Telas `@Composable fun XScreen(onBack: () -> Unit)` | `finance/`: Finance, Reports, History, Profiles, Vehicle · `maps/`: ZoneEditor · `ui/`: CardStyle, ShiftHistory | ui/MainActivity |
 
 ## Fluxo da oferta
 Reader lê a tela por duas fontes — texto (árvore de Acessibilidade) e imagem (`reader/ScreenOcr`: captura da janela do app de corrida + OCR no aparelho, só com `OfferBus.hasListeners`) — e passa os textos ao parser (`parse(texts, fromOcr)`) → `OfferBus.publish(raw)` → `overlay/OfferPipeline` (geocodifica, carrega perfil ativo/custos/zonas, avalia, grava histórico) → `OfferBus.publishEvaluated` → overlay desenha cartão + mini mapa. Quando a oferta some: `OfferBus.clear()`. `RawOffer.category` = tipo lido no topo do cartão (UberX, Comfort, Black, Elétrico, Pop...); fica fora da identidade da oferta (o OCR nem sempre o lê).
