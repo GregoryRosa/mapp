@@ -2,6 +2,7 @@
 
 package br.com.mapp.finance
 
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -34,12 +35,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.com.mapp.MappApp
 import br.com.mapp.core.repo.OfferRecord
+import br.com.mapp.core.shift.ShiftTrip
+import br.com.mapp.overlay.ShiftTracker
 import kotlinx.coroutines.launch
 
 private const val HISTORY_LIMIT = 200
@@ -57,8 +61,21 @@ fun HistoryScreen(onBack: () -> Unit) {
     val accepted = remember(todayOffers) { ReportMath.accepted(todayOffers) }
     val summary = remember(todayOffers) { ReportMath.summarizeAccepted(todayOffers) }
     val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
     val toggle: (OfferRecord) -> Unit = { r ->
-        scope.launch { repos.offers.setAcceptedById(r.id, if (r.accepted == true) false else true) }
+        val accept = r.accepted != true
+        val raw = r.evaluated.raw
+        scope.launch {
+            repos.offers.setAcceptedById(r.id, accept)
+            // Também coloca/tira a corrida da jornada (ícone "M", resumo do dia, histórico de jornadas).
+            val inShift = ShiftTracker.setTrip(ctx, ShiftTrip.from(raw, raw.capturedAt), raw.capturedAt, accept)
+            val msg = when {
+                !inShift -> "Nenhuma jornada nesse horário: a corrida conta só no histórico e nos relatórios"
+                accept -> "Corrida somada à jornada"
+                else -> "Corrida tirada da jornada"
+            }
+            Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+        }
     }
 
     Scaffold(topBar = { BackTopBar("Histórico de ofertas", onBack) }) { pad ->

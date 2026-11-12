@@ -22,6 +22,33 @@ class ShiftTest {
     private fun trip(cat: String?, price: Double, pickup: Double?, km: Double?) =
         ShiftTrip(0, Platform.UBER, cat, price, pickup, km)
 
+    @Test fun marcacao_manual_coloca_e_tira_a_corrida_sem_duplicar() {
+        val offerAt = 10 * h
+        val auto = ShiftTrip(offerAt + 40_000, Platform.UBER, "UberX", 14.06, 1.0, 2.9) // contada sozinha
+        val s = Shift(startedAt = 8 * h, trips = listOf(auto))
+        val manual = ShiftTrip(offerAt, Platform.UBER, null, 14.06, 1.0, 2.9)
+        assertEquals(s, s.withTrip(manual, offerAt, present = true)) // já estava: não duplica
+        val other = ShiftTrip(11 * h, Platform.UBER, null, 7.69, 0.5, 1.4)
+        val added = s.withTrip(other, 11 * h, present = true)
+        assertEquals(2, added.trips.size)
+        assertEquals(7.69, added.trips.last().price, eps)
+        val removed = added.withTrip(manual, offerAt, present = false)
+        assertEquals(listOf(other), removed.trips)
+        // Mesmo valor, mas muito depois: é outra corrida.
+        assertEquals(-1, s.tripIndexFor(Platform.UBER, 14.06, offerAt + 2 * h))
+    }
+
+    @Test fun jornada_dona_da_oferta() {
+        val cur = Shift(startedAt = 20 * h)
+        val ontem = Shift(startedAt = 0)
+        val hoje = Shift(startedAt = 10 * h)
+        val history = listOf(hoje, ontem)
+        assertTrue(ShiftMath.ownerOf(21 * h, cur, history) === cur)
+        assertTrue(ShiftMath.ownerOf(12 * h, cur, history) === hoje)
+        assertTrue(ShiftMath.ownerOf(5 * h, null, history) === ontem)
+        assertNull(ShiftMath.ownerOf(-1, cur, history))
+    }
+
     @Test fun resumo_da_jornada() {
         val shift = Shift(startedAt = 0, gpsKm = 50.0, trips = listOf(
             trip("UberX", 20.0, 2.0, 10.0),

@@ -64,8 +64,13 @@ fun FinanceScreen(onBack: () -> Unit) {
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val goals by remember { repos.finance.goals() }.collectAsStateWithLifecycle(initialValue = Goals())
 
-    val todaySummary = remember(entries, today) { ReportMath.summarize(entries, today) }
-    val monthSummary = remember(entries) { ReportMath.summarize(entries) }
+    val offers by remember(month) { repos.offers.between(month.from, month.to) }
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    // Corridas marcadas como aceitas no histórico de ofertas entram nos ganhos.
+    val rides = remember(offers) { ReportMath.ridesAsIncome(offers) }
+    val withRides = remember(entries, rides) { entries + rides }
+    val todaySummary = remember(withRides, today) { ReportMath.summarize(withRides, today) }
+    val monthSummary = remember(withRides) { ReportMath.summarize(withRides) }
 
     var showEntryDialog by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<FinanceEntry?>(null) }
@@ -93,6 +98,15 @@ fun FinanceScreen(onBack: () -> Unit) {
         ) {
             item { SummaryCard("Hoje", todaySummary, ReportMath.goalProgress(todaySummary.income, goals.daily)) }
             item { SummaryCard("Mês", monthSummary, ReportMath.goalProgress(monthSummary.income, goals.monthly)) }
+            if (rides.isNotEmpty()) {
+                item {
+                    Text(
+                        "Ganhos incluem ${rides.size} corridas aceitas no mês (${Format.brl(rides.sumOf { it.amount })}). " +
+                            "Não lance essas corridas de novo aqui.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
             item { SectionTitle("Lançamentos do mês") }
             if (entries.isEmpty()) {
                 item { EmptyText("Nenhum lançamento neste mês. Toque em Lançar para registrar um ganho ou gasto.") }

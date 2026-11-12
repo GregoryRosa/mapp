@@ -236,6 +236,8 @@ class OverlayService : LifecycleService() {
                 refreshCountButton()
             }
         }
+        // Jornada encerrada de hoje corrigida no histórico de ofertas: atualiza o resumo junto ao "M".
+        lifecycleScope.launch { ShiftTracker.last(this@OverlayService).collect { pushShift() } }
         // Hodômetro: GPS preciso só com a jornada rodando.
         lifecycleScope.launch {
             ShiftTracker.current(this@OverlayService)
@@ -309,7 +311,11 @@ class OverlayService : LifecycleService() {
             TripStage.ACCEPTED -> {
                 val offer = lastOffer ?: return
                 val fresh = System.currentTimeMillis() - lastOfferSeenAt <= ACCEPT_WINDOW_MS
-                if (!fresh || offer.raw.key() == countedKey) return // já contada (ex.: +1) ou oferta antiga
+                if (offer.raw.key() == countedKey) return // já contada (ex.: +1)
+                if (!fresh) {
+                    toast("Vi corrida aceita, mas a última oferta lida é antiga: toque +1 se for o caso")
+                    return
+                }
                 acceptedSinceFinish = true
                 countOffer(offer, auto = true)
             }
