@@ -42,14 +42,18 @@ class LocationProvider private constructor(context: Context) {
     private fun granted(perm: String) =
         ContextCompat.checkSelfPermission(appContext, perm) == PackageManager.PERMISSION_GRANTED
 
-    /** Posição atual (balanceada); cai para a última localização do sistema se não vier a tempo. */
+    /**
+     * Posição atual (balanceada, ou GPS com [precise]); cai para a última localização do sistema
+     * se não vier a tempo.
+     */
     @SuppressLint("MissingPermission")
-    suspend fun current(timeoutMs: Long = CURRENT_TIMEOUT_MS): GeoPoint? {
+    suspend fun current(timeoutMs: Long = CURRENT_TIMEOUT_MS, precise: Boolean = false): GeoPoint? {
         if (!hasPermission()) return null
         return try {
             val cts = CancellationTokenSource()
             val fresh = withTimeoutOrNull(timeoutMs) {
-                client.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, cts.token).awaitOrNull(cts)
+                val priority = if (precise) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY
+                client.getCurrentLocation(priority, cts.token).awaitOrNull(cts)
             }
             if (fresh == null) cts.cancel()
             val loc = fresh ?: client.lastLocation.awaitOrNull()

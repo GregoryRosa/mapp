@@ -64,6 +64,11 @@ import br.com.mapp.MappApp
 import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.model.Zone
 import br.com.mapp.core.model.ZoneType
+import br.com.mapp.core.pin.ZonePin
+import br.com.mapp.core.pin.ZonePins
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.osmdroid.events.MapEventsReceiver
@@ -87,6 +92,14 @@ fun ZoneEditorScreen(onBack: () -> Unit) {
     var current by remember { mutableStateOf<GeoPoint?>(null) }
     var showSaveDialog by remember { mutableStateOf(false) }
     var zoneToDelete by remember { mutableStateOf<Zone?>(null) }
+
+    // Pins marcados na rua pelo painel do "M".
+    val pins by remember { PinStore.pins(ctx) }.collectAsStateWithLifecycle()
+    var selectedPin by remember { mutableStateOf<ZonePin?>(null) }
+    /** Pin que está virando zona (apagado quando a zona é salva). */
+    var fromPin by remember { mutableStateOf<ZonePin?>(null) }
+    /** Polígono pronto da "zona rápida" (sem desenhar). */
+    var quickPolygon by remember { mutableStateOf<List<GeoPoint>?>(null) }
 
     val mapView = remember {
         MapViews.create(ctx, interactive = true).apply {
@@ -137,6 +150,8 @@ fun ZoneEditorScreen(onBack: () -> Unit) {
     fun resetDrawing() {
         drawing.value = false
         vertices.clear()
+        fromPin = null
+        quickPolygon = null
     }
 
     Scaffold(
@@ -157,7 +172,7 @@ fun ZoneEditorScreen(onBack: () -> Unit) {
                     factory = { mapView },
                     modifier = Modifier.fillMaxSize(),
                     update = { map ->
-                        renderEditor(map, zones, vertices.toList(), current, tapOverlay)
+                        renderEditor(map, zones, pins, vertices.toList(), current, tapOverlay) { selectedPin = it }
                     },
                 )
                 if (drawing.value) {
@@ -204,7 +219,7 @@ fun ZoneEditorScreen(onBack: () -> Unit) {
                     Spacer(Modifier.weight(1f))
                     Button(onClick = { showSaveDialog = true }, enabled = vertices.size >= 3) { Text("Salvar") }
                 } else {
-                    Button(onClick = { vertices.clear(); drawing.value = true }) {
+                    Button(onClick = { resetDrawing(); drawing.value = true }) {
                         Icon(Icons.Filled.Add, contentDescription = null)
                         Spacer(Modifier.width(4.dp))
                         Text("Desenhar zona")
@@ -213,6 +228,29 @@ fun ZoneEditorScreen(onBack: () -> Unit) {
             }
 
             HorizontalDivider()
+            if (pins.isNotEmpty() && !drawing.value) {
+                Text(
+                    "📍 Pins para desenhar (${pins.size})",
+                    modifier = Modifier.padding(start = 16.dp, top = 8.dp),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 160.dp)) {
+                    items(pins, key = { "pin${it.id}" }) { pin ->
+                        ListItem(
+                            modifier = Modifier.clickable {
+                                MapViews.centerOn(mapView, pin.point, zoom = PIN_ZOOM)
+                                selectedPin = pin
+                            },
+                            leadingContent = {
+                                Box(Modifier.size(18.dp).background(Color(pinColor(pin)), CircleShape))
+                            },
+                            headlineContent = { Text(pin.type.label) },
+                            supportingContent = { Text("Marcado em ${pinTime(pin)} · toque para transformar em zona") },
+                        )
+                    }
+                }
+                HorizontalDivider()
+            }
             if (zones.isEmpty()) {
                 Text(
                     "Nenhuma zona salva. Desenhe áreas perigosas ou de alta demanda para receber alertas.",
@@ -254,16 +292,62 @@ fun ZoneEditorScreen(onBack: () -> Unit) {
     }
 
     if (showSaveDialog) {
+        val pin = fromPin
         SaveZoneDialog(
-            onDismiss = { showSaveDialog = false },
+            initialName = pin?.let { "${it.type.label} ${pinTime(it)}" } ?: "",
+            initialType = pin?.type ?: ZoneType.DANGER,
+            onDismiss = {
+                showSaveDialog = false
+                if (quickPolygon != null) resetDrawing()
+            },
             onConfirm = { name, type, alert ->
-                val polygon = vertices.toList()
+                val polygon = quickPolygon ?: vertices.toList()
                 showSaveDialog = false
                 resetDrawing()
                 scope.launch {
                     repos.zones.save(Zone(name = name, type = type, polygon = polygon, alertEnabled = alert))
+                    pin?.let { PinStore.remove(ctx, it.id) }
                 }
             },
+        )
+    }
+
+    selectedPin?.let { pin ->
+        AlertDialog(
+            onDismissRequest = { selectedPin = null },
+            title = { Text("📍 ${pin.type.label}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Marcado em ${pinTime(pin)}.")
+                    Button(
+                        onClick = {
+                            selectedPin = null
+                            resetDrawing()
+                            fromPin = pin
+                            drawing.value = true
+                            MapViews.centerOn(mapView, pin.point, zoom = PIN_ZOOM)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Desenhar zona em volta") }
+                    OutlinedButton(
+                        onClick = {
+                            selectedPin = null
+                            resetDrawing()
+                            fromPin = pin
+                            quickPolygon = ZonePins.circle(pin.point)
+                            showSaveDialog = true
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Zona rápida (raio ${ZonePins.DEFAULT_RADIUS_M.toInt()} m)") }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    selectedPin = null
+                    PinStore.remove(ctx, pin.id)
+                }) { Text("Apagar pin") }
+            },
+            dismissButton = { TextButton(onClick = { selectedPin = null }) { Text("Fechar") } },
         )
     }
 
@@ -285,11 +369,13 @@ fun ZoneEditorScreen(onBack: () -> Unit) {
 
 @Composable
 private fun SaveZoneDialog(
+    initialName: String = "",
+    initialType: ZoneType = ZoneType.DANGER,
     onDismiss: () -> Unit,
     onConfirm: (name: String, type: ZoneType, alert: Boolean) -> Unit,
 ) {
-    var name by remember { mutableStateOf("") }
-    var type by remember { mutableStateOf(ZoneType.DANGER) }
+    var name by remember { mutableStateOf(initialName) }
+    var type by remember { mutableStateOf(initialType) }
     var alert by remember { mutableStateOf(true) }
 
     AlertDialog(
@@ -334,16 +420,30 @@ private fun SaveZoneDialog(
     )
 }
 
-/** Redesenha zonas, prévia do desenho e posição atual; a camada de toques fica sempre por último. */
+private const val PIN_ZOOM = 17.0
+private val PIN_TIME = SimpleDateFormat("dd/MM HH:mm", Locale.forLanguageTag("pt-BR"))
+
+private fun pinTime(pin: ZonePin): String = PIN_TIME.format(Date(pin.id))
+
+private fun pinColor(pin: ZonePin): Int = pin.type.defaultColorArgb.toInt() or 0xFF000000.toInt()
+
+/** Redesenha zonas, pins, prévia do desenho e posição atual; a camada de toques fica sempre por último. */
 private fun renderEditor(
     map: MapView,
     zones: List<Zone>,
+    pins: List<ZonePin>,
     draft: List<GeoPoint>,
     current: GeoPoint?,
     tapOverlay: MapEventsOverlay,
+    onPinClick: (ZonePin) -> Unit,
 ) {
     MapViews.clear(map)
     MapViews.addZones(map, zones)
+    pins.forEach { pin ->
+        val label = when (pin.type) { ZoneType.DANGER -> "!"; ZoneType.HIGH_DEMAND -> "\$"; ZoneType.CUSTOM -> "★" }
+        MapViews.addMarker(map, pin.point, label, pinColor(pin), "📍 ${pin.type.label}", sizeDp = 28f)
+            .setOnMarkerClickListener { _, _ -> onPinClick(pin); true }
+    }
     MapViews.addDraft(map, draft)
     current?.let { MapViews.addCurrentPosition(map, it) }
     map.overlays.add(tapOverlay)

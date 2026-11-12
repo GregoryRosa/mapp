@@ -25,6 +25,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import br.com.mapp.core.model.FilterProfile
+import br.com.mapp.core.model.ZoneType
 import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.core.shift.ShiftSummary
@@ -62,6 +63,9 @@ class QuickBubbleView(
         /** Conta a última oferta vista como corrida pega. */
         fun countLastOffer()
         fun undoLastTrip()
+
+        /** Marca um pin no local atual (zona para desenhar depois no editor). */
+        fun markPin(type: ZoneType)
     }
 
     private val prefs = OverlayPrefs.of(context)
@@ -76,6 +80,7 @@ class QuickBubbleView(
     private var summary: ShiftSummary? = null
     private var lastOfferLabel: String? = null
     private var confirmEnd = false
+    private var pinCount = 0
 
     // ------------------------------------------------------------------ bolha
 
@@ -128,13 +133,26 @@ class QuickBubbleView(
     private val powerButton = roundButton(NeonIcon.Kind.POWER, NEON_RED, "Parar copiloto") {
         closeRadial(); actions.stopCopilot()
     }
-    /** Ordem de cima para baixo no arco. */
-    private val radialItems = listOf(settingsButton, shiftButton, tripButton, voiceRound, homeButton, powerButton)
+    private val pinButton = roundButton(NeonIcon.Kind.PIN, NEON_ORANGE, "Marcar este local (zona para desenhar depois)") {
+        showPinChoices()
+    }
+    /** Ordem de cima para baixo no arco; o 📍 fica no meio (mais fácil de alcançar). */
+    private val radialItems = listOf(settingsButton, shiftButton, tripButton, pinButton, voiceRound, homeButton, powerButton)
+
+    /** 2º passo do 📍: escolher o tipo. Um toque marca e fecha. */
+    private val pinChoices = listOf(
+        Triple(NeonIcon.Kind.WARNING, NEON_RED, ZoneType.DANGER),
+        Triple(NeonIcon.Kind.FLAME, NEON_GREEN, ZoneType.HIGH_DEMAND),
+        Triple(NeonIcon.Kind.STAR, NEON_BLUE, ZoneType.CUSTOM),
+    ).map { (kind, color, type) ->
+        roundButton(kind, color, "Marcar: ${type.label}") { closeRadial(); actions.markPin(type) }
+    }
+    private var radialOnRight = true
     private val closeButton = roundButton(NeonIcon.Kind.CLOSE, WHITE, "Fechar menu", sizeDp = BUBBLE_DP) { closeRadial() }
 
     @SuppressLint("ClickableViewAccessibility")
     private val radialRoot = FrameLayout(context).apply {
-        radialItems.forEach { addView(it, FrameLayout.LayoutParams(dp(ITEM_DP), dp(ITEM_DP))) }
+        (radialItems + pinChoices).forEach { addView(it, FrameLayout.LayoutParams(dp(ITEM_DP), dp(ITEM_DP))) }
         addView(closeButton, FrameLayout.LayoutParams(dp(BUBBLE_DP), dp(BUBBLE_DP)))
         // Toque fora dos botões (ou fora da janela) fecha o menu.
         setOnTouchListener { _, e ->
@@ -197,12 +215,36 @@ class QuickBubbleView(
         addView(lastOfferText, fullWidth(2))
     }
 
+    // ---- Pin rápido (marca o local atual; a zona é desenhada depois) ----
+    private val pinInfo = text(11f, color = SECONDARY)
+    private val pinBox = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(10), dp(8), dp(10), dp(8))
+        background = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(SECTION_BG) }
+        addView(text(11f, color = SECONDARY).apply { text = "📍 MARCAR ESTE LOCAL" })
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            listOf(
+                Triple("⚠ Perigo", RED, ZoneType.DANGER),
+                Triple("🔥 Demanda", GREEN, ZoneType.HIGH_DEMAND),
+                Triple("★ Outro", BLUE, ZoneType.CUSTOM),
+            ).forEachIndexed { i, (label, color, type) ->
+                addView(
+                    button(label, color) { actions.markPin(type) }.apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) },
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = dp(4) },
+                )
+            }
+        }, fullWidth(4))
+        addView(pinInfo, fullWidth(2))
+    }
+
     private val panel = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(12), dp(10), dp(12), dp(10))
 
         addView(text(12f, color = SECONDARY).apply { text = "MApp ${ReaderStatus.versionOf(context)} · AJUSTES RÁPIDOS" })
         addView(readerText, fullWidth(4))
+        addView(pinBox, fullWidth(8))
         addView(shiftBox, fullWidth(8))
         addView(row(
             button("‹") { actions.previousProfile() },
@@ -264,6 +306,7 @@ class QuickBubbleView(
         refreshVoice()
         bindProfile()
         bindShift()
+        bindPins()
     }
 
     // ------------------------------------------------------------------ API
@@ -302,6 +345,12 @@ class QuickBubbleView(
         if (panelAttached) { bindShift(); relayoutPanel() }
         bindRadial()
         if (wasActive != current?.let { !it.paused }) paintBubble()
+    }
+
+    /** Quantos pins esperam virar zona. */
+    fun updatePins(count: Int) {
+        pinCount = count
+        bindPins()
     }
 
     fun destroy() {
@@ -350,19 +399,10 @@ class QuickBubbleView(
         radialParams.x = cx - half
         radialParams.y = cy - half
 
-        val onRight = cx > dm.widthPixels / 2
-        val n = radialItems.size
-        val step = ARC_DEG / (n - 1)
-        val radius = dp(RADIUS_DP)
-        radialItems.forEachIndexed { i, v ->
-            // y cresce para baixo: 270° = cima, 90° = baixo, 180° = esquerda, 0° = direita.
-            val deg = if (onRight) 180.0 + ARC_DEG / 2 - i * step else -ARC_DEG / 2 + i * step
-            val rad = Math.toRadians(deg)
-            val lp = v.layoutParams as FrameLayout.LayoutParams
-            lp.leftMargin = half + (radius * cos(rad)).toInt() - dp(ITEM_DP) / 2
-            lp.topMargin = half + (radius * sin(rad)).toInt() - dp(ITEM_DP) / 2
-            v.layoutParams = lp
-        }
+        radialOnRight = cx > dm.widthPixels / 2
+        radialItems.forEach { it.visibility = View.VISIBLE }
+        pinChoices.forEach { it.visibility = View.GONE }
+        placeOnArc(radialItems, ARC_DEG)
         (closeButton.layoutParams as FrameLayout.LayoutParams).apply {
             leftMargin = half - dp(BUBBLE_DP) / 2
             topMargin = half - dp(BUBBLE_DP) / 2
@@ -370,16 +410,47 @@ class QuickBubbleView(
         try {
             windowManager.addView(radialRoot, radialParams)
             radialAttached = true
-            animateRadial()
+            animateRadial(radialItems)
         } catch (e: Exception) {
             Log.w(TAG, "Não foi possível abrir o menu", e)
         }
     }
 
+    /** Distribui [items] num arco de [arcDeg] graus virado para o meio da tela. */
+    private fun placeOnArc(items: List<View>, arcDeg: Double) {
+        val half = dp(RADIAL_SIZE_DP) / 2
+        val n = items.size
+        val step = if (n > 1) arcDeg / (n - 1) else 0.0
+        val radius = dp(RADIUS_DP)
+        items.forEachIndexed { i, v ->
+            // y cresce para baixo: 270° = cima, 90° = baixo, 180° = esquerda, 0° = direita.
+            val deg = if (radialOnRight) 180.0 + arcDeg / 2 - i * step else -arcDeg / 2 + i * step
+            val rad = Math.toRadians(deg)
+            val lp = v.layoutParams as FrameLayout.LayoutParams
+            lp.leftMargin = half + (radius * cos(rad)).toInt() - dp(ITEM_DP) / 2
+            lp.topMargin = half + (radius * sin(rad)).toInt() - dp(ITEM_DP) / 2
+            v.layoutParams = lp
+        }
+    }
+
+    /** 📍 tocado: o arco troca para os 3 tipos de zona (⚠ perigo, 🔥 demanda, ★ outro). */
+    private fun showPinChoices() {
+        if (!radialAttached) return
+        radialItems.forEach {
+            // Animação de abertura cortada no meio não pode deixar o botão apagado na próxima vez.
+            it.animate().cancel()
+            it.alpha = 1f; it.scaleX = 1f; it.scaleY = 1f; it.translationX = 0f; it.translationY = 0f
+            it.visibility = View.GONE
+        }
+        pinChoices.forEach { it.visibility = View.VISIBLE; it.alpha = 1f }
+        placeOnArc(pinChoices, PIN_ARC_DEG)
+        animateRadial(pinChoices)
+    }
+
     /** Botões saem do centro para a posição final. */
-    private fun animateRadial() {
+    private fun animateRadial(items: List<View>) {
         val half = dp(RADIAL_SIZE_DP) / 2f
-        radialItems.forEachIndexed { i, v ->
+        items.forEachIndexed { i, v ->
             val lp = v.layoutParams as FrameLayout.LayoutParams
             v.translationX = half - (lp.leftMargin + dp(ITEM_DP) / 2f)
             v.translationY = half - (lp.topMargin + dp(ITEM_DP) / 2f)
@@ -492,6 +563,11 @@ class QuickBubbleView(
         if (sum != null) shiftMetrics.text = ShiftMath.lines(sum).joinToString("\n")
         lastOfferText.text = lastOfferLabel?.let { "Última oferta: $it" } ?: "Nenhuma oferta lida ainda"
     }
+    private fun bindPins() {
+        pinInfo.text = if (pinCount == 0) "Só o ponto agora; desenhe a zona depois em Zonas"
+        else "$pinCount pin(s) para desenhar em Zonas"
+    }
+
     private fun bindProfile() {
         val p = profile
         profileName.text = if (profileCount > 1) p.name else "${p.name} (único)"
@@ -674,9 +750,10 @@ class QuickBubbleView(
         private const val PANEL_WIDTH_DP = 290
         private const val CONFIRM_MS = 4_000L
         private const val ITEM_DP = 56
-        private const val RADIUS_DP = 108
+        private const val RADIUS_DP = 118
         private const val RADIAL_SIZE_DP = 2 * (RADIUS_DP + ITEM_DP / 2 + 6)
         private const val ARC_DEG = 180.0
+        private const val PIN_ARC_DEG = 100.0
 
         private val PT_BR: Locale = Locale.forLanguageTag("pt-BR")
         private val WHITE = 0xFFFFFFFF.toInt()
@@ -697,6 +774,7 @@ class QuickBubbleView(
         private val NEON_PURPLE = 0xFFB040FF.toInt()
         private val NEON_BLUE = 0xFF2F8CFF.toInt()
         private val NEON_RED = 0xFFFF1744.toInt()
+        private val NEON_ORANGE = 0xFFFF9100.toInt()
 
         private fun money(v: Double): String = "R$ " + String.format(PT_BR, "%.2f", v)
 
@@ -711,7 +789,7 @@ class QuickBubbleView(
 
 /** Ícones de traço (estilo neon) desenhados em grade 24×24 — sem arquivos de imagem. */
 private class NeonIcon(private val kind: Kind, color: Int) : Drawable() {
-    enum class Kind { PLAY, PAUSE, PLUS_ONE, GEAR, VOICE_ON, VOICE_OFF, HOME, POWER, CLOSE }
+    enum class Kind { PLAY, PAUSE, PLUS_ONE, GEAR, VOICE_ON, VOICE_OFF, HOME, POWER, CLOSE, PIN, WARNING, FLAME, STAR }
 
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -776,6 +854,42 @@ private class NeonIcon(private val kind: Kind, color: Int) : Drawable() {
             Kind.CLOSE -> {
                 canvas.drawLine(6f, 6f, 18f, 18f, stroke)
                 canvas.drawLine(18f, 6f, 6f, 18f, stroke)
+            }
+            Kind.PIN -> {
+                canvas.drawPath(Path().apply {
+                    moveTo(12f, 21.5f)
+                    cubicTo(7f, 15.5f, 5f, 12.5f, 5f, 9.5f)
+                    cubicTo(5f, 5.5f, 8.2f, 2.5f, 12f, 2.5f)
+                    cubicTo(15.8f, 2.5f, 19f, 5.5f, 19f, 9.5f)
+                    cubicTo(19f, 12.5f, 17f, 15.5f, 12f, 21.5f)
+                    close()
+                }, stroke)
+                canvas.drawCircle(12f, 9.5f, 2.6f, stroke)
+            }
+            Kind.WARNING -> {
+                canvas.drawPath(path(12f, 3.5f, 21.5f, 20f, 2.5f, 20f, close = true), stroke)
+                canvas.drawLine(12f, 9.5f, 12f, 14f, stroke)
+                canvas.drawCircle(12f, 17f, 0.9f, fill)
+            }
+            Kind.FLAME -> canvas.drawPath(Path().apply {
+                moveTo(12f, 21.5f)
+                cubicTo(7.5f, 21.5f, 5f, 18.5f, 5f, 15f)
+                cubicTo(5f, 10.5f, 9.5f, 8.5f, 10f, 2.5f)
+                cubicTo(13.5f, 5f, 15f, 8f, 14.5f, 11f)
+                cubicTo(16f, 10f, 16.8f, 8.8f, 17f, 7.5f)
+                cubicTo(18.5f, 9.5f, 19f, 12f, 19f, 15f)
+                cubicTo(19f, 18.5f, 16.5f, 21.5f, 12f, 21.5f)
+                close()
+            }, stroke)
+            Kind.STAR -> {
+                val pts = FloatArray(20)
+                for (i in 0 until 10) {
+                    val r = if (i % 2 == 0) 9.5f else 4f
+                    val a = Math.toRadians(-90.0 + i * 36.0)
+                    pts[2 * i] = 12f + r * cos(a).toFloat()
+                    pts[2 * i + 1] = 12.8f + r * sin(a).toFloat()
+                }
+                canvas.drawPath(path(*pts, close = true), stroke)
             }
         }
         canvas.restore()
