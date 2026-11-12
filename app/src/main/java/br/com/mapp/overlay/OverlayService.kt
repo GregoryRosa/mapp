@@ -74,6 +74,10 @@ class OverlayService : LifecycleService() {
     /** Tipo lido em algum quadro da oferta atual (o OCR às vezes não lê o "UberX"). */
     private var lastCategory: Pair<RawOffer, String>? = null
     private var countedKey: RawOffer? = null
+    /** Oferta contada por último (para desfazer a marca de aceita no histórico). */
+    private var countedOffer: EvaluatedOffer? = null
+    /** Oferta já marcada como aceita no histórico (não regravar a cada quadro). */
+    private var markedAcceptedKey: RawOffer? = null
     /** Quando a [lastOffer] esteve no cartão pela última vez (para o aceite automático). */
     private var lastOfferSeenAt = 0L
     /** Houve aceite automático desde a última corrida finalizada? */
@@ -190,6 +194,8 @@ class OverlayService : LifecycleService() {
             val shift = ShiftTracker.current(this@OverlayService).value ?: return
             if (shift.trips.isEmpty()) { toast("Nenhuma corrida para desfazer"); return }
             ShiftTracker.undoLastTrip(this@OverlayService)
+            countedOffer?.let { markAccepted(it, null) }
+            countedOffer = null
             countedKey = null
             refreshCountButton()
             toast("Última corrida removida")
@@ -280,6 +286,8 @@ class OverlayService : LifecycleService() {
         val trip = ShiftTrip.from(raw.copy(category = categoryFor(raw)), System.currentTimeMillis())
         ShiftTracker.addTrip(this, trip)
         countedKey = key
+        countedOffer = offer
+        markAccepted(offer, true)
         refreshCountButton()
         pushShift()
         val label = offerLabel(raw).removeSuffix(" ✓ contada")
@@ -291,6 +299,11 @@ class OverlayService : LifecycleService() {
      * "Como foi a viagem?" = corrida finalizada.
      */
     private fun onTripStage(stage: TripStage) {
+        if (stage == TripStage.ACCEPTED) {
+            // Histórico: marca a oferta como aceita mesmo sem jornada aberta.
+            val offer = lastOffer
+            if (offer != null && System.currentTimeMillis() - lastOfferSeenAt <= ACCEPT_WINDOW_MS) markAccepted(offer, true)
+        }
         if (ShiftTracker.current(this).value == null) return
         when (stage) {
             TripStage.ACCEPTED -> {
@@ -308,6 +321,20 @@ class OverlayService : LifecycleService() {
                     toast("Corrida finalizada, mas não vi o aceite: toque +1 Contar última se for o caso")
                 }
                 acceptedSinceFinish = false
+            }
+        }
+    }
+
+    /** Grava no histórico de ofertas se a corrida foi aceita (aba "Aceitas hoje"). */
+    private fun markAccepted(offer: EvaluatedOffer, accepted: Boolean?) {
+        val key = offer.raw.key()
+        if (accepted == true && key == markedAcceptedKey) return
+        markedAcceptedKey = if (accepted == true) key else null
+        lifecycleScope.launch {
+            try {
+                MappApp.repos.offers.setAccepted(offer, accepted)
+            } catch (e: Exception) {
+                Log.w(TAG, "Falha ao marcar oferta aceita", e)
             }
         }
     }

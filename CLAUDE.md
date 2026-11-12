@@ -23,6 +23,7 @@ Documentação completa (pesquisa, requisitos, arquitetura, roadmap): **README.m
 | `core/shift/*` | `Shift` (jornada: play/pausa, km GPS, corridas), `ShiftMath.summary/lines`, `Odometer`, `ShiftCodec` | overlay, ui/HomeScreen |
 | `core/pin/*` + `maps/PinStore` | `ZonePin` (pin rápido: tipo + ponto), `ZonePins.circle`, `ZonePinCodec`; `PinStore.pins/add/remove` (SharedPreferences) | overlay/OverlayService (📍 no painel), maps/ZoneEditor |
 | `overlay/ShiftTracker` | `current(ctx)`, `last(ctx)`, `history(ctx)`, `start/pause/end(ctx, costPerKm)`, `addKm`, `addTrip`, `undoLastTrip`, `deleteFromHistory` (salvo em SharedPreferences; histórico até 400 jornadas) | overlay/OverlayService, ui/HomeScreen, ui/ShiftHistory |
+| `core/repo/OfferHistoryRepository` | `record`, `recent`, `between`, `setAccepted(offer, accepted)` (aceite antes da gravação fica pendente e vale no `record`), `setAcceptedById` | overlay/OfferPipeline, overlay/OverlayService (aceita), finance/History (abas Aceitas hoje / Todas) |
 | Telas `@Composable fun XScreen(onBack: () -> Unit)` | `finance/`: Finance, Reports, History, Profiles, Vehicle · `maps/`: ZoneEditor · `ui/`: CardStyle, ShiftHistory | ui/MainActivity |
 
 ## Fluxo da oferta
