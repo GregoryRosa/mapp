@@ -45,16 +45,39 @@ data class FilterProfile(
     val active: Boolean = true,
 )
 
-/** Custos do veículo usados para o lucro líquido. */
+/**
+ * Tipo de energia do veículo. Elétrico usa kWh (preço R$/kWh, consumo km/kWh);
+ * os demais usam litro. [suggestedPrice]/[suggestedKmPerUnit] preenchem o formulário ao trocar o tipo.
+ */
+enum class FuelType(
+    val label: String,
+    val unit: String,
+    val suggestedPrice: Double,
+    val suggestedKmPerUnit: Double,
+) {
+    GASOLINE("Gasolina", "l", 6.20, 11.0),
+    ETHANOL("Etanol", "l", 4.30, 7.7),
+    DIESEL("Diesel", "l", 6.10, 12.0),
+    ELECTRIC("Elétrico", "kWh", 0.90, 6.5);
+
+    val isElectric: Boolean get() = this == ELECTRIC
+    val priceSuffix: String get() = "R$/$unit"
+    val consumptionSuffix: String get() = "km/$unit"
+}
+
+/** Custos do veículo usados para o lucro líquido. Preço e consumo na unidade de [fuelType] (litro ou kWh). */
 data class VehicleCostConfig(
-    val fuelPricePerLiter: Double = 6.00,
-    val kmPerLiter: Double = 11.0,
+    val fuelType: FuelType = FuelType.GASOLINE,
+    val fuelPricePerUnit: Double = 6.00,
+    val kmPerUnit: Double = 11.0,
     val maintenancePerKm: Double = 0.15,
     val depreciationPerKm: Double = 0.20,
 ) {
+    val energyCostPerKm: Double
+        get() = if (kmPerUnit > 0) fuelPricePerUnit / kmPerUnit else 0.0
+
     val costPerKm: Double
-        get() = (if (kmPerLiter > 0) fuelPricePerLiter / kmPerLiter else 0.0) +
-            maintenancePerKm + depreciationPerKm
+        get() = energyCostPerKm + maintenancePerKm + depreciationPerKm
 }
 
 enum class ZoneType(val label: String, val defaultColorArgb: Long) {
