@@ -1,5 +1,6 @@
 package br.com.mapp.overlay
 
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
@@ -14,6 +15,7 @@ import android.graphics.drawable.GradientDrawable
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -205,6 +207,18 @@ class QuickBubbleView(
         title = "MApp – menu"
     }
 
+    // ---- ▶/⏸ segurado (estado; funções mais abaixo)
+    private val holdRing = HoldRing(NEON_RED, 4f * density)
+    private var holdAnim: ValueAnimator? = null
+    private var holdDone = false
+    private var holdLeft = false
+    private val endShiftRunnable = Runnable {
+        holdDone = true
+        stopHoldVisual()
+        shiftButton.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        actions.endShift()
+    }
+
     // ------------------------------------------------------------------ painel
 
     private val profileName = text(15f, bold = true).apply { gravity = Gravity.CENTER }
@@ -331,6 +345,7 @@ class QuickBubbleView(
 
     init {
         installDrag()
+        installHoldToEnd()
         paintBubble()
         refreshVoice()
         bindProfile()
@@ -510,6 +525,7 @@ class QuickBubbleView(
     }
 
     private fun closeRadial() {
+        cancelHold()
         if (!radialAttached) return
         try { windowManager.removeViewImmediate(radialRoot) } catch (e: Exception) { Log.w(TAG, "Falha ao fechar menu", e) }
         radialAttached = false
@@ -521,13 +537,66 @@ class QuickBubbleView(
         shiftButton.setImageDrawable(NeonIcon(if (running) NeonIcon.Kind.PAUSE else NeonIcon.Kind.PLAY, NEON_YELLOW))
         shiftButton.contentDescription = when {
             s == null -> "Iniciar jornada"
-            running -> "Pausar jornada"
-            else -> "Continuar jornada"
+            running -> "Pausar jornada (segure 3 segundos para encerrar)"
+            else -> "Continuar jornada (segure 3 segundos para encerrar)"
         }
         tripButton.alpha = if (s != null) 1f else 0.4f
         val voiceOn = OverlayPrefs.isVoiceEnabled(context)
         voiceRound.setImageDrawable(NeonIcon(if (voiceOn) NeonIcon.Kind.VOICE_ON else NeonIcon.Kind.VOICE_OFF, NEON_PURPLE))
         voiceRound.contentDescription = if (voiceOn) "Voz ligada" else "Voz desligada"
+    }
+
+    // ------------------------------------------------------------------ ▶/⏸: toque = play/pausa, segurar 3 s = encerrar
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun installHoldToEnd() {
+        shiftButton.foreground = holdRing
+        shiftButton.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    holdDone = false
+                    holdLeft = false
+                    v.isPressed = true
+                    if (shift != null) startHold() // sem jornada não há o que encerrar
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val out = e.x < 0 || e.y < 0 || e.x > v.width || e.y > v.height
+                    if (out && !holdLeft) { holdLeft = true; v.isPressed = false; cancelHold() }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    v.isPressed = false
+                    cancelHold()
+                    if (!holdDone && !holdLeft) v.performClick() // toque simples: play/pausa
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> { v.isPressed = false; cancelHold(); true }
+                else -> false
+            }
+        }
+    }
+
+    /** Anel vermelho enche em volta do botão; completo = jornada encerrada. */
+    private fun startHold() {
+        cancelHold()
+        holdAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = HOLD_TO_END_MS
+            addUpdateListener { holdRing.progress = it.animatedValue as Float }
+            start()
+        }
+        shiftButton.postDelayed(endShiftRunnable, HOLD_TO_END_MS)
+    }
+
+    private fun cancelHold() {
+        shiftButton.removeCallbacks(endShiftRunnable)
+        stopHoldVisual()
+    }
+
+    private fun stopHoldVisual() {
+        holdAnim?.cancel()
+        holdAnim = null
+        holdRing.progress = 0f
     }
 
     // ------------------------------------------------------------------ painel
@@ -838,6 +907,7 @@ class QuickBubbleView(
         private const val LABEL_WIDTH_DP = 110
         private const val PANEL_WIDTH_DP = 290
         private const val CONFIRM_MS = 4_000L
+        private const val HOLD_TO_END_MS = 3_000L
         private const val ITEM_DP = 56
         private const val RADIUS_DP = 118
         private const val RADIAL_SIZE_DP = 2 * (RADIUS_DP + ITEM_DP / 2 + 6)
@@ -996,6 +1066,32 @@ private class NeonIcon(private val kind: Kind, color: Int) : Drawable() {
 
     override fun setAlpha(alpha: Int) { stroke.alpha = alpha; fill.alpha = alpha }
     override fun setColorFilter(colorFilter: ColorFilter?) { stroke.colorFilter = colorFilter; fill.colorFilter = colorFilter }
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+}
+
+/** Arco de progresso desenhado por cima do anel do botão (segurar para encerrar). */
+private class HoldRing(color: Int, private val width: Float) : Drawable() {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeWidth = width
+        this.color = color
+    }
+    private val oval = RectF()
+
+    var progress = 0f
+        set(value) { field = value.coerceIn(0f, 1f); invalidateSelf() }
+
+    override fun draw(canvas: Canvas) {
+        if (progress <= 0f) return
+        oval.set(bounds)
+        oval.inset(width / 2, width / 2)
+        canvas.drawArc(oval, -90f, 360f * progress, false, paint)
+    }
+
+    override fun setAlpha(alpha: Int) { paint.alpha = alpha }
+    override fun setColorFilter(colorFilter: ColorFilter?) { paint.colorFilter = colorFilter }
     @Deprecated("Deprecated in Java")
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
 }
