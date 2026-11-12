@@ -18,6 +18,9 @@ import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.RawOffer
 import br.com.mapp.reader.parser.OcrLayout
 import br.com.mapp.reader.parser.OfferParsers
+import br.com.mapp.reader.parser.TripScreens
+import br.com.mapp.reader.parser.TripStageTracker
+import br.com.mapp.core.model.TripStage
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
@@ -54,6 +57,9 @@ class OfferAccessibilityService : AccessibilityService() {
         },
         clear = { OfferBus.clear() },
     )
+
+    /** Corrida aceita/finalizada (main thread): só avisa na troca de etapa. */
+    private val stages = TripStageTracker()
 
     // ---- Texto: cache da última leitura (só no [worker]; textos iguais não são reprocessados).
     private var lastPlatform: Platform? = null
@@ -177,6 +183,7 @@ class OfferAccessibilityService : AccessibilityService() {
         ocr?.close()
         ocr = null
         tracker.reset()
+        stages.reset()
         ReaderStatus.setConnected(false)
         super.onDestroy()
     }
@@ -218,11 +225,25 @@ class OfferAccessibilityService : AccessibilityService() {
                 Log.d(TAG, "[${platform.label}] " + texts.joinToString(" | "))
             }
             val parsed = if (texts.isEmpty()) null else OfferParsers.forPlatform(platform).parse(texts)
+            if (parsed == null && texts.isNotEmpty()) {
+                val stage = TripScreens.detect(texts)
+                handler.post { onStage(stage) }
+            }
             ReaderStatus.onRead(ReaderStatus.SOURCE_TREE, platform.label, texts, parsed?.let(::summary))
             lastPlatform = platform
             lastTexts = texts
             lastParsed = parsed
             parsed
+        }
+    }
+
+    /** Main thread: tela de corrida aceita/finalizada vira evento para a jornada. */
+    private fun onStage(stage: TripStage?) {
+        safely {
+            stages.onScreen(stage, SystemClock.elapsedRealtime())?.let {
+                if (debugCapture) Log.d(TAG, "Etapa da corrida: $it")
+                OfferBus.publishTripStage(it)
+            }
         }
     }
 
@@ -339,6 +360,10 @@ class OfferAccessibilityService : AccessibilityService() {
                     val (texts, offer) = try {
                         val lines = OcrLayout.toTexts(result.lines, result.excluded)
                         val parsed = if (lines.isEmpty()) null else parser.parse(lines, fromOcr = true)
+                        if (parsed == null) {
+                            val stage = TripScreens.detect(lines)
+                            handler.post { onStage(stage) }
+                        }
                         ReaderStatus.onRead(
                             ReaderStatus.SOURCE_OCR + "/" + mode.label,
                             platform.label,

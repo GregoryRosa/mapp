@@ -24,6 +24,7 @@ import br.com.mapp.core.bus.OfferBus
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.RawOffer
+import br.com.mapp.core.model.TripStage
 import br.com.mapp.core.model.Zone
 import br.com.mapp.core.model.ZoneHit
 import br.com.mapp.core.model.ZoneType
@@ -73,6 +74,10 @@ class OverlayService : LifecycleService() {
     /** Tipo lido em algum quadro da oferta atual (o OCR às vezes não lê o "UberX"). */
     private var lastCategory: Pair<RawOffer, String>? = null
     private var countedKey: RawOffer? = null
+    /** Quando a [lastOffer] esteve no cartão pela última vez (para o aceite automático). */
+    private var lastOfferSeenAt = 0L
+    /** Houve aceite automático desde a última corrida finalizada? */
+    private var acceptedSinceFinish = false
     private val odometer = Odometer()
 
     override fun onCreate() {
@@ -105,6 +110,7 @@ class OverlayService : LifecycleService() {
             OfferBus.raw.collect { raw -> raw.category?.let { lastCategory = raw.key() to it } }
         }
         startShiftMonitor(loc)
+        lifecycleScope.launch { OfferBus.tripStages.collect { onTripStage(it) } }
 
         // Ícone flutuante com ajustes rápidos.
         if (Settings.canDrawOverlays(this)) {
@@ -262,7 +268,7 @@ class OverlayService : LifecycleService() {
     private fun categoryFor(raw: RawOffer): String? =
         raw.category ?: lastCategory?.takeIf { it.first == raw.key() }?.second
 
-    private fun countOffer(offer: EvaluatedOffer?) {
+    private fun countOffer(offer: EvaluatedOffer?, auto: Boolean = false) {
         if (ShiftTracker.current(this).value == null) { toast("Inicie a jornada (▶ no ícone M) para contar corridas"); return }
         val raw = offer?.raw ?: run { toast("Nenhuma oferta lida ainda"); return }
         val key = raw.key()
@@ -272,7 +278,34 @@ class OverlayService : LifecycleService() {
         countedKey = key
         refreshCountButton()
         pushShift()
-        toast("Corrida contada: ${offerLabel(raw).removeSuffix(" ✓ contada")}")
+        val label = offerLabel(raw).removeSuffix(" ✓ contada")
+        toast(if (auto) "Corrida aceita — contada: $label" else "Corrida contada: $label")
+    }
+
+    /**
+     * Jornada automática: "Encontro com…" na tela = a última oferta foi aceita → conta;
+     * "Como foi a viagem?" = corrida finalizada.
+     */
+    private fun onTripStage(stage: TripStage) {
+        if (ShiftTracker.current(this).value == null) return
+        when (stage) {
+            TripStage.ACCEPTED -> {
+                val offer = lastOffer ?: return
+                val fresh = System.currentTimeMillis() - lastOfferSeenAt <= ACCEPT_WINDOW_MS
+                if (!fresh || offer.raw.key() == countedKey) return // já contada (ex.: +1) ou oferta antiga
+                acceptedSinceFinish = true
+                countOffer(offer, auto = true)
+            }
+            TripStage.FINISHED -> {
+                val counted = acceptedSinceFinish || (countedKey != null && lastOffer?.raw?.key() == countedKey)
+                if (counted) {
+                    toast("Corrida finalizada ✓")
+                } else {
+                    toast("Corrida finalizada, mas não vi o aceite: toque +1 Contar última se for o caso")
+                }
+                acceptedSinceFinish = false
+            }
+        }
     }
 
     private fun refreshCountButton() {
@@ -338,6 +371,7 @@ class OverlayService : LifecycleService() {
         }
         // Endereço lido depois (quadro mais completo) não é oferta nova: nada de repetir a voz.
         val key = offer.raw.key()
+        lastOfferSeenAt = System.currentTimeMillis()
         if (lastOffer?.raw?.key() != key) {
             lastOffer = offer
             pushShift()
@@ -450,6 +484,8 @@ class OverlayService : LifecycleService() {
         private const val ACTION_STOP = "br.com.mapp.overlay.STOP"
         private const val SHIFT_TICK_MS = 30_000L
         private const val PIN_FIX_MS = 4_000L
+        /** Aceite automático só vale para oferta vista há até 90 s (a tela de oferta some ao aceitar). */
+        private const val ACCEPT_WINDOW_MS = 90_000L
 
         private val _running = MutableStateFlow(false)
         /** true enquanto o copiloto (serviço) está ativo — a tela inicial mostra o estado. */

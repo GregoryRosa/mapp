@@ -75,6 +75,14 @@ data class Zone(
 
 enum class Signal { GREEN, YELLOW, RED }
 
+/** Etapa da corrida reconhecida na tela do app de corrida (depois da oferta). */
+enum class TripStage {
+    /** Corrida aceita: indo buscar o passageiro (Uber: "Encontro com <nome>"). */
+    ACCEPTED,
+    /** Corrida encerrada (Uber: "Como foi a viagem?" / "Avaliar usuário"). */
+    FINISHED,
+}
+
 enum class PointRole { PICKUP, DROPOFF }
 
 data class ZoneHit(val zone: Zone, val role: PointRole)
