@@ -12,6 +12,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.ZoneId
+import java.time.ZonedDateTime
 
 class ShiftTest {
     private val eps = 1e-6
@@ -90,5 +92,17 @@ class ShiftTest {
         assertEquals(0.1, o.add(at(100.0, 15)), 1e-3)      // andou 100 m
         assertEquals(0.0, o.add(at(20_100.0, 20)), eps)    // 20 km em 5 s: salto
         assertEquals(0.2, o.add(at(20_300.0, 30)), 1e-3)   // segue da nova âncora
+    }
+
+    @Test fun jornada_do_dia() {
+        val zone = ZoneId.of("America/Sao_Paulo")
+        fun ms(day: Int, hour: Int) = ZonedDateTime.of(2026, 11, day, hour, 0, 0, 0, zone).toInstant().toEpochMilli()
+        val now = ms(12, 20)
+        val ontem = Shift(startedAt = ms(11, 23))
+        val hoje = Shift(startedAt = ms(12, 6))
+        assertEquals(ontem, ShiftMath.ofToday(ontem, hoje, now, zone))   // aberta vale mesmo se começou ontem
+        assertEquals(hoje, ShiftMath.ofToday(null, hoje, now, zone))     // encerrada hoje
+        assertNull(ShiftMath.ofToday(null, ontem, now, zone))            // encerrada ontem: nada
+        assertNull(ShiftMath.ofToday(null, null, now, zone))
     }
 }

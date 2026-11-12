@@ -114,6 +114,35 @@ class QuickBubbleView(
         title = "MApp – ícone"
     }
 
+    // ------------------------------------------------------------------ textos do dia (em volta do "M")
+
+    private var day: ShiftSummary? = null
+    private var labelsAttached = false
+    private val costLabel = dayLabel(MUTED)
+    private val profitLabel = dayLabel(MUTED)
+    private val kmLabel = dayLabel(MUTED)
+
+    /** Custo em cima do "M"; lucro e km embaixo. Pequeno, sem fundo, não recebe toques. */
+    private val labelsRoot = FrameLayout(context).apply {
+        addView(costLabel, labelParams(top = 0))
+        addView(profitLabel, labelParams(top = LABEL_LINE_DP + BUBBLE_DP))
+        addView(kmLabel, labelParams(top = LABEL_LINE_DP + BUBBLE_DP + LABEL_LINE_DP))
+        visibility = View.GONE
+    }
+
+    private val labelsParams = WindowManager.LayoutParams(
+        dp(LABEL_WIDTH_DP),
+        dp(LABEL_LINE_DP + BUBBLE_DP + 2 * LABEL_LINE_DP),
+        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        PixelFormat.TRANSLUCENT,
+    ).apply {
+        gravity = Gravity.TOP or Gravity.START
+        title = "MApp – resumo do dia"
+    }
+
     // ------------------------------------------------------------------ menu circular
 
     private var radialAttached = false
@@ -319,7 +348,22 @@ class QuickBubbleView(
             bubbleAttached = true
         } catch (e: Exception) {
             Log.w(TAG, "Não foi possível mostrar o ícone (permissão de sobreposição?)", e)
+            return
         }
+        placeLabels()
+        try {
+            windowManager.addView(labelsRoot, labelsParams)
+            labelsAttached = true
+        } catch (e: Exception) {
+            Log.w(TAG, "Não foi possível mostrar o resumo do dia", e)
+        }
+        bindDay()
+    }
+
+    /** Resumo do dia (jornada atual ou a encerrada hoje); null = esconde os textos. */
+    fun updateDay(sum: ShiftSummary?) {
+        day = sum
+        bindDay()
     }
 
     fun updateProfile(active: FilterProfile, count: Int) {
@@ -356,6 +400,10 @@ class QuickBubbleView(
     fun destroy() {
         closeRadial()
         closePanel()
+        if (labelsAttached) {
+            try { windowManager.removeViewImmediate(labelsRoot) } catch (e: Exception) { Log.w(TAG, "Falha ao remover resumo", e) }
+            labelsAttached = false
+        }
         if (bubbleAttached) {
             try { windowManager.removeViewImmediate(bubble) } catch (e: Exception) { Log.w(TAG, "Falha ao remover ícone", e) }
             bubbleAttached = false
@@ -662,6 +710,31 @@ class QuickBubbleView(
     private fun updateBubble() {
         if (!bubbleAttached) return
         try { windowManager.updateViewLayout(bubble, bubbleParams) } catch (e: Exception) { Log.w(TAG, "Falha ao mover ícone", e) }
+        placeLabels()
+        if (labelsAttached) {
+            try { windowManager.updateViewLayout(labelsRoot, labelsParams) } catch (e: Exception) { Log.w(TAG, "Falha ao mover resumo", e) }
+        }
+    }
+
+    // ------------------------------------------------------------------ resumo do dia
+
+    /** Textos alinhados pela borda da tela em que o "M" está (assim não saem da tela). */
+    private fun placeLabels() {
+        val onRight = bubbleParams.x + dp(BUBBLE_DP) / 2 > context.resources.displayMetrics.widthPixels / 2
+        labelsParams.x = if (onRight) bubbleParams.x + dp(BUBBLE_DP) - dp(LABEL_WIDTH_DP) else bubbleParams.x
+        labelsParams.y = bubbleParams.y - dp(LABEL_LINE_DP)
+        val g = (if (onRight) Gravity.END else Gravity.START) or Gravity.CENTER_VERTICAL
+        listOf(costLabel, profitLabel, kmLabel).forEach { it.gravity = g }
+    }
+
+    private fun bindDay() {
+        val d = day
+        labelsRoot.visibility = if (d == null) View.GONE else View.VISIBLE
+        if (d == null) return
+        costLabel.text = "custo ${ShiftMath.money(d.cost)}"
+        profitLabel.text = "lucro ${ShiftMath.money(d.profit)}"
+        profitLabel.setTextColor(if (d.profit >= 0) MUTED_GREEN else MUTED_RED)
+        kmLabel.text = ShiftMath.km(d.totalKm)
     }
 
     // ------------------------------------------------------------------ views
@@ -717,6 +790,20 @@ class QuickBubbleView(
             addView(button("+") { plus() })
         }
 
+    /** Texto miúdo (tamanho fixo em dp, para caber na janela mesmo com fonte grande) com sombra para ler no mapa. */
+    private fun dayLabel(color: Int) = TextView(context).apply {
+        setTextSize(TypedValue.COMPLEX_UNIT_DIP, 10f)
+        setTextColor(color)
+        maxLines = 1
+        includeFontPadding = false
+        setShadowLayer(3f * density, 0f, 0f, 0xE6000000.toInt())
+    }
+
+    private fun labelParams(top: Int) = FrameLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        dp(LABEL_LINE_DP),
+    ).apply { topMargin = dp(top) }
+
     /** Botão redondo: fundo preto, anel neon e ícone da mesma cor. */
     private fun roundButton(
         kind: NeonIcon.Kind,
@@ -747,6 +834,8 @@ class QuickBubbleView(
     companion object {
         private const val TAG = "MApp/Bubble"
         private const val BUBBLE_DP = 52
+        private const val LABEL_LINE_DP = 14
+        private const val LABEL_WIDTH_DP = 110
         private const val PANEL_WIDTH_DP = 290
         private const val CONFIRM_MS = 4_000L
         private const val ITEM_DP = 56
@@ -767,6 +856,9 @@ class QuickBubbleView(
         private val BLUE = 0xFF1565C0.toInt()
         private val BUTTON_BG = 0xFF3C4043.toInt()
         private val RING_BG = 0xF0000000.toInt()
+        private val MUTED = 0xB3FFFFFF.toInt()
+        private val MUTED_GREEN = 0xC0A5D6A7.toInt()
+        private val MUTED_RED = 0xC0EF9A9A.toInt()
         private val GRAY_LIGHT = 0xFF9E9E9E.toInt()
         private val NEON_GREEN = 0xFF00E64D.toInt()
         private val NEON_YELLOW = 0xFFFFD600.toInt()

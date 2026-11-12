@@ -4,6 +4,8 @@ import br.com.mapp.core.geo.Geo
 import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.RawOffer
+import java.time.Instant
+import java.time.ZoneId
 import java.util.Locale
 import kotlin.math.max
 
@@ -116,6 +118,16 @@ object ShiftMath {
             }
             .sortedWith(compareByDescending<CategoryShare> { it.count }.thenByDescending { it.revenue })
     }
+
+    /**
+     * Jornada "do dia" mostrada junto ao ícone "M": a atual (mesmo que tenha começado ontem) ou,
+     * sem jornada aberta, a última encerrada se ela começou hoje.
+     */
+    fun ofToday(current: Shift?, last: Shift?, now: Long, zone: ZoneId = ZoneId.systemDefault()): Shift? =
+        current ?: last?.takeIf { sameDay(it.startedAt, now, zone) }
+
+    fun sameDay(a: Long, b: Long, zone: ZoneId): Boolean =
+        Instant.ofEpochMilli(a).atZone(zone).toLocalDate() == Instant.ofEpochMilli(b).atZone(zone).toLocalDate()
 
     /** Linhas de texto do resumo (ícone "M" e tela inicial). */
     fun lines(s: ShiftSummary): List<String> = buildList {
