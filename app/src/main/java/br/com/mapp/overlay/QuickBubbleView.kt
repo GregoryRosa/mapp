@@ -2,8 +2,14 @@ package br.com.mapp.overlay
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Canvas
+import android.graphics.ColorFilter
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.util.Log
 import android.util.TypedValue
@@ -13,6 +19,8 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -23,11 +31,14 @@ import br.com.mapp.core.shift.ShiftSummary
 import br.com.mapp.reader.ReaderStatus
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.sin
 
 /**
  * Ícone flutuante do copiloto (fica por cima da Uber/99/inDrive enquanto o copiloto está ativo).
- * Toque = abre/fecha o painel de ajustes rápidos; arraste = muda de lugar.
+ * Toque = abre o menu circular (botões redondos com ícone em volta do "M"); arraste = muda de lugar.
+ * A engrenagem do menu abre o painel completo de ajustes rápidos.
  * Só mexe nas configurações do próprio MApp — nunca toca no app de corrida.
  */
 class QuickBubbleView(
@@ -73,16 +84,16 @@ class QuickBubbleView(
         contentDescription = "MApp – ajustes rápidos"
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
         typeface = Typeface.DEFAULT_BOLD
-        setTextColor(WHITE)
+        setTextColor(NEON_GREEN)
         gravity = Gravity.CENTER
         background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(GREEN)
-            setStroke(dp(2), WHITE)
+            setColor(RING_BG)
+            setStroke(dp(3), NEON_GREEN)
         }
         elevation = dp(6).toFloat()
         isClickable = true
-        setOnClickListener { togglePanel() }
+        setOnClickListener { onBubbleTap() }
     }
 
     private val bubbleParams = WindowManager.LayoutParams(
@@ -96,6 +107,55 @@ class QuickBubbleView(
         x = prefs.getInt(OverlayPrefs.KEY_BUBBLE_X, context.resources.displayMetrics.widthPixels - dp(BUBBLE_DP + 4))
         y = prefs.getInt(OverlayPrefs.KEY_BUBBLE_Y, (context.resources.displayMetrics.heightPixels * 0.45).toInt())
         title = "MApp – ícone"
+    }
+
+    // ------------------------------------------------------------------ menu circular
+
+    private var radialAttached = false
+    private val shiftButton = roundButton(NeonIcon.Kind.PLAY, NEON_YELLOW, "Jornada") { onShiftTap() }
+    private val tripButton = roundButton(NeonIcon.Kind.PLUS_ONE, NEON_CYAN, "Contar última oferta como corrida") {
+        actions.countLastOffer()
+    }
+    private val settingsButton = roundButton(NeonIcon.Kind.GEAR, NEON_GREEN, "Ajustes rápidos") {
+        closeRadial(); openPanel()
+    }
+    private val voiceRound = roundButton(NeonIcon.Kind.VOICE_ON, NEON_PURPLE, "Voz") {
+        actions.toggleVoice(); refreshVoice()
+    }
+    private val homeButton = roundButton(NeonIcon.Kind.HOME, NEON_BLUE, "Abrir MApp") {
+        closeRadial(); actions.openApp()
+    }
+    private val powerButton = roundButton(NeonIcon.Kind.POWER, NEON_RED, "Parar copiloto") {
+        closeRadial(); actions.stopCopilot()
+    }
+    /** Ordem de cima para baixo no arco. */
+    private val radialItems = listOf(settingsButton, shiftButton, tripButton, voiceRound, homeButton, powerButton)
+    private val closeButton = roundButton(NeonIcon.Kind.CLOSE, WHITE, "Fechar menu", sizeDp = BUBBLE_DP) { closeRadial() }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private val radialRoot = FrameLayout(context).apply {
+        radialItems.forEach { addView(it, FrameLayout.LayoutParams(dp(ITEM_DP), dp(ITEM_DP))) }
+        addView(closeButton, FrameLayout.LayoutParams(dp(BUBBLE_DP), dp(BUBBLE_DP)))
+        // Toque fora dos botões (ou fora da janela) fecha o menu.
+        setOnTouchListener { _, e ->
+            if (e.actionMasked == MotionEvent.ACTION_OUTSIDE || e.actionMasked == MotionEvent.ACTION_UP) {
+                closeRadial(); true
+            } else e.actionMasked == MotionEvent.ACTION_DOWN
+        }
+    }
+
+    private val radialParams = WindowManager.LayoutParams(
+        dp(RADIAL_SIZE_DP),
+        dp(RADIAL_SIZE_DP),
+        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        PixelFormat.TRANSLUCENT,
+    ).apply {
+        gravity = Gravity.TOP or Gravity.START
+        title = "MApp – menu"
     }
 
     // ------------------------------------------------------------------ painel
@@ -240,10 +300,12 @@ class QuickBubbleView(
         lastOfferLabel = lastOffer
         if (current == null) confirmEnd = false
         if (panelAttached) { bindShift(); relayoutPanel() }
+        bindRadial()
         if (wasActive != current?.let { !it.paused }) paintBubble()
     }
 
     fun destroy() {
+        closeRadial()
         closePanel()
         if (bubbleAttached) {
             try { windowManager.removeViewImmediate(bubble) } catch (e: Exception) { Log.w(TAG, "Falha ao remover ícone", e) }
@@ -251,9 +313,105 @@ class QuickBubbleView(
         }
     }
 
-    // ------------------------------------------------------------------ painel
+    // ------------------------------------------------------------------ menu circular
 
-    private fun togglePanel() = if (panelAttached) closePanel() else openPanel()
+    private fun onBubbleTap() = when {
+        panelAttached -> closePanel()
+        radialAttached -> closeRadial()
+        else -> openRadial()
+    }
+
+    private fun onShiftTap() {
+        val s = shift
+        if (s == null || s.paused) actions.startShift() else actions.pauseShift()
+    }
+
+    /**
+     * Abre os botões em meia-lua ao redor do "M", virados para o meio da tela.
+     * Perto do topo/rodapé o "M" desliza o necessário para o arco caber na tela.
+     */
+    private fun openRadial() {
+        if (radialAttached) return
+        refreshVoice()
+        bindRadial()
+        val dm = context.resources.displayMetrics
+        val size = dp(RADIAL_SIZE_DP)
+        val half = size / 2
+        val bubbleHalf = dp(BUBBLE_DP) / 2
+        val reach = dp(RADIUS_DP + ITEM_DP / 2 + 4)
+        val minY = reach - bubbleHalf
+        val maxY = dm.heightPixels - reach - bubbleHalf
+        if (minY <= maxY && bubbleParams.y !in minY..maxY) {
+            bubbleParams.y = bubbleParams.y.coerceIn(minY, maxY)
+            updateBubble()
+        }
+        val cx = bubbleParams.x + bubbleHalf
+        val cy = bubbleParams.y + bubbleHalf
+        radialParams.x = cx - half
+        radialParams.y = cy - half
+
+        val onRight = cx > dm.widthPixels / 2
+        val n = radialItems.size
+        val step = ARC_DEG / (n - 1)
+        val radius = dp(RADIUS_DP)
+        radialItems.forEachIndexed { i, v ->
+            // y cresce para baixo: 270° = cima, 90° = baixo, 180° = esquerda, 0° = direita.
+            val deg = if (onRight) 180.0 + ARC_DEG / 2 - i * step else -ARC_DEG / 2 + i * step
+            val rad = Math.toRadians(deg)
+            val lp = v.layoutParams as FrameLayout.LayoutParams
+            lp.leftMargin = half + (radius * cos(rad)).toInt() - dp(ITEM_DP) / 2
+            lp.topMargin = half + (radius * sin(rad)).toInt() - dp(ITEM_DP) / 2
+            v.layoutParams = lp
+        }
+        (closeButton.layoutParams as FrameLayout.LayoutParams).apply {
+            leftMargin = half - dp(BUBBLE_DP) / 2
+            topMargin = half - dp(BUBBLE_DP) / 2
+        }
+        try {
+            windowManager.addView(radialRoot, radialParams)
+            radialAttached = true
+            animateRadial()
+        } catch (e: Exception) {
+            Log.w(TAG, "Não foi possível abrir o menu", e)
+        }
+    }
+
+    /** Botões saem do centro para a posição final. */
+    private fun animateRadial() {
+        val half = dp(RADIAL_SIZE_DP) / 2f
+        radialItems.forEachIndexed { i, v ->
+            val lp = v.layoutParams as FrameLayout.LayoutParams
+            v.translationX = half - (lp.leftMargin + dp(ITEM_DP) / 2f)
+            v.translationY = half - (lp.topMargin + dp(ITEM_DP) / 2f)
+            val targetAlpha = v.alpha // "+1" fica apagado sem jornada
+            v.scaleX = 0.3f; v.scaleY = 0.3f; v.alpha = 0f
+            v.animate().translationX(0f).translationY(0f).scaleX(1f).scaleY(1f).alpha(targetAlpha)
+                .setStartDelay(i * 18L).setDuration(170L).start()
+        }
+    }
+
+    private fun closeRadial() {
+        if (!radialAttached) return
+        try { windowManager.removeViewImmediate(radialRoot) } catch (e: Exception) { Log.w(TAG, "Falha ao fechar menu", e) }
+        radialAttached = false
+    }
+
+    private fun bindRadial() {
+        val s = shift
+        val running = s != null && !s.paused
+        shiftButton.setImageDrawable(NeonIcon(if (running) NeonIcon.Kind.PAUSE else NeonIcon.Kind.PLAY, NEON_YELLOW))
+        shiftButton.contentDescription = when {
+            s == null -> "Iniciar jornada"
+            running -> "Pausar jornada"
+            else -> "Continuar jornada"
+        }
+        tripButton.alpha = if (s != null) 1f else 0.4f
+        val voiceOn = OverlayPrefs.isVoiceEnabled(context)
+        voiceRound.setImageDrawable(NeonIcon(if (voiceOn) NeonIcon.Kind.VOICE_ON else NeonIcon.Kind.VOICE_OFF, NEON_PURPLE))
+        voiceRound.contentDescription = if (voiceOn) "Voz ligada" else "Voz desligada"
+    }
+
+    // ------------------------------------------------------------------ painel
 
     private fun openPanel() {
         if (panelAttached) return
@@ -350,19 +508,22 @@ class QuickBubbleView(
         readerText.setTextColor(if (r.connected) SECONDARY else YELLOW)
     }
 
-    /** Verde = leitor ligado; cinza com "!" = Acessibilidade desligada. Anel âmbar = jornada rodando. */
+    /** Neon verde = leitor ligado; cinza com "!" = Acessibilidade desligada. Anel âmbar = jornada rodando. */
     private fun paintBubble() {
         val ok = reader.connected
         bubble.text = if (ok) "M" else "M!"
+        val color = if (ok) NEON_GREEN else GRAY_LIGHT
+        bubble.setTextColor(color)
         val running = shift?.paused == false
         (bubble.background as? GradientDrawable)?.apply {
-            setColor(if (ok) GREEN else GRAY)
-            setStroke(dp(if (running) 4 else 2), if (running) AMBER else WHITE)
+            setColor(RING_BG)
+            setStroke(dp(if (running) 4 else 3), if (running) AMBER else color)
         }
     }
 
     private fun refreshVoice() {
         voiceButton.text = if (OverlayPrefs.isVoiceEnabled(context)) "🔊 Voz ligada" else "🔇 Voz desligada"
+        if (radialAttached) bindRadial()
     }
 
     // ------------------------------------------------------------------ arrastar
@@ -386,7 +547,7 @@ class QuickBubbleView(
                 MotionEvent.ACTION_MOVE -> {
                     val dx = e.rawX - downX
                     val dy = e.rawY - downY
-                    if (!dragging && (abs(dx) > slop || abs(dy) > slop)) { dragging = true; closePanel() }
+                    if (!dragging && (abs(dx) > slop || abs(dy) > slop)) { dragging = true; closePanel(); closeRadial() }
                     if (dragging && bubbleAttached) {
                         bubbleParams.x = startX + dx.toInt()
                         bubbleParams.y = startY + dy.toInt()
@@ -480,6 +641,28 @@ class QuickBubbleView(
             addView(button("+") { plus() })
         }
 
+    /** Botão redondo: fundo preto, anel neon e ícone da mesma cor. */
+    private fun roundButton(
+        kind: NeonIcon.Kind,
+        color: Int,
+        description: String,
+        sizeDp: Int = ITEM_DP,
+        onClick: () -> Unit,
+    ) = ImageView(context).apply {
+        setImageDrawable(NeonIcon(kind, color))
+        contentDescription = description
+        val pad = sizeDp * 26 / 100
+        setPadding(dp(pad), dp(pad), dp(pad), dp(pad))
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(RING_BG)
+            setStroke(dp(3), color)
+        }
+        elevation = dp(6).toFloat()
+        isClickable = true
+        setOnClickListener { onClick() }
+    }
+
     private fun fullWidth(topMarginDp: Int) = LinearLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
         ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -490,19 +673,30 @@ class QuickBubbleView(
         private const val BUBBLE_DP = 52
         private const val PANEL_WIDTH_DP = 290
         private const val CONFIRM_MS = 4_000L
+        private const val ITEM_DP = 56
+        private const val RADIUS_DP = 108
+        private const val RADIAL_SIZE_DP = 2 * (RADIUS_DP + ITEM_DP / 2 + 6)
+        private const val ARC_DEG = 180.0
 
         private val PT_BR: Locale = Locale.forLanguageTag("pt-BR")
         private val WHITE = 0xFFFFFFFF.toInt()
         private val SECONDARY = 0xFFBDBDBD.toInt()
         private val GREEN = 0xFF2E7D32.toInt()
         private val RED = 0xFFC62828.toInt()
-        private val GRAY = 0xFF616161.toInt()
         private val YELLOW = 0xFFFFD54F.toInt()
         private val PANEL_BG = 0xF2202124.toInt()
         private val SECTION_BG = 0xFF2D2F33.toInt()
         private val AMBER = 0xFFFFB300.toInt()
         private val BLUE = 0xFF1565C0.toInt()
         private val BUTTON_BG = 0xFF3C4043.toInt()
+        private val RING_BG = 0xF0000000.toInt()
+        private val GRAY_LIGHT = 0xFF9E9E9E.toInt()
+        private val NEON_GREEN = 0xFF00E64D.toInt()
+        private val NEON_YELLOW = 0xFFFFD600.toInt()
+        private val NEON_CYAN = 0xFF00E5D4.toInt()
+        private val NEON_PURPLE = 0xFFB040FF.toInt()
+        private val NEON_BLUE = 0xFF2F8CFF.toInt()
+        private val NEON_RED = 0xFFFF1744.toInt()
 
         private fun money(v: Double): String = "R$ " + String.format(PT_BR, "%.2f", v)
 
@@ -513,4 +707,89 @@ class QuickBubbleView(
             return next.coerceAtLeast(min)
         }
     }
+}
+
+/** Ícones de traço (estilo neon) desenhados em grade 24×24 — sem arquivos de imagem. */
+private class NeonIcon(private val kind: Kind, color: Int) : Drawable() {
+    enum class Kind { PLAY, PAUSE, PLUS_ONE, GEAR, VOICE_ON, VOICE_OFF, HOME, POWER, CLOSE }
+
+    private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+        this.color = color
+    }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        this.color = color
+        typeface = Typeface.DEFAULT_BOLD
+        textAlign = Paint.Align.CENTER
+    }
+
+    override fun draw(canvas: Canvas) {
+        val b = bounds
+        val side = minOf(b.width(), b.height()).toFloat()
+        if (side <= 0f) return
+        val u = side / 24f
+        canvas.save()
+        canvas.translate(b.exactCenterX() - side / 2, b.exactCenterY() - side / 2)
+        canvas.scale(u, u)
+        stroke.strokeWidth = 2f
+        when (kind) {
+            Kind.PLAY -> canvas.drawPath(path(7.5f, 4.5f, 7.5f, 19.5f, 19.5f, 12f, close = true), stroke)
+            Kind.PAUSE -> { stroke.strokeWidth = 2.6f; canvas.drawLine(8.5f, 5f, 8.5f, 19f, stroke); canvas.drawLine(15.5f, 5f, 15.5f, 19f, stroke) }
+            Kind.PLUS_ONE -> {
+                canvas.drawLine(3f, 12f, 10f, 12f, stroke)
+                canvas.drawLine(6.5f, 8.5f, 6.5f, 15.5f, stroke)
+                fill.textSize = 15f
+                canvas.drawText("1", 16.5f, 17.5f, fill)
+            }
+            Kind.GEAR -> {
+                canvas.drawCircle(12f, 12f, 3f, stroke)
+                canvas.drawCircle(12f, 12f, 6.5f, stroke)
+                stroke.strokeWidth = 3f
+                for (i in 0 until 8) {
+                    val a = Math.toRadians(i * 45.0)
+                    val c = cos(a).toFloat(); val s = sin(a).toFloat()
+                    canvas.drawLine(12f + 7f * c, 12f + 7f * s, 12f + 9.5f * c, 12f + 9.5f * s, stroke)
+                }
+            }
+            Kind.VOICE_ON, Kind.VOICE_OFF -> {
+                canvas.drawPath(path(3f, 9.5f, 7f, 9.5f, 12f, 5f, 12f, 19f, 7f, 14.5f, 3f, 14.5f, close = true), stroke)
+                if (kind == Kind.VOICE_ON) {
+                    canvas.drawArc(RectF(11f, 8.5f, 18f, 15.5f), -50f, 100f, false, stroke)
+                    canvas.drawArc(RectF(10f, 5f, 22f, 19f), -50f, 100f, false, stroke)
+                } else {
+                    canvas.drawLine(15.5f, 9.5f, 20.5f, 14.5f, stroke)
+                    canvas.drawLine(20.5f, 9.5f, 15.5f, 14.5f, stroke)
+                }
+            }
+            Kind.HOME -> {
+                canvas.drawPath(path(3f, 11.5f, 12f, 4f, 21f, 11.5f), stroke)
+                canvas.drawPath(path(5.5f, 10f, 5.5f, 20f, 18.5f, 20f, 18.5f, 10f), stroke)
+                canvas.drawPath(path(10f, 20f, 10f, 14.5f, 14f, 14.5f, 14f, 20f), stroke)
+            }
+            Kind.POWER -> {
+                canvas.drawArc(RectF(4.5f, 5f, 19.5f, 20f), -55f, 290f, false, stroke)
+                canvas.drawLine(12f, 3f, 12f, 11.5f, stroke)
+            }
+            Kind.CLOSE -> {
+                canvas.drawLine(6f, 6f, 18f, 18f, stroke)
+                canvas.drawLine(18f, 6f, 6f, 18f, stroke)
+            }
+        }
+        canvas.restore()
+    }
+
+    private fun path(vararg p: Float, close: Boolean = false) = Path().apply {
+        moveTo(p[0], p[1])
+        var i = 2
+        while (i + 1 < p.size) { lineTo(p[i], p[i + 1]); i += 2 }
+        if (close) close()
+    }
+
+    override fun setAlpha(alpha: Int) { stroke.alpha = alpha; fill.alpha = alpha }
+    override fun setColorFilter(colorFilter: ColorFilter?) { stroke.colorFilter = colorFilter; fill.colorFilter = colorFilter }
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
 }
