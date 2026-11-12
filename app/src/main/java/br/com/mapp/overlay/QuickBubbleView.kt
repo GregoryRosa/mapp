@@ -15,9 +15,6 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.widget.Toast
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.reader.ReaderStatus
 import java.util.Locale
@@ -107,7 +104,6 @@ class QuickBubbleView(
 
         addView(text(12f, color = SECONDARY).apply { text = "MApp ${ReaderStatus.versionOf(context)} · AJUSTES RÁPIDOS" })
         addView(readerText, fullWidth(4))
-        addView(button("📋 Copiar diagnóstico") { copyReading() }, fullWidth(4))
         addView(row(
             button("‹") { actions.previousProfile() },
             profileName,
@@ -235,12 +231,6 @@ class QuickBubbleView(
         // O painel só existe com o copiloto ligado.
         readerText.text = ReaderStatus.lines(r, copilotRunning = true).joinToString("\n")
         readerText.setTextColor(if (r.connected) SECONDARY else YELLOW)
-    }
-
-    private fun copyReading() {
-        val cm = context.getSystemService(ClipboardManager::class.java)
-        cm?.setPrimaryClip(ClipData.newPlainText("MApp diagnóstico", ReaderStatus.report(context)))
-        Toast.makeText(context, "Diagnóstico copiado. Cole no chat do Claude.", Toast.LENGTH_LONG).show()
     }
 
     /** Verde = leitor ligado; cinza com "!" = Acessibilidade desligada. */

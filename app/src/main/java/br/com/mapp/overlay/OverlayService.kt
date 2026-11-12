@@ -197,7 +197,7 @@ class OverlayService : LifecycleService() {
             return
         }
         val c = card ?: createCard() ?: return
-        c.show(offer, location?.lastKnown, zones)
+        c.show(offer, activeProfile, location?.lastKnown, zones)
     }
 
     private fun createCard(): OfferCardView? {

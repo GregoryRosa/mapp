@@ -27,6 +27,7 @@ object Routes {
     const val PROFILES = "profiles"
     const val VEHICLE = "vehicle"
     const val ZONES = "zones"
+    const val CARD_STYLE = "card_style"
 }
 
 class MainActivity : ComponentActivity() {
@@ -56,5 +57,6 @@ private fun MappNavHost() {
         composable(Routes.PROFILES) { ProfilesScreen(onBack = back) }
         composable(Routes.VEHICLE) { VehicleScreen(onBack = back) }
         composable(Routes.ZONES) { ZoneEditorScreen(onBack = back) }
+        composable(Routes.CARD_STYLE) { CardStyleScreen(onBack = back) }
     }
 }
