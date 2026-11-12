@@ -65,6 +65,11 @@ class ReportMathTest {
         assertEquals(50.0, s.avgPerHour!!, 1e-9)
         assertEquals(2, ReportMath.accepted(list).size)
 
+        val rides = ReportMath.ridesAsIncome(list)
+        assertEquals(2, rides.size)
+        assertEquals(50.0, ReportMath.summarize(rides).income, 1e-9)
+        assertEquals(20.0, ReportMath.summarize(rides).km, 1e-9)
+
         val none = ReportMath.summarizeAccepted(list.filter { it.accepted != true })
         assertEquals(0, none.count)
         assertNull(none.profit)

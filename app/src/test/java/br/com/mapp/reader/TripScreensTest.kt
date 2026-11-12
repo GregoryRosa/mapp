@@ -40,6 +40,16 @@ class TripScreensTest {
         assertNull(UberParser.parse(indoBuscar, fromOcr = true))
     }
 
+    @Test fun mesma_etapa_depois_de_um_tempo_sem_leitura_e_corrida_nova() {
+        // Corrida 1 aceita; durante a viagem o Waze fica na frente (nenhuma leitura do app de corrida);
+        // a tela de avaliação não foi vista. Próximo "Encontro com…" tem de avisar de novo.
+        val t = TripStageTracker(holdMs = 20_000)
+        assertEquals(TripStage.ACCEPTED, t.onScreen(TripStage.ACCEPTED, 0))
+        assertNull(t.onScreen(TripStage.ACCEPTED, 10_000))
+        assertEquals(TripStage.ACCEPTED, t.onScreen(TripStage.ACCEPTED, 30 * 60_000L))
+        assertNull(t.onScreen(TripStage.ACCEPTED, 30 * 60_000L + 1_000))
+    }
+
     @Test fun avisa_so_na_troca_de_etapa() {
         val t = TripStageTracker(holdMs = 20_000)
         assertEquals(TripStage.ACCEPTED, t.onScreen(TripStage.ACCEPTED, 0))

@@ -196,6 +196,25 @@ object ReportMath {
     /** Só as ofertas marcadas como aceitas. */
     fun accepted(offers: List<OfferRecord>): List<OfferRecord> = offers.filter { it.accepted == true }
 
+    const val RIDE_CATEGORY = "Corridas aceitas"
+
+    /**
+     * Corridas aceitas viram ganhos nos relatórios: valor da oferta, km (busca + viagem) e horário da
+     * oferta. Ids negativos (-id da oferta) para não colidir com lançamentos.
+     */
+    fun ridesAsIncome(offers: List<OfferRecord>): List<FinanceEntry> = accepted(offers).map { r ->
+        val raw = r.evaluated.raw
+        FinanceEntry(
+            id = -r.id,
+            kind = EntryKind.INCOME,
+            category = RIDE_CATEGORY,
+            amount = raw.price,
+            platform = raw.platform,
+            km = r.evaluated.metrics.totalKm,
+            atMillis = raw.capturedAt,
+        )
+    }
+
     /** Resumo das corridas aceitas (ignora as não aceitas da lista). */
     fun summarizeAccepted(offers: List<OfferRecord>): AcceptedSummary {
         val list = accepted(offers)

@@ -30,7 +30,8 @@ object TripScreens {
 /**
  * Transforma leituras da tela (texto e imagem, várias por segundo) em eventos únicos: avisa só
  * quando a etapa muda. Um quadro mal lido no meio não gera aviso repetido: a etapa só é
- * "esquecida" depois de [holdMs] sem aparecer.
+ * "esquecida" depois de [holdMs] sem aparecer. Isso vale também sem leituras no meio (Waze na
+ * frente, tela apagada): a mesma etapa vista de novo depois de [holdMs] é uma corrida nova.
  */
 class TripStageTracker(private val holdMs: Long = 20_000L) {
     private var current: TripStage? = null
@@ -42,8 +43,9 @@ class TripStageTracker(private val holdMs: Long = 20_000L) {
             if (current != null && now - lastSeenAt > holdMs) current = null
             return null
         }
+        val gone = now - lastSeenAt > holdMs
         lastSeenAt = now
-        if (stage == current) return null
+        if (stage == current && !gone) return null
         current = stage
         return stage
     }

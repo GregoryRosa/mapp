@@ -55,9 +55,12 @@ fun ReportsScreen(onBack: () -> Unit) {
     val offers by remember(period) { repos.offers.between(period.from, period.to) }
         .collectAsStateWithLifecycle(initialValue = emptyList())
 
-    val summary = remember(entries) { ReportMath.summarize(entries) }
-    val byWeekday = remember(entries) { ReportMath.incomeByWeekday(entries) }
-    val byHour = remember(entries) { ReportMath.incomeByHour(entries, bucketHours = HOUR_BAND) }
+    // Ganhos = lançamentos + corridas marcadas como aceitas no histórico de ofertas.
+    val all = remember(entries, offers) { entries + ReportMath.ridesAsIncome(offers) }
+    val summary = remember(all) { ReportMath.summarize(all) }
+    val byWeekday = remember(all) { ReportMath.incomeByWeekday(all) }
+    val byHour = remember(all) { ReportMath.incomeByHour(all, bucketHours = HOUR_BAND) }
+    val accepted = remember(offers) { ReportMath.summarizeAccepted(offers) }
     val offerSummary = remember(offers) { ReportMath.summarizeOffers(offers) }
     val bestHours = remember(offers) { ReportMath.bestHours(offers, top = 5) }
 
@@ -80,6 +83,10 @@ fun ReportsScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
             )
 
+            Text(
+                "Ganhos incluem ${accepted.count} corridas aceitas (${Format.brl(accepted.total)}) + lançamentos.",
+                style = MaterialTheme.typography.bodySmall,
+            )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatCard("Ganhos", Format.brl(summary.income), Modifier.weight(1f))
                 StatCard("Gastos", Format.brl(summary.expense), Modifier.weight(1f))

@@ -7,6 +7,7 @@ import br.com.mapp.core.model.RawOffer
 import java.time.Instant
 import java.time.ZoneId
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.max
 
 /*
@@ -61,6 +62,31 @@ data class Shift(
     fun addTrip(trip: ShiftTrip): Shift = copy(trips = trips + trip)
 
     fun undoLastTrip(): Shift = copy(trips = trips.dropLast(1))
+
+    /**
+     * Posição da corrida desta oferta na jornada: mesma plataforma e valor, contada perto do horário
+     * em que a oferta apareceu ([offerAt]). -1 = não está.
+     */
+    fun tripIndexFor(platform: Platform, price: Double, offerAt: Long): Int = trips.indexOfFirst {
+        it.platform == platform && abs(it.price - price) < 0.005 &&
+            it.atMillis in (offerAt - MATCH_BEFORE_MS)..(offerAt + MATCH_AFTER_MS)
+    }
+
+    /** Marcação manual no histórico: coloca a corrida (se ainda não está) ou tira. */
+    fun withTrip(trip: ShiftTrip, offerAt: Long, present: Boolean): Shift {
+        val i = tripIndexFor(trip.platform, trip.price, offerAt)
+        return when {
+            present && i < 0 -> copy(trips = (trips + trip).sortedBy { it.atMillis })
+            !present && i >= 0 -> copy(trips = trips.filterIndexed { j, _ -> j != i })
+            else -> this
+        }
+    }
+
+    companion object {
+        /** Corrida contada até 1 min antes / 20 min depois da oferta é a mesma corrida. */
+        const val MATCH_BEFORE_MS = 60_000L
+        const val MATCH_AFTER_MS = 20 * 60_000L
+    }
 }
 
 data class CategoryShare(val label: String, val count: Int, val percent: Double, val revenue: Double)
@@ -156,6 +182,13 @@ object ShiftMath {
      * Jornada "do dia" mostrada junto ao ícone "M": a atual (mesmo que tenha começado ontem) ou,
      * sem jornada aberta, a última encerrada se ela começou hoje.
      */
+    /**
+     * Jornada em que uma oferta de [at] aconteceu: a atual (se começou antes) ou a encerrada mais
+     * recente que começou antes dela ([history] da mais nova para a mais antiga). null = nenhuma.
+     */
+    fun ownerOf(at: Long, current: Shift?, history: List<Shift>): Shift? =
+        current?.takeIf { at >= it.startedAt } ?: history.firstOrNull { at >= it.startedAt }
+
     fun ofToday(current: Shift?, last: Shift?, now: Long, zone: ZoneId = ZoneId.systemDefault()): Shift? =
         current ?: last?.takeIf { sameDay(it.startedAt, now, zone) }
 

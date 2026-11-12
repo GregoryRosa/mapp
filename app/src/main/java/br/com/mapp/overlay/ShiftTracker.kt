@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftCodec
+import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.core.shift.ShiftTrip
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -76,6 +77,31 @@ object ShiftTracker {
     fun addTrip(ctx: Context, trip: ShiftTrip) = update(ctx) { it?.addTrip(trip) }
 
     fun undoLastTrip(ctx: Context) = update(ctx) { it?.undoLastTrip() }
+
+    /**
+     * Marcação manual no histórico de ofertas: coloca/tira a corrida na jornada em que a oferta
+     * apareceu (a atual ou uma encerrada). Devolve false se nenhuma jornada cobre esse horário.
+     */
+    @Synchronized
+    fun setTrip(ctx: Context, trip: ShiftTrip, offerAt: Long, present: Boolean): Boolean {
+        load(ctx)
+        val owner = ShiftMath.ownerOf(offerAt, _current.value, _history.value) ?: return false
+        val changed = owner.withTrip(trip, offerAt, present)
+        if (changed == owner) return true
+        if (owner === _current.value) {
+            update(ctx) { changed }
+            return true
+        }
+        val list = _history.value.map { if (it === owner) changed else it }
+        _history.value = list
+        val edit = prefs?.edit()?.putString(KEY_HISTORY, ShiftCodec.encodeList(list))
+        if (_last.value?.startedAt == owner.startedAt) {
+            _last.value = changed
+            edit?.putString(KEY_LAST, ShiftCodec.encode(changed))
+        }
+        edit?.apply()
+        return true
+    }
 
     @Synchronized
     private fun update(ctx: Context, change: (Shift?) -> Shift?) {
