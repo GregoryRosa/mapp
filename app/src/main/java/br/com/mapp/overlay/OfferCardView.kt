@@ -24,6 +24,8 @@ import br.com.mapp.core.model.Signal
 import br.com.mapp.core.model.Zone
 import br.com.mapp.core.model.ZoneType
 import br.com.mapp.maps.MapViews
+import br.com.mapp.maps.toOsm
+import org.osmdroid.views.overlay.Marker
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -47,6 +49,8 @@ class OfferCardView(
     private var offer: EvaluatedOffer? = null
     private var current: GeoPoint? = null
     private var zones: List<Zone> = emptyList()
+    private var mapKey: Any? = null
+    private var hereMarker: Marker? = null
 
     // ---- Cabeçalho (faixa do semáforo) ----
     private val signalText = text(12f, bold = true)
@@ -82,7 +86,7 @@ class OfferCardView(
     }
     private val reasonsBox = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val mapNote = text(11f, color = SECONDARY).apply {
-        text = "Coleta/destino não localizados no mapa"
+        text = "Coleta/destino ainda não localizados no mapa"
     }
     private val mapView = MapViews.create(context, interactive = false).apply {
         // O cartão entra e sai da janela várias vezes; o mapa só é destruído em destroy().
@@ -161,7 +165,15 @@ class OfferCardView(
     fun updateCurrentPosition(point: GeoPoint?) {
         if (point == null || point == current) return
         current = point
-        if (attached && !minimized) renderMap()
+        if (!attached || minimized) return
+        val marker = hereMarker
+        if (marker != null) {
+            // GPS a cada segundo: só move o ponto azul, sem redesenhar zonas nem reenquadrar.
+            marker.position = point.toOsm()
+            mapView.invalidate()
+        } else {
+            renderMap()
+        }
     }
 
     fun updateZones(zones: List<Zone>) {
@@ -253,10 +265,16 @@ class OfferCardView(
         val o = offer ?: return
         val hasPoints = o.pickup != null || o.dropoff != null || current != null
         mapView.visibility = if (hasPoints) View.VISIBLE else View.GONE
+        // O semáforo aparece antes da geocodificação; os pontos chegam logo depois (ou nunca, sem rede).
         val missing = (!o.raw.pickupAddress.isNullOrBlank() && o.pickup == null) ||
             (!o.raw.dropoffAddress.isNullOrBlank() && o.dropoff == null)
         mapNote.visibility = if (missing) View.VISIBLE else View.GONE
-        if (hasPoints) MapViews.renderOffer(mapView, zones, current, o.pickup, o.dropoff)
+        if (!hasPoints) return
+        // Mesmos pontos e zonas: o mapa já está certo (redesenhar recarrega tiles e trava o cartão).
+        val key = Triple(o.pickup, o.dropoff, zones)
+        if (key == mapKey && (hereMarker != null) == (current != null)) return
+        mapKey = key
+        hereMarker = MapViews.renderOffer(mapView, zones, current, o.pickup, o.dropoff)
     }
 
     private fun toggleMinimized() {

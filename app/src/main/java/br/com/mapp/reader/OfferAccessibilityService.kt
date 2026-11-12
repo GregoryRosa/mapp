@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
@@ -18,6 +19,7 @@ import br.com.mapp.core.model.RawOffer
 import br.com.mapp.reader.parser.OcrLayout
 import br.com.mapp.reader.parser.OfferParsers
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Lê (SOMENTE LÊ) a tela dos apps de corrida e publica as ofertas no [OfferBus].
@@ -29,7 +31,10 @@ import java.util.Locale
  * O [OfferTracker] junta as duas e decide o que está na tela.
  *
  * Proibido: performAction, dispatchGesture ou qualquer outra interação com a tela.
- * Os callbacks rodam na main thread; o [handler] também, então não há concorrência no estado.
+ *
+ * Threads: o estado do [tracker] vive na main thread ([handler]). O trabalho pesado — percorrer a
+ * árvore de Acessibilidade (chamadas ao processo do app de corrida) e interpretar o texto do OCR —
+ * roda na thread [worker]. A main thread é a mesma do cartão flutuante: travá-la trava o semáforo.
  */
 class OfferAccessibilityService : AccessibilityService() {
 
@@ -38,6 +43,8 @@ class OfferAccessibilityService : AccessibilityService() {
     private class Scene(val target: Target?, val ownWindows: List<Rect>, val summary: List<String>)
 
     private val handler = Handler(Looper.getMainLooper())
+    private var workerThread: HandlerThread? = null
+    private var worker: Handler? = null
 
     private val tracker = OfferTracker(
         windowSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE,
@@ -48,10 +55,17 @@ class OfferAccessibilityService : AccessibilityService() {
         clear = { OfferBus.clear() },
     )
 
-    // ---- Texto: cache da última leitura (textos iguais não são reprocessados).
+    // ---- Texto: cache da última leitura (só no [worker]; textos iguais não são reprocessados).
     private var lastPlatform: Platform? = null
     private var lastTexts: List<String>? = null
     private var lastParsed: RawOffer? = null
+
+    // ---- Texto: agendamento (main thread). Eventos em rajada viram uma leitura a cada TREE_MIN_INTERVAL_MS.
+    private var scanPlatform: Platform? = null
+    private var scanQueued = false
+    private var scanRunning = false
+    private var scanAgain = false
+    private var lastScanAt = 0L
 
     // ---- Imagem (OCR).
     private var ocr: ScreenOcr? = null
@@ -59,11 +73,39 @@ class OfferAccessibilityService : AccessibilityService() {
     private var ocrStartedAt = 0L
     private var ocrDueAt = 0L
     private var lastCycleAt = 0L
-    private val windowPackages = HashMap<Int, String>()
+    /** Pacote de cada janela (usado nas duas threads). */
+    private val windowPackages = ConcurrentHashMap<Int, String>()
 
     /** Relê o texto: limpa a oferta se ela sumiu sem gerar evento. */
     private val recheck = Runnable {
-        safely { lastPlatform?.takeIf { tracker.source == OfferTracker.Source.TREE }?.let { scanTree(it) } }
+        scanPlatform?.takeIf { tracker.source == OfferTracker.Source.TREE }?.let { requestScan(it, urgent = true) }
+    }
+
+    /** Lê a árvore no [worker] e devolve o resultado ao [tracker] na main thread. */
+    private val runScan = Runnable {
+        scanQueued = false
+        val platform = scanPlatform ?: return@Runnable
+        val bg = worker ?: return@Runnable
+        scanRunning = true
+        lastScanAt = SystemClock.elapsedRealtime()
+        bg.post {
+            var ok = true
+            val offer = try {
+                readTree(platform)
+            } catch (e: Exception) {
+                ok = false
+                Log.w(TAG, "Falha ao ler a tela", e)
+                null
+            }
+            handler.post {
+                scanRunning = false
+                if (ok) safely { onTreeResult(offer) }
+                if (scanAgain) {
+                    scanAgain = false
+                    requestScan(platform, urgent = false)
+                }
+            }
+        }
     }
 
     /** Laço da leitura por imagem: uma falha num ciclo não pode parar os próximos. */
@@ -75,6 +117,13 @@ class OfferAccessibilityService : AccessibilityService() {
             Log.w(TAG, "Falha na leitura por imagem", e)
         }
         if (ocr != null) scheduleTick(next)
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        val thread = HandlerThread("MAppReader").also { it.start() }
+        workerThread = thread
+        worker = Handler(thread.looper)
     }
 
     override fun onServiceConnected() {
@@ -107,10 +156,13 @@ class OfferAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val platform = Platform.fromPackage(event?.packageName?.toString()) ?: return
+        // Troca de tela (oferta chegando/saindo) é urgente; mudança de conteúdo vem em rajada
+        // (contagem regressiva, animações) e é agrupada.
+        val screenChanged = event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         safely {
-            scanTree(platform)
+            requestScan(platform, urgent = screenChanged)
             // Algo mudou no app de corrida: adianta a próxima leitura por imagem.
-            requestOcrSoon()
+            requestOcrSoon(screenChanged)
         }
     }
 
@@ -118,6 +170,10 @@ class OfferAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        worker?.removeCallbacksAndMessages(null)
+        workerThread?.quitSafely()
+        worker = null
+        workerThread = null
         ocr?.close()
         ocr = null
         tracker.reset()
@@ -127,10 +183,34 @@ class OfferAccessibilityService : AccessibilityService() {
 
     // ------------------------------------------------------------------ fonte 1: texto
 
-    private fun scanTree(platform: Platform) {
+    /** Pede uma leitura do texto. [urgent] = já; senão respeita o intervalo mínimo entre leituras. */
+    private fun requestScan(platform: Platform, urgent: Boolean) {
+        scanPlatform = platform
+        if (scanRunning) {
+            scanAgain = true
+            return
+        }
+        if (scanQueued) {
+            if (!urgent) return
+            handler.removeCallbacks(runScan)
+        }
+        val wait = if (urgent) 0L else (lastScanAt + TREE_MIN_INTERVAL_MS - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+        scanQueued = true
+        handler.postDelayed(runScan, wait)
+    }
+
+    /** Main thread: entrega a leitura ao [tracker] e agenda a reconferência. */
+    private fun onTreeResult(offer: RawOffer?) {
+        handler.removeCallbacks(recheck)
+        val recheckIn = tracker.onTree(offer, SystemClock.elapsedRealtime())
+        if (recheckIn != null) handler.postDelayed(recheck, recheckIn.coerceAtLeast(50L))
+    }
+
+    /** Roda no [worker]: percorre a árvore e interpreta. */
+    private fun readTree(platform: Platform): RawOffer? {
         val texts = collectTexts(platform.packageName)
 
-        val offer = if (platform == lastPlatform && texts == lastTexts) {
+        return if (platform == lastPlatform && texts == lastTexts) {
             lastParsed
         } else {
             if (debugCapture && texts.isNotEmpty()) {
@@ -144,10 +224,6 @@ class OfferAccessibilityService : AccessibilityService() {
             lastParsed = parsed
             parsed
         }
-
-        handler.removeCallbacks(recheck)
-        val recheckIn = tracker.onTree(offer, SystemClock.elapsedRealtime())
-        if (recheckIn != null) handler.postDelayed(recheck, recheckIn.coerceAtLeast(50L))
     }
 
     private fun summary(o: RawOffer): String = buildString {
@@ -170,8 +246,11 @@ class OfferAccessibilityService : AccessibilityService() {
     }
 
     /** Evento do app de corrida: se a próxima leitura por imagem está longe, traz para perto. */
-    private fun requestOcrSoon() {
+    private fun requestOcrSoon(screenChanged: Boolean) {
         if (ocr == null || ocrBusy || !OfferBus.hasListeners) return
+        // Com a oferta já no cartão, a animação da contagem não deve disparar OCR sem parar;
+        // só troca de tela (oferta aceita/recusada/sumiu) adianta a conferência.
+        if (tracker.shown != null && !screenChanged) return
         val now = SystemClock.elapsedRealtime()
         val due = maxOf(now + OCR_AFTER_EVENT_MS, lastCycleAt + OCR_MIN_INTERVAL_MS)
         if (due + 50L < ocrDueAt) scheduleTick(due - now)
@@ -218,6 +297,7 @@ class OfferAccessibilityService : AccessibilityService() {
         captureNext(engine, scene, target, modes, 0)
         return when {
             backupOnly && tracker.shown == null -> OCR_BACKUP_POLL_MS
+            tracker.shownByImage -> OCR_SHOWN_POLL_MS
             modes.size > 1 -> OCR_POLL_TWO_MODES_MS
             else -> OCR_POLL_MS
         }
@@ -252,19 +332,33 @@ class OfferAccessibilityService : AccessibilityService() {
                 tracker.onImageError(mode)
             }
             is ScreenOcr.Result.Ok -> {
-                val texts = OcrLayout.toTexts(result.lines, result.excluded)
-                val parser = OfferParsers.forPlatform(platform)
-                val offer = if (texts.isEmpty()) null else parser.parse(texts, fromOcr = true)
-                ReaderStatus.onRead(
-                    ReaderStatus.SOURCE_OCR + "/" + mode.label,
-                    platform.label,
-                    texts,
-                    offer?.let(::summary),
-                    result.millis,
-                )
-                tracker.onImage(mode, offer, SystemClock.elapsedRealtime()) { shown ->
-                    // Preço coberto por outra janela, mas os trechos da oferta continuam na tela?
-                    parser.stillShows(texts, shown)
+                val bg = worker ?: return
+                bg.post {
+                    // Interpretação fora da main thread (é a mesma do cartão flutuante).
+                    val parser = OfferParsers.forPlatform(platform)
+                    val (texts, offer) = try {
+                        val lines = OcrLayout.toTexts(result.lines, result.excluded)
+                        val parsed = if (lines.isEmpty()) null else parser.parse(lines, fromOcr = true)
+                        ReaderStatus.onRead(
+                            ReaderStatus.SOURCE_OCR + "/" + mode.label,
+                            platform.label,
+                            lines,
+                            parsed?.let(::summary),
+                            result.millis,
+                        )
+                        lines to parsed
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Falha ao interpretar a imagem", e)
+                        return@post
+                    }
+                    handler.post {
+                        safely {
+                            tracker.onImage(mode, offer, SystemClock.elapsedRealtime()) { shown ->
+                                // Preço coberto por outra janela, mas os trechos da oferta continuam na tela?
+                                parser.stillShows(texts, shown)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -359,9 +453,14 @@ class OfferAccessibilityService : AccessibilityService() {
             emptyList()
         }
         for (window in windows) {
+            // Janela de outro app já conhecida: nem abre (cada abertura é uma chamada entre processos).
+            val known = windowPackages[window.id]
+            if (window.id in seenWindows || (known != null && known != packageName)) continue
             val root = window.root ?: continue
             try {
-                if (root.windowId !in seenWindows && root.packageName?.toString() == packageName) {
+                val pkg = root.packageName?.toString()
+                if (pkg != null) windowPackages[window.id] = pkg
+                if (root.windowId !in seenWindows && pkg == packageName) {
                     seenWindows += root.windowId
                     collect(root, out, 0, budget)
                 }
@@ -424,6 +523,12 @@ class OfferAccessibilityService : AccessibilityService() {
 
         /** Enquanto testa os dois modos de captura (duas leituras por ciclo), dá mais folga ao aparelho. */
         private const val OCR_POLL_TWO_MODES_MS = 1_800L
+
+        /** Oferta já no cartão: a imagem só confere se ela continua lá (menos CPU disputando com a Uber). */
+        private const val OCR_SHOWN_POLL_MS = 1_500L
+
+        /** Texto: intervalo mínimo entre leituras da árvore durante rajadas de eventos. */
+        private const val TREE_MIN_INTERVAL_MS = 350L
 
         /** Quando o texto já funciona para o app, a imagem só confere de vez em quando. */
         private const val OCR_BACKUP_POLL_MS = 4_000L
