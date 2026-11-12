@@ -17,6 +17,16 @@ android {
         versionName = "0.1.0"
     }
 
+    // Chave fixa: todo APK do CI sai com a mesma assinatura e instala por cima da versão anterior.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("mapp-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
