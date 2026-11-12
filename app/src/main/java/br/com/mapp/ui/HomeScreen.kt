@@ -32,6 +32,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -42,7 +43,13 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import br.com.mapp.MappApp
+import br.com.mapp.core.model.VehicleCostConfig
+import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.overlay.OverlayService
+import br.com.mapp.overlay.ShiftTracker
+import kotlinx.coroutines.delay
 import br.com.mapp.reader.OfferAccessibilityService
 import br.com.mapp.reader.ReaderStatus
 
@@ -158,6 +165,8 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                 }
             }
 
+            ShiftCard(running)
+
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Leitor de corridas", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
@@ -205,6 +214,53 @@ private fun versionChange(ctx: Context, current: String): String? {
     if (last == current) return null
     prefs.edit().putString("last_version", current).apply()
     return last ?: ""
+}
+
+/** Jornada atual (ou a última encerrada): mesmos números do painel do ícone "M". */
+@Composable
+private fun ShiftCard(copilotRunning: Boolean) {
+    val ctx = LocalContext.current
+    val current by remember { ShiftTracker.current(ctx) }.collectAsStateWithLifecycle()
+    val last by remember { ShiftTracker.last(ctx) }.collectAsStateWithLifecycle()
+    val cost by remember { MappApp.repos.vehicle.config() }.collectAsStateWithLifecycle(VehicleCostConfig())
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(current) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(30_000)
+        }
+    }
+    val shift = current ?: last
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                when {
+                    current == null -> "Jornada"
+                    current!!.paused -> "⏸ Jornada pausada"
+                    else -> "● Jornada rodando"
+                },
+                style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+            )
+            if (shift == null) {
+                Text(
+                    "Ao começar a rodar, toque no ícone \"M\" e em ▶ Iniciar jornada. O MApp soma os km pelo GPS e " +
+                        "as corridas que você marcar com +1.",
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                )
+            } else {
+                if (current == null) {
+                    Text("Última jornada encerrada", style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
+                }
+                ShiftMath.lines(ShiftMath.summary(shift, cost.costPerKm, now)).forEach { Text(it) }
+                if (current != null && !current!!.paused && !copilotRunning) {
+                    Text(
+                        "⚠️ Copiloto parado: os km não estão sendo contados.",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable

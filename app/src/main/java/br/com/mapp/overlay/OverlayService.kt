@@ -26,14 +26,22 @@ import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.RawOffer
 import br.com.mapp.core.model.Zone
 import br.com.mapp.core.model.ZoneHit
+import br.com.mapp.core.shift.Odometer
+import br.com.mapp.core.shift.Shift
+import br.com.mapp.core.shift.ShiftMath
+import br.com.mapp.core.shift.ShiftTrip
 import br.com.mapp.maps.LocationProvider
 import br.com.mapp.reader.ReaderStatus
 import br.com.mapp.ui.MainActivity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -55,6 +63,15 @@ class OverlayService : LifecycleService() {
     private var shownKey: RawOffer? = null
     private var dismissedKey: RawOffer? = null
     private var announcedZones: Set<ZoneHit> = emptySet()
+
+    // ---- Jornada ----
+    private var costPerKm: Double = 0.0
+    /** Última oferta avaliada (para "+1 Contar última" depois que o cartão some). */
+    private var lastOffer: EvaluatedOffer? = null
+    /** Tipo lido em algum quadro da oferta atual (o OCR às vezes não lê o "UberX"). */
+    private var lastCategory: Pair<RawOffer, String>? = null
+    private var countedKey: RawOffer? = null
+    private val odometer = Odometer()
 
     override fun onCreate() {
         super.onCreate()
@@ -82,11 +99,16 @@ class OverlayService : LifecycleService() {
         }
         lifecycleScope.launch { loc.updates().collect { card?.updateCurrentPosition(it) } }
         lifecycleScope.launch { OfferBus.evaluated.collect { render(it) } }
+        lifecycleScope.launch {
+            OfferBus.raw.collect { raw -> raw.category?.let { lastCategory = raw.key() to it } }
+        }
+        startShiftMonitor(loc)
 
         // Ícone flutuante com ajustes rápidos.
         if (Settings.canDrawOverlays(this)) {
             bubble = QuickBubbleView(ctx, windowManager!!, bubbleActions).also { it.show() }
         }
+        pushShift()
         lifecycleScope.launch { ReaderStatus.state.collect { bubble?.updateReader(it) } }
         lifecycleScope.launch {
             MappApp.repos.profiles.all()
@@ -132,7 +154,116 @@ class OverlayService : LifecycleService() {
             Toast.makeText(this@OverlayService, "Copiloto parado", Toast.LENGTH_SHORT).show()
             stopSelf()
         }
+
+        override fun startShift() {
+            val ctx = this@OverlayService
+            val wasNew = ShiftTracker.current(ctx).value == null
+            if (!location!!.hasPermission()) toast("Sem permissão de localização: os km não serão contados")
+            ShiftTracker.start(ctx)
+            toast(if (wasNew) "Jornada iniciada" else "Jornada retomada")
+        }
+
+        override fun pauseShift() {
+            ShiftTracker.pause(this@OverlayService)
+            toast("Jornada pausada")
+        }
+
+        override fun endShift() {
+            val ended = ShiftTracker.end(this@OverlayService) ?: return
+            countedKey = null
+            val s = ShiftMath.summary(ended, costPerKm, System.currentTimeMillis())
+            toast("Jornada encerrada: ${s.trips} corridas · lucro ${ShiftMath.money(s.profit)}")
+        }
+
+        override fun countLastOffer() = countOffer(lastOffer)
+
+        override fun undoLastTrip() {
+            val shift = ShiftTracker.current(this@OverlayService).value ?: return
+            if (shift.trips.isEmpty()) { toast("Nenhuma corrida para desfazer"); return }
+            ShiftTracker.undoLastTrip(this@OverlayService)
+            countedKey = null
+            refreshCountButton()
+            toast("Última corrida removida")
+        }
     }
+
+    // ------------------------------------------------------------------ jornada
+
+    /** Mesma oferta mesmo com endereço/tipo lidos em quadros diferentes. */
+    private fun RawOffer.key(): RawOffer = identity().copy(pickupAddress = null, dropoffAddress = null)
+
+    private fun startShiftMonitor(loc: LocationProvider) {
+        lifecycleScope.launch { MappApp.repos.vehicle.config().collect { costPerKm = it.costPerKm; pushShift() } }
+        lifecycleScope.launch {
+            ShiftTracker.current(this@OverlayService).collect {
+                pushShift()
+                refreshCountButton()
+            }
+        }
+        // Hodômetro: GPS preciso só com a jornada rodando.
+        lifecycleScope.launch {
+            ShiftTracker.current(this@OverlayService)
+                .map { it != null && !it.paused }
+                .distinctUntilChanged()
+                .collectLatest { running ->
+                    odometer.reset()
+                    if (!running) return@collectLatest
+                    loc.fixes().collect { fix ->
+                        val km = odometer.add(fix)
+                        if (km > 0) ShiftTracker.addKm(this@OverlayService, km)
+                    }
+                }
+        }
+        // Relógio da jornada no painel.
+        lifecycleScope.launch {
+            while (true) {
+                delay(SHIFT_TICK_MS)
+                if (ShiftTracker.current(this@OverlayService).value?.paused == false) pushShift()
+            }
+        }
+    }
+
+    private fun pushShift() {
+        val shift: Shift? = ShiftTracker.current(this).value
+        val summary = shift?.let { ShiftMath.summary(it, costPerKm, System.currentTimeMillis()) }
+        bubble?.updateShift(shift, summary, lastOffer?.let { offerLabel(it.raw) })
+    }
+
+    private fun offerLabel(raw: RawOffer): String {
+        val cat = categoryFor(raw)
+        return listOfNotNull(cat ?: raw.platform.label, ShiftMath.money(raw.price)).joinToString(" ") +
+            if (raw.key() == countedKey) " ✓ contada" else ""
+    }
+
+    private fun categoryFor(raw: RawOffer): String? =
+        raw.category ?: lastCategory?.takeIf { it.first == raw.key() }?.second
+
+    private fun countOffer(offer: EvaluatedOffer?) {
+        if (ShiftTracker.current(this).value == null) { toast("Inicie a jornada (▶ no ícone M) para contar corridas"); return }
+        val raw = offer?.raw ?: run { toast("Nenhuma oferta lida ainda"); return }
+        val key = raw.key()
+        if (key == countedKey) { toast("Esta corrida já foi contada"); return }
+        val trip = ShiftTrip.from(raw.copy(category = categoryFor(raw)), System.currentTimeMillis())
+        ShiftTracker.addTrip(this, trip)
+        countedKey = key
+        refreshCountButton()
+        pushShift()
+        toast("Corrida contada: ${offerLabel(raw).removeSuffix(" ✓ contada")}")
+    }
+
+    private fun refreshCountButton() {
+        val c = card ?: return
+        val shown = lastOffer?.raw?.key()
+        c.setCountState(
+            when {
+                ShiftTracker.current(this).value == null -> OfferCardView.CountState.HIDDEN
+                shown != null && shown == countedKey -> OfferCardView.CountState.DONE
+                else -> OfferCardView.CountState.READY
+            },
+        )
+    }
+
+    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
     private fun cycleProfile(direction: Int) {
         val list = profiles
@@ -162,6 +293,11 @@ class OverlayService : LifecycleService() {
 
     override fun onDestroy() {
         _running.value = false
+        // Sem o copiloto não há GPS: a jornada fica pausada até o próximo ▶.
+        if (ShiftTracker.current(this).value?.paused == false) {
+            ShiftTracker.pause(this)
+            toast("Jornada pausada")
+        }
         bubble?.destroy()
         bubble = null
         card?.destroy()
@@ -177,7 +313,13 @@ class OverlayService : LifecycleService() {
             return
         }
         // Endereço lido depois (quadro mais completo) não é oferta nova: nada de repetir a voz.
-        val key = offer.raw.identity().copy(pickupAddress = null, dropoffAddress = null)
+        val key = offer.raw.key()
+        if (lastOffer?.raw?.key() != key) {
+            lastOffer = offer
+            pushShift()
+        } else {
+            lastOffer = offer
+        }
         if (key == dismissedKey) return // usuário fechou o cartão desta oferta
 
         val alertZones = offer.zoneHits.filter { it.zone.alertEnabled }.toSet()
@@ -197,16 +339,22 @@ class OverlayService : LifecycleService() {
             return
         }
         val c = card ?: createCard() ?: return
+        refreshCountButton()
         c.show(offer, activeProfile, location?.lastKnown, zones)
     }
 
     private fun createCard(): OfferCardView? {
         val ctx = overlayContext ?: return null
         val wm = windowManager ?: return null
-        return OfferCardView(ctx, wm) {
-            dismissedKey = shownKey
-            card?.dismiss()
-        }.also { card = it }
+        return OfferCardView(
+            ctx,
+            wm,
+            onClose = {
+                dismissedKey = shownKey
+                card?.dismiss()
+            },
+            onCount = { countOffer(lastOffer) },
+        ).also { card = it }
     }
 
     private fun startInForeground(hasLocationPermission: Boolean): Boolean {
@@ -276,6 +424,7 @@ class OverlayService : LifecycleService() {
         private const val CHANNEL_ID = "copiloto"
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP = "br.com.mapp.overlay.STOP"
+        private const val SHIFT_TICK_MS = 30_000L
 
         private val _running = MutableStateFlow(false)
         /** true enquanto o copiloto (serviço) está ativo — a tela inicial mostra o estado. */

@@ -20,10 +20,15 @@ Documentação completa (pesquisa, requisitos, arquitetura, roadmap): **README.m
 | `reader/ReaderStatus` | `state`, `lines()`, `report(ctx)`, `versionOf(ctx)` (diagnóstico, só em memória) | ui/HomeScreen, overlay/QuickBubbleView |
 | `core/card/CardLayout` + `CardValues` | linhas do cabeçalho do cartão (`place`, `remove`, `encode/decode`), valores e cores por informação | overlay/CardHeaderView, ui/CardStyleScreen |
 | `overlay/OverlayPrefs` | `cardLayout(ctx)`, `setCardLayout(ctx, l)` (estilo do cartão salvo) | overlay, ui/CardStyleScreen |
+| `core/shift/*` | `Shift` (jornada: play/pausa, km GPS, corridas), `ShiftMath.summary/lines`, `Odometer`, `ShiftCodec` | overlay, ui/HomeScreen |
+| `overlay/ShiftTracker` | `current(ctx)`, `last(ctx)`, `start/pause/end`, `addKm`, `addTrip`, `undoLastTrip` (salvo em SharedPreferences) | overlay/OverlayService, ui/HomeScreen |
 | Telas `@Composable fun XScreen(onBack: () -> Unit)` | `finance/`: Finance, Reports, History, Profiles, Vehicle · `maps/`: ZoneEditor · `ui/`: CardStyle | ui/MainActivity |
 
 ## Fluxo da oferta
-Reader lê a tela por duas fontes — texto (árvore de Acessibilidade) e imagem (`reader/ScreenOcr`: captura da janela do app de corrida + OCR no aparelho, só com `OfferBus.hasListeners`) — e passa os textos ao parser (`parse(texts, fromOcr)`) → `OfferBus.publish(raw)` → `overlay/OfferPipeline` (geocodifica, carrega perfil ativo/custos/zonas, avalia, grava histórico) → `OfferBus.publishEvaluated` → overlay desenha cartão + mini mapa. Quando a oferta some: `OfferBus.clear()`.
+Reader lê a tela por duas fontes — texto (árvore de Acessibilidade) e imagem (`reader/ScreenOcr`: captura da janela do app de corrida + OCR no aparelho, só com `OfferBus.hasListeners`) — e passa os textos ao parser (`parse(texts, fromOcr)`) → `OfferBus.publish(raw)` → `overlay/OfferPipeline` (geocodifica, carrega perfil ativo/custos/zonas, avalia, grava histórico) → `OfferBus.publishEvaluated` → overlay desenha cartão + mini mapa. Quando a oferta some: `OfferBus.clear()`. `RawOffer.category` = tipo lido no topo do cartão (UberX, Comfort, Black, Elétrico, Pop...); fica fora da identidade da oferta (o OCR nem sempre o lê).
+
+## Jornada
+Painel do ícone "M" → ▶ Iniciar/⏸ Pausar/⏹ Encerrar. Com a jornada rodando o `OverlayService` liga o GPS preciso (`LocationProvider.fixes`) e soma km pelo `Odometer`. Corrida pega = "+1" no cartão ou "+1 Contar última" no painel (o MApp não sabe sozinho se a corrida foi aceita). Parar o copiloto pausa a jornada.
 
 ## Subagentes (`.claude/agents/`)
 - `arquiteto` — core/, Gradle, manifest, ui/, contratos.

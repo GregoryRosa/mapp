@@ -45,5 +45,5 @@ object OfferBus {
     }
 
     private fun sameOffer(a: RawOffer, b: RawOffer?): Boolean =
-        b != null && a.copy(rawText = "", capturedAt = 0) == b.copy(rawText = "", capturedAt = 0)
+        b != null && a.copy(rawText = "", capturedAt = 0, category = null) == b.copy(rawText = "", capturedAt = 0, category = null)
 }

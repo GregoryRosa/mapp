@@ -25,8 +25,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Identidade da oferta (ignora texto bruto e horário), usada para não repetir registro/voz. */
-internal fun RawOffer.identity(): RawOffer = copy(rawText = "", capturedAt = 0L)
+/**
+ * Identidade da oferta (ignora texto bruto, horário e o tipo — o OCR às vezes não lê o "UberX"),
+ * usada para não repetir registro/voz.
+ */
+internal fun RawOffer.identity(): RawOffer = copy(rawText = "", capturedAt = 0L, category = null)
 
 /**
  * OfferBus.raw → OfferEvaluator → OfferBus.publishEvaluated + histórico, em duas etapas:

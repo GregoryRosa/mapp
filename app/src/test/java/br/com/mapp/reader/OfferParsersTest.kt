@@ -273,4 +273,32 @@ class OfferParsersTest {
         assertSame(InDriveParser, OfferParsers.forPlatform(Platform.INDRIVE))
         Platform.entries.forEach { assertEquals(it, OfferParsers.forPlatform(it).platform) }
     }
+
+    // ------------------------------------------------------------------ tipo da corrida (jornada)
+
+    @Test fun tipo_da_corrida_por_plataforma() {
+        val uber = listOf(
+            "UberX", "R$ 18,40", "4 min (1,2 km) de distância", "Rua A, 10 - Centro",
+            "Viagem: 22 min (12,5 km)", "Av. B, 900 - Bela Vista", "Aceitar",
+        )
+        assertEquals("UberX", UberParser.parse(uber)!!.category)
+        assertEquals("Black", UberParser.parse(listOf("Uber Black") + uber.drop(1))!!.category)
+        assertEquals("Elétrico", UberParser.parse(listOf("Elétrico") + uber.drop(1))!!.category)
+        assertEquals("Comfort", UberParser.parse(listOf("UberX", "Comfort", "Exclusivo") + uber.drop(1))!!.category)
+        assertNull(UberParser.parse(uber.drop(1))!!.category)
+
+        val pop = listOf(
+            "99Pop", "R$ 14,90", "Embarque: 3 min · 0,9 km", "Rua C, 45 - Centro",
+            "Corrida: 18 min · 9,4 km", "Av. D, 2000 - Jardim", "Aceitar corrida",
+        )
+        assertEquals("Pop", NinetyNineParser.parse(pop)!!.category)
+        assertEquals("Comfort", NinetyNineParser.parse(listOf("99Comfort") + pop.drop(1))!!.category)
+    }
+
+    @Test fun texto_longo_nao_vira_tipo() {
+        assertNull(UberParser.categoryOf("Uber Black é a categoria premium da cidade"))
+        assertNull(UberParser.categoryOf("Exclusivo"))
+        assertEquals("UberX", UberParser.categoryOf("Uberx"))
+        assertEquals("UberX", UberParser.categoryOf("Uber X"))
+    }
 }

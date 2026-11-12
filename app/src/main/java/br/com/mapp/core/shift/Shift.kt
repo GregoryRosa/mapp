@@ -1,0 +1,222 @@
+package br.com.mapp.core.shift
+
+import br.com.mapp.core.geo.Geo
+import br.com.mapp.core.model.GeoPoint
+import br.com.mapp.core.model.Platform
+import br.com.mapp.core.model.RawOffer
+import java.util.Locale
+import kotlin.math.max
+
+/*
+ * Monitor de jornada (Kotlin puro): o motorista dá "play" no ícone "M", o MApp soma os km pelo GPS e
+ * as corridas que ele marca como pegas. Persistência e GPS ficam em overlay/ShiftTracker.
+ */
+
+/** Corrida pega durante a jornada (valores da oferta lida na tela). */
+data class ShiftTrip(
+    val atMillis: Long,
+    val platform: Platform,
+    val category: String?,
+    val price: Double,
+    val pickupKm: Double?,
+    val tripKm: Double?,
+) {
+    companion object {
+        fun from(offer: RawOffer, atMillis: Long) = ShiftTrip(
+            atMillis = atMillis,
+            platform = offer.platform,
+            category = offer.category,
+            price = offer.price,
+            pickupKm = offer.pickupKm,
+            tripKm = offer.tripKm,
+        )
+    }
+}
+
+/**
+ * Jornada em andamento. [resumedAt] = null → pausada. [activeMs] = tempo trabalhado antes do último
+ * play; o tempo corrente é somado em [elapsedMs].
+ */
+data class Shift(
+    val startedAt: Long,
+    val activeMs: Long = 0,
+    val resumedAt: Long? = startedAt,
+    val gpsKm: Double = 0.0,
+    val trips: List<ShiftTrip> = emptyList(),
+) {
+    val paused: Boolean get() = resumedAt == null
+
+    fun elapsedMs(now: Long): Long = activeMs + (resumedAt?.let { max(0, now - it) } ?: 0)
+
+    fun pause(now: Long): Shift = if (paused) this else copy(activeMs = elapsedMs(now), resumedAt = null)
+
+    fun resume(now: Long): Shift = if (paused) copy(resumedAt = now) else this
+
+    fun addKm(km: Double): Shift = if (km > 0) copy(gpsKm = gpsKm + km) else this
+
+    fun addTrip(trip: ShiftTrip): Shift = copy(trips = trips + trip)
+
+    fun undoLastTrip(): Shift = copy(trips = trips.dropLast(1))
+}
+
+data class CategoryShare(val label: String, val count: Int, val percent: Double, val revenue: Double)
+
+data class ShiftSummary(
+    val hours: Double,
+    val trips: Int,
+    val revenue: Double,
+    /** Km rodados no total: GPS (ou a soma das corridas, se o GPS somou menos). */
+    val totalKm: Double,
+    /** Km com passageiro (trecho da viagem das corridas pegas). */
+    val kmWithTrip: Double,
+    /** Km sem passageiro (busca + rodando vazio). */
+    val kmWithoutTrip: Double,
+    val cost: Double,
+    val profit: Double,
+    val perKm: Double?,
+    val perHour: Double?,
+    val avgTripKm: Double?,
+    val categories: List<CategoryShare>,
+)
+
+object ShiftMath {
+    const val NO_CATEGORY = "Outros"
+
+    fun summary(shift: Shift, costPerKm: Double, now: Long): ShiftSummary {
+        val trips = shift.trips
+        val revenue = trips.sumOf { it.price }
+        val withTrip = trips.sumOf { it.tripKm ?: 0.0 }
+        val offersKm = trips.sumOf { (it.pickupKm ?: 0.0) + (it.tripKm ?: 0.0) }
+        val total = max(shift.gpsKm, offersKm)
+        val hours = shift.elapsedMs(now) / 3_600_000.0
+        val cost = total * costPerKm
+        val withKm = trips.mapNotNull { it.tripKm }
+        return ShiftSummary(
+            hours = hours,
+            trips = trips.size,
+            revenue = revenue,
+            totalKm = total,
+            kmWithTrip = withTrip,
+            kmWithoutTrip = max(0.0, total - withTrip),
+            cost = cost,
+            profit = revenue - cost,
+            perKm = if (total >= 0.1 && trips.isNotEmpty()) revenue / total else null,
+            perHour = if (hours >= 1.0 / 60 && trips.isNotEmpty()) revenue / hours else null,
+            avgTripKm = if (withKm.isNotEmpty()) withKm.average() else null,
+            categories = categories(trips),
+        )
+    }
+
+    /** % de corridas por tipo (UberX, Comfort, Black, Elétrico...), da mais comum para a menos. */
+    fun categories(trips: List<ShiftTrip>): List<CategoryShare> {
+        if (trips.isEmpty()) return emptyList()
+        return trips.groupBy { it.category ?: NO_CATEGORY }
+            .map { (label, list) ->
+                CategoryShare(label, list.size, list.size * 100.0 / trips.size, list.sumOf { it.price })
+            }
+            .sortedWith(compareByDescending<CategoryShare> { it.count }.thenByDescending { it.revenue })
+    }
+
+    /** Linhas de texto do resumo (ícone "M" e tela inicial). */
+    fun lines(s: ShiftSummary): List<String> = buildList {
+        add("⏱ ${duration(s.hours)} · ${s.trips} corrida${if (s.trips == 1) "" else "s"}")
+        add("💰 Ganho ${money(s.revenue)} · Custo ${money(s.cost)}")
+        add("${if (s.profit >= 0) "✅" else "🔻"} Lucro ${money(s.profit)}")
+        add("🚗 ${km(s.totalKm)} rodados")
+        add("    com passageiro ${km(s.kmWithTrip)} · sem ${km(s.kmWithoutTrip)}")
+        add("R$/km ${s.perKm?.let { num(it, 2) } ?: "—"} · R$/h ${s.perHour?.let { num(it, 2) } ?: "—"}")
+        add("Média por corrida ${s.avgTripKm?.let { km(it) } ?: "—"}")
+        if (s.categories.isNotEmpty()) {
+            add(s.categories.joinToString(" · ") { "${it.label} ${num(it.percent, 0)}%" })
+        }
+    }
+
+    fun duration(hours: Double): String {
+        val min = (hours * 60).toLong()
+        return "${min / 60}h" + String.format(Locale.ROOT, "%02dm", min % 60)
+    }
+
+    fun money(v: Double): String = "R$ " + num(v, 2)
+    fun km(v: Double): String = num(v, 1) + " km"
+    fun num(v: Double, decimals: Int): String = String.format(PT_BR, "%.${decimals}f", v)
+
+    private val PT_BR: Locale = Locale.forLanguageTag("pt-BR")
+}
+
+/** Posição do GPS com precisão (metros) e horário. */
+data class Fix(val point: GeoPoint, val accuracyM: Float?, val atMillis: Long)
+
+/**
+ * Hodômetro pelo GPS: ignora leituras imprecisas, o "tremido" parado no lugar e saltos impossíveis.
+ * Movimentos pequenos acumulam (a âncora só anda quando o deslocamento passa do mínimo).
+ */
+class Odometer(
+    private val maxAccuracyM: Float = 50f,
+    private val minStepM: Double = 25.0,
+    private val maxSpeedKmh: Double = 160.0,
+) {
+    private var anchor: Fix? = null
+
+    /** Km a somar com esta leitura (0 se descartada). */
+    fun add(fix: Fix): Double {
+        val acc = fix.accuracyM
+        if (acc != null && acc > maxAccuracyM) return 0.0
+        val a = anchor ?: run { anchor = fix; return 0.0 }
+        if (fix.atMillis <= a.atMillis) return 0.0
+        val km = Geo.haversineKm(a.point, fix.point)
+        val hours = (fix.atMillis - a.atMillis) / 3_600_000.0
+        if (km / hours > maxSpeedKmh) { anchor = fix; return 0.0 } // salto de GPS: recomeça daqui
+        if (km * 1000 < max(minStepM, (acc ?: 0f).toDouble())) return 0.0
+        anchor = fix
+        return km
+    }
+
+    /** Pausa/retomada: o caminho feito com a jornada parada não conta. */
+    fun reset() { anchor = null }
+}
+
+/** Grava a jornada em texto (SharedPreferences). Formato próprio, linha a linha, sem bibliotecas. */
+object ShiftCodec {
+    private const val SEP = "\t"
+
+    fun encode(s: Shift): String = buildString {
+        append(listOf("v1", s.startedAt, s.activeMs, s.resumedAt ?: "", s.gpsKm).joinToString(SEP))
+        s.trips.forEach { t ->
+            append('\n')
+            append(
+                listOf(t.atMillis, t.platform.name, clean(t.category), t.price, t.pickupKm ?: "", t.tripKm ?: "")
+                    .joinToString(SEP),
+            )
+        }
+    }
+
+    fun decode(text: String?): Shift? {
+        if (text.isNullOrBlank()) return null
+        return try {
+            val rows = text.split('\n')
+            val h = rows.first().split(SEP)
+            if (h[0] != "v1") return null
+            Shift(
+                startedAt = h[1].toLong(),
+                activeMs = h[2].toLong(),
+                resumedAt = h[3].toLongOrNull(),
+                gpsKm = h[4].toDouble(),
+                trips = rows.drop(1).filter { it.isNotBlank() }.map { row ->
+                    val c = row.split(SEP)
+                    ShiftTrip(
+                        atMillis = c[0].toLong(),
+                        platform = Platform.valueOf(c[1]),
+                        category = c[2].ifEmpty { null },
+                        price = c[3].toDouble(),
+                        pickupKm = c[4].toDoubleOrNull(),
+                        tripKm = c[5].toDoubleOrNull(),
+                    )
+                },
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun clean(v: String?) = v?.replace('\t', ' ')?.replace('\n', ' ') ?: ""
+}

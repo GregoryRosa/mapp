@@ -24,6 +24,8 @@ data class RawOffer(
     val pickupAddress: String? = null,
     val dropoffAddress: String? = null,
     val passengerRating: Double? = null,
+    /** Tipo da corrida como mostrado ao usuário: "UberX", "Comfort", "Black", "Elétrico", "Pop"... */
+    val category: String? = null,
     val rawText: String = "",
     val capturedAt: Long = System.currentTimeMillis(),
 )
