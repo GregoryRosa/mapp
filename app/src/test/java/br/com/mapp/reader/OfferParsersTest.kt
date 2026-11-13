@@ -284,6 +284,10 @@ class OfferParsersTest {
         assertEquals("UberX", UberParser.parse(uber)!!.category)
         assertEquals("Black", UberParser.parse(listOf("Uber Black") + uber.drop(1))!!.category)
         assertEquals("Elétrico", UberParser.parse(listOf("Elétrico") + uber.drop(1))!!.category)
+        assertEquals("Elétrico", UberParser.parse(listOf("Electric") + uber.drop(1))!!.category)
+        assertEquals("Elétrico", UberParser.parse(listOf("Uber Electric") + uber.drop(1))!!.category)
+        assertEquals("Elétrico", UberParser.parse(listOf("UberX", "Electric", "Exclusivo") + uber.drop(1))!!.category)
+        assertEquals("Elétrico", UberParser.categoryOf("⚡ Electric"))
         assertEquals("Comfort", UberParser.parse(listOf("UberX", "Comfort", "Exclusivo") + uber.drop(1))!!.category)
         assertNull(UberParser.parse(uber.drop(1))!!.category)
 

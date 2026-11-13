@@ -44,13 +44,16 @@ object UberParser : BaseOfferParser(Platform.UBER) {
     override val scopeToOfferBlock = true
     override val nonAddressTexts = listOf(
         "UberX", "Comfort", "Black", "Uber Black", "Uber Flash", "Flash", "Moto", "Uber Moto", "Juntos",
-        "Priority", "Prioridade", "Bag", "Exclusivo", "Viagem", "Aceitar", "Corresponder",
+        "Electric", "Uber Electric", "Elétrico", "Priority", "Prioridade", "Bag", "Exclusivo", "Viagem", "Aceitar", "Corresponder",
     )
     override val categoryAliases = mapOf(
         "uberx" to "UberX",
         "comfort" to "Comfort", "ubercomfort" to "Comfort",
         "black" to "Black", "uberblack" to "Black", "blackbag" to "Black", "uberblackbag" to "Black",
         "eletrico" to "Elétrico", "ubereletrico" to "Elétrico", "comforteletrico" to "Elétrico",
+        // A Uber mostra a modalidade em inglês ("Electric"); o OCR às vezes perde/troca uma letra.
+        "electric" to "Elétrico", "uberelectric" to "Elétrico", "comfortelectric" to "Elétrico",
+        "uberxelectric" to "Elétrico", "eletric" to "Elétrico", "electrc" to "Elétrico", "elecric" to "Elétrico",
         "green" to "Elétrico", "ubergreen" to "Elétrico", "planet" to "Elétrico", "uberplanet" to "Elétrico",
         "flash" to "Flash", "uberflash" to "Flash", "flashmoto" to "Flash",
         "moto" to "Moto", "ubermoto" to "Moto",
