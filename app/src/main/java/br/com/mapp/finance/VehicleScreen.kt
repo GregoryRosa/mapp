@@ -16,7 +16,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -27,19 +26,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -47,34 +47,49 @@ import br.com.mapp.MappApp
 import br.com.mapp.core.model.ExtraKmCost
 import br.com.mapp.core.model.FuelType
 import br.com.mapp.core.model.VehicleCostConfig
+import br.com.mapp.overlay.ShiftTracker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Linha em edição de um custo por km extra. [key] só identifica a linha na tela. */
 private data class ExtraRow(val key: Int, val name: String, val value: String)
 
+/**
+ * Salvamento fora da tela: termina mesmo se o motorista voltar logo depois de digitar (o escopo da
+ * tela seria cancelado ao sair).
+ */
+private val saveScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+/** Espera depois da última tecla antes de salvar sozinho. */
+private const val AUTOSAVE_MS = 600L
+
 @Composable
 fun VehicleScreen(onBack: () -> Unit) {
     val repos = MappApp.repos
-    val scope = rememberCoroutineScope()
-    val snackbar = remember { SnackbarHostState() }
+    val ctx = LocalContext.current.applicationContext
     val saved by remember { repos.vehicle.config() }
         .collectAsStateWithLifecycle<VehicleCostConfig?>(initialValue = null)
+    // Valores de quando a tela abriu: o formulário não é recarregado a cada salvamento automático.
+    val opened = remember(saved != null) { saved }
 
-    Scaffold(
-        topBar = { BackTopBar("Custos do veículo", onBack) },
-        snackbarHost = { SnackbarHost(snackbar) },
-    ) { pad ->
+    Scaffold(topBar = { BackTopBar("Custos do veículo", onBack) }) { pad ->
+        val initial = opened
         val current = saved
-        if (current == null) {
+        if (initial == null || current == null) {
             Box(Modifier.fillMaxSize().padding(pad), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         } else {
             VehicleForm(
-                initial = current,
+                initial = initial,
+                saved = current,
                 modifier = Modifier.padding(pad),
                 onSave = { cfg ->
-                    scope.launch {
+                    saveScope.launch {
                         repos.vehicle.save(cfg)
-                        snackbar.showSnackbar("Custos salvos: ${Format.perKm(cfg.costPerKm)}")
+                        // Jornadas de hoje já encerradas também passam a usar o custo/km novo.
+                        ShiftTracker.applyCostToday(ctx, cfg.costPerKm)
                     }
                 },
             )
@@ -83,7 +98,12 @@ fun VehicleScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun VehicleForm(initial: VehicleCostConfig, modifier: Modifier, onSave: (VehicleCostConfig) -> Unit) {
+private fun VehicleForm(
+    initial: VehicleCostConfig,
+    saved: VehicleCostConfig,
+    modifier: Modifier,
+    onSave: (VehicleCostConfig) -> Unit,
+) {
     var fuelType by remember(initial) { mutableStateOf(initial.fuelType) }
     var fuel by remember(initial) { mutableStateOf(Format.input(initial.fuelPricePerUnit)) }
     var kmPerLiter by remember(initial) { mutableStateOf(Format.input(initial.kmPerUnit)) }
@@ -126,6 +146,16 @@ private fun VehicleForm(initial: VehicleCostConfig, modifier: Modifier, onSave: 
     } else {
         null
     }
+
+    // Salva sozinho a cada mudança válida: vale na hora para as ofertas, a jornada e os totais do dia.
+    LaunchedEffect(config) {
+        if (config == null || config == saved) return@LaunchedEffect
+        delay(AUTOSAVE_MS)
+        onSave(config)
+    }
+    // Saiu da tela antes do salvamento automático: salva assim mesmo.
+    val unsaved by rememberUpdatedState(config?.takeIf { it != saved })
+    DisposableEffect(Unit) { onDispose { unsaved?.let(onSave) } }
 
     Column(
         modifier
@@ -200,32 +230,38 @@ private fun VehicleForm(initial: VehicleCostConfig, modifier: Modifier, onSave: 
                     Text("Preencha todos os campos (consumo maior que zero).", style = MaterialTheme.typography.bodySmall)
                 } else {
                     Text(
-                        Format.perKm(config.costPerKm),
+                        Format.costPerKm(config.costPerKm),
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        "${if (fuelType.isElectric) "Energia" else fuelType.label} ${Format.perKm(config.energyCostPerKm)} + " +
-                            "manutenção ${Format.perKm(config.maintenancePerKm)} + " +
-                            "depreciação ${Format.perKm(config.depreciationPerKm)}" +
-                            config.extraCosts.joinToString("") { " + ${it.name} ${Format.perKm(it.perKm)}" },
+                        "${if (fuelType.isElectric) "Energia" else fuelType.label} ${Format.costPerKm(config.energyCostPerKm)} + " +
+                            "manutenção ${Format.costPerKm(config.maintenancePerKm)} + " +
+                            "depreciação ${Format.costPerKm(config.depreciationPerKm)}" +
+                            config.extraCosts.joinToString("") { " + ${it.name} ${Format.costPerKm(it.perKm)}" },
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
-                        "Ex.: corrida de 10 km custa ${Format.brl(config.costPerKm * 10)}.",
+                        "Ex.: corrida de 10 km custa ${Format.brl(config.costPerKm * 10)} · 100 km rodados custam " +
+                            Format.brl(config.costPerKm * 100) + ".",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
             }
         }
 
-        Button(
-            enabled = config != null && config != initial,
-            onClick = { config?.let(onSave) },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Salvar") }
         Text(
-            "O custo por km é usado para calcular o lucro líquido de cada oferta.",
+            when {
+                config == null -> "⚠️ Corrija os campos para salvar."
+                config == saved -> "✓ Salvo — já vale para as ofertas, a jornada e os totais do dia."
+                else -> "Salvando…"
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (config == null) RedSignal else GreenSignal,
+        )
+        Text(
+            "O custo por km é usado no lucro líquido de cada oferta, no custo da jornada e no valor líquido " +
+                "de Ganhos e gastos. Jornadas de dias anteriores ficam com o custo/km daquele dia.",
             style = MaterialTheme.typography.bodySmall,
         )
     }

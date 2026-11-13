@@ -328,4 +328,15 @@ class ShiftTest {
         assertEquals(5.0, t.km, eps)
         assertTrue(PeriodMath.totals(0, 24 * h, null, emptyList(), emptyList(), emptyList(), 1.0, h).isEmpty)
     }
+
+    @Test fun custo_novo_vale_para_as_jornadas_de_hoje() {
+        val zone = ZoneId.of("America/Sao_Paulo")
+        fun ms(day: Int, hour: Int) = ZonedDateTime.of(2026, 11, day, hour, 0, 0, 0, zone).toInstant().toEpochMilli()
+        val hoje = Shift(startedAt = ms(13, 6), gpsKm = 100.0, costPerKm = 0.85, endedAt = ms(13, 11))
+        val ontem = Shift(startedAt = ms(12, 6), gpsKm = 80.0, costPerKm = 0.80, endedAt = ms(12, 12))
+        val aberta = Shift(startedAt = ms(13, 14)) // aberta: já usa o custo atual
+        val out = ShiftMath.withCostToday(listOf(aberta, hoje, ontem), 0.873, ms(13, 16), zone)
+        assertEquals(listOf(null, 0.873, 0.80), out.map { it.costPerKm })
+        assertEquals(87.3, ShiftMath.summary(out[1], costPerKm = 0.5, now = ms(13, 16)).cost, eps)
+    }
 }

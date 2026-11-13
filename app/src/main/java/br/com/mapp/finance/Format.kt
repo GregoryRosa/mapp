@@ -15,6 +15,7 @@ object Format {
     private val symbols = DecimalFormatSymbols(PT_BR)
     private val money = ThreadLocal.withInitial { DecimalFormat("#,##0.00", symbols) }
     private val oneDecimal = ThreadLocal.withInitial { DecimalFormat("#,##0.0", symbols) }
+    private val threeDecimals = ThreadLocal.withInitial { DecimalFormat("#,##0.000", symbols) }
     private val plain = ThreadLocal.withInitial { DecimalFormat("0.##", symbols) }
     private val time = DateTimeFormatter.ofPattern("HH:mm", PT_BR)
     private val dayTime = DateTimeFormatter.ofPattern("dd/MM HH:mm", PT_BR)
@@ -33,6 +34,12 @@ object Format {
 
     /** "R$ 2,15/km". */
     fun perKm(value: Double?): String = value?.let { "${brl(it)}/km" } ?: NONE
+
+    /**
+     * Custo por km com 3 casas ("R$ 0,083/km"): carro elétrico gasta menos de 1 centavo a mais por km
+     * a cada R$ 0,10 no kWh, e com 2 casas a mudança não aparecia.
+     */
+    fun costPerKm(value: Double?): String = value?.let { "R$ ${threeDecimals.get()!!.format(it)}/km" } ?: NONE
 
     /** "R$ 45,00/h". */
     fun perHour(value: Double?): String = value?.let { "${brl(it)}/h" } ?: NONE
