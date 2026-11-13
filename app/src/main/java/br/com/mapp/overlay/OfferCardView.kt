@@ -34,8 +34,7 @@ import kotlin.math.max
  * Reutilizável: [dismiss] só tira da tela; [destroy] libera o mapa.
  */
 class OfferCardView(
-    private val context: Context,
-    private val windowManager: WindowManager,
+    private val host: OverlayHost,
     private val onClose: () -> Unit,
     /** "+1": conta esta oferta como corrida pega na jornada. */
     private val onCount: () -> Unit = {},
@@ -43,6 +42,8 @@ class OfferCardView(
     /** Botão "+1" do cabeçalho: só aparece com jornada iniciada. */
     enum class CountState { HIDDEN, READY, DONE }
 
+    private val context: Context = host.context
+    private val windowManager: WindowManager = host.windowManager
     private val prefs = OverlayPrefs.of(context)
     private val density = context.resources.displayMetrics.density
 
@@ -102,7 +103,7 @@ class OfferCardView(
     private val params = WindowManager.LayoutParams(
         dp(CARD_WIDTH_DP), // largura fixa: textos longos não esticam o cartão
         WindowManager.LayoutParams.WRAP_CONTENT,
-        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        host.type,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,

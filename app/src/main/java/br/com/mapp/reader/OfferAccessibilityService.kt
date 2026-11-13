@@ -1,6 +1,7 @@
 package br.com.mapp.reader
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Context
 import android.content.Intent
 import android.graphics.Rect
 import android.os.Build
@@ -23,6 +24,9 @@ import br.com.mapp.reader.parser.TripStageTracker
 import br.com.mapp.core.model.TripEvent
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Lê (SOMENTE LÊ) a tela dos apps de corrida e publica as ofertas no [OfferBus].
@@ -136,6 +140,7 @@ class OfferAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         Log.i(TAG, "Leitor de ofertas conectado")
         ReaderStatus.setConnected(true)
+        _windowContext.value = this
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val engine = try {
                 ScreenOcr(this)
@@ -157,6 +162,7 @@ class OfferAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         ReaderStatus.setConnected(false)
+        if (_windowContext.value === this) _windowContext.value = null
         return super.onUnbind(intent)
     }
 
@@ -185,6 +191,7 @@ class OfferAccessibilityService : AccessibilityService() {
         tracker.reset()
         stages.reset()
         ReaderStatus.setConnected(false)
+        if (_windowContext.value === this) _windowContext.value = null
         super.onDestroy()
     }
 
@@ -427,7 +434,8 @@ class OfferAccessibilityService : AccessibilityService() {
             }
             summary += "$who ${bounds.width()}x${bounds.height()} em ${bounds.left},${bounds.top} " +
                 "(camada ${window.layer}, tipo ${window.type})"
-            if (pkg == packageName) own += bounds
+            // Cartão e ícone do MApp são janelas da Acessibilidade (às vezes sem conteúdo legível).
+            if (pkg == packageName || window.type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) own += bounds
             if (platform != null && bounds.width().toLong() * bounds.height() >= minArea) {
                 val previous = best
                 if (previous == null || window.layer > previous.layer) {
@@ -537,6 +545,15 @@ class OfferAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "MAppReader"
+
+        private val _windowContext = MutableStateFlow<Context?>(null)
+
+        /**
+         * Contexto do serviço conectado (null = desligado). O cartão e o ícone "M" usam o
+         * WindowManager dele para abrir janelas TYPE_ACCESSIBILITY_OVERLAY: a Uber esconde as
+         * sobreposições comuns (TYPE_APPLICATION_OVERLAY) enquanto a solicitação está na tela.
+         */
+        val windowContext: StateFlow<Context?> = _windowContext.asStateFlow()
         private val PT_BR: Locale = Locale.forLanguageTag("pt-BR")
 
         private const val MAX_DEPTH = 60

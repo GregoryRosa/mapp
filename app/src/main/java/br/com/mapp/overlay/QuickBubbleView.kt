@@ -45,8 +45,7 @@ import kotlin.math.sin
  * Só mexe nas configurações do próprio MApp — nunca toca no app de corrida.
  */
 class QuickBubbleView(
-    private val context: Context,
-    private val windowManager: WindowManager,
+    private val host: OverlayHost,
     private val actions: Actions,
 ) {
     interface Actions {
@@ -73,6 +72,8 @@ class QuickBubbleView(
         fun markPin(type: ZoneType)
     }
 
+    private val context: Context = host.context
+    private val windowManager: WindowManager = host.windowManager
     private val prefs = OverlayPrefs.of(context)
     private val density = context.resources.displayMetrics.density
 
@@ -109,7 +110,7 @@ class QuickBubbleView(
     private val bubbleParams = WindowManager.LayoutParams(
         dp(BUBBLE_DP),
         dp(BUBBLE_DP),
-        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        host.type,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
         PixelFormat.TRANSLUCENT,
     ).apply {
@@ -141,7 +142,7 @@ class QuickBubbleView(
     private val labelsParams = WindowManager.LayoutParams(
         dp(LABEL_WIDTH_DP),
         dp(3 * LABEL_LINE_DP + BUBBLE_DP),
-        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        host.type,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
@@ -202,7 +203,7 @@ class QuickBubbleView(
     private val radialParams = WindowManager.LayoutParams(
         dp(RADIAL_SIZE_DP),
         dp(RADIAL_SIZE_DP),
-        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        host.type,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
             WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
@@ -347,7 +348,7 @@ class QuickBubbleView(
     private val panelParams = WindowManager.LayoutParams(
         0,
         WindowManager.LayoutParams.WRAP_CONTENT,
-        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        host.type,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
             WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,

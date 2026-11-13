@@ -36,6 +36,7 @@ import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.core.shift.ShiftTrip
 import br.com.mapp.maps.LocationProvider
 import br.com.mapp.maps.PinStore
+import br.com.mapp.reader.OfferAccessibilityService
 import br.com.mapp.reader.ReaderStatus
 import br.com.mapp.ui.MainActivity
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,6 +58,9 @@ class OverlayService : LifecycleService() {
 
     private var windowManager: WindowManager? = null
     private var overlayContext: Context? = null
+    /** Onde cartão e ícone abrem janela (Acessibilidade ou sobreposição comum); null = sem permissão. */
+    private var host: OverlayHost? = null
+    private var pinCount = 0
     private var location: LocationProvider? = null
     private var voice: VoiceAnnouncer? = null
     private var card: OfferCardView? = null
@@ -122,13 +126,15 @@ class OverlayService : LifecycleService() {
         startShiftMonitor(loc)
         lifecycleScope.launch { OfferBus.tripStages.collect { onTripStage(it) } }
 
-        // Ícone flutuante com ajustes rápidos.
-        if (Settings.canDrawOverlays(this)) {
-            bubble = QuickBubbleView(ctx, windowManager!!, bubbleActions).also { it.show() }
-        }
-        pushShift()
+        // Ícone flutuante com ajustes rápidos (e cartão): recriados quando o leitor liga/desliga.
+        lifecycleScope.launch { OfferAccessibilityService.windowContext.collect { useHost(it) } }
         lifecycleScope.launch { ReaderStatus.state.collect { bubble?.updateReader(it) } }
-        lifecycleScope.launch { PinStore.pins(this@OverlayService).collect { bubble?.updatePins(it.size) } }
+        lifecycleScope.launch {
+            PinStore.pins(this@OverlayService).collect {
+                pinCount = it.size
+                bubble?.updatePins(it.size)
+            }
+        }
         lifecycleScope.launch {
             MappApp.repos.profiles.all()
                 .combine(MappApp.repos.profiles.active()) { all, active -> all to active }
@@ -453,6 +459,7 @@ class OverlayService : LifecycleService() {
         bubble = null
         card?.destroy()
         card = null
+        host = null
         voice?.shutdown()
         voice = null
         super.onDestroy()
@@ -487,21 +494,61 @@ class OverlayService : LifecycleService() {
             voice?.announceZones(fresh.toList())
         }
 
-        if (!Settings.canDrawOverlays(this)) {
-            Log.w(TAG, "Sem permissão de sobreposição; cartão não exibido")
+        val c = card ?: createCard() ?: run {
+            Log.w(TAG, "Sem leitor nem permissão de sobreposição; cartão não exibido")
             return
         }
-        val c = card ?: createCard() ?: return
+        refreshCountButton()
+        c.show(offer, activeProfile, location?.lastKnown, zones)
+    }
+
+    /**
+     * Escolhe onde abrir as janelas e recria ícone e cartão nela. Com o leitor conectado usa uma
+     * janela da Acessibilidade (TYPE_ACCESSIBILITY_OVERLAY): a Uber esconde as sobreposições comuns
+     * enquanto a solicitação está na tela, e o cartão só aparecia depois de fechá-la.
+     * Sem o leitor, volta para a sobreposição comum (precisa de "Sobrepor outros apps").
+     */
+    private fun useHost(a11y: Context?) {
+        val next = when {
+            a11y != null -> a11y.getSystemService(WindowManager::class.java)?.let {
+                OverlayHost(a11y, it, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+            }
+            Settings.canDrawOverlays(this) -> {
+                val ctx = overlayContext
+                val wm = windowManager
+                if (ctx != null && wm != null) OverlayHost(ctx, wm, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY) else null
+            }
+            else -> null
+        }
+        if (next == host) return
+        bubble?.destroy()
+        bubble = null
+        card?.destroy()
+        card = null
+        host = next
+        if (next == null) {
+            Log.w(TAG, "Sem leitor nem permissão de sobreposição; ícone e cartão não exibidos")
+            return
+        }
+        bubble = QuickBubbleView(next, bubbleActions).also {
+            it.show()
+            it.updateReader(ReaderStatus.state.value)
+            it.updatePins(pinCount)
+            it.updateProfile(activeProfile, profiles.size.coerceAtLeast(1))
+        }
+        pushShift()
+        // Oferta na tela durante a troca: o cartão volta na janela nova.
+        val offer = OfferBus.evaluated.value ?: return
+        if (offer.raw.key() == dismissedKey) return
+        val c = createCard() ?: return
         refreshCountButton()
         c.show(offer, activeProfile, location?.lastKnown, zones)
     }
 
     private fun createCard(): OfferCardView? {
-        val ctx = overlayContext ?: return null
-        val wm = windowManager ?: return null
+        val h = host ?: return null
         return OfferCardView(
-            ctx,
-            wm,
+            h,
             onClose = {
                 dismissedKey = shownKey
                 card?.dismiss()
@@ -593,3 +640,6 @@ class OverlayService : LifecycleService() {
         }
     }
 }
+
+/** Onde as janelas do MApp são abertas: contexto, WindowManager e tipo de janela. */
+data class OverlayHost(val context: Context, val windowManager: WindowManager, val type: Int)
