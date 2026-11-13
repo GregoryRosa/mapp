@@ -65,19 +65,50 @@ enum class FuelType(
     val consumptionSuffix: String get() = "km/$unit"
 }
 
-/** Custos do veículo usados para o lucro líquido. Preço e consumo na unidade de [fuelType] (litro ou kWh). */
+/** Custo por km criado pelo usuário (ex.: pneus, seguro, aluguel do carro). */
+data class ExtraKmCost(val name: String, val perKm: Double)
+
+/**
+ * Custos do veículo usados para o lucro líquido. Preço e consumo na unidade de [fuelType] (litro ou kWh).
+ * [extraCosts] = custos por km adicionados pelo usuário, somados ao [costPerKm].
+ */
 data class VehicleCostConfig(
     val fuelType: FuelType = FuelType.GASOLINE,
     val fuelPricePerUnit: Double = 6.00,
     val kmPerUnit: Double = 11.0,
     val maintenancePerKm: Double = 0.15,
     val depreciationPerKm: Double = 0.20,
+    val extraCosts: List<ExtraKmCost> = emptyList(),
 ) {
     val energyCostPerKm: Double
         get() = if (kmPerUnit > 0) fuelPricePerUnit / kmPerUnit else 0.0
 
+    val extraPerKm: Double
+        get() = extraCosts.sumOf { it.perKm }
+
     val costPerKm: Double
-        get() = energyCostPerKm + maintenancePerKm + depreciationPerKm
+        get() = energyCostPerKm + maintenancePerKm + depreciationPerKm + extraPerKm
+}
+
+/** Grava/lê [ExtraKmCost] em texto (uma linha por custo). */
+object ExtraKmCostCodec {
+    private const val SEP = "\t"
+
+    fun encode(costs: List<ExtraKmCost>): String =
+        costs.joinToString("\n") { c ->
+            listOf("v1", c.name.replace(Regex("[\t\n\r]"), " ").trim(), c.perKm).joinToString(SEP)
+        }
+
+    /** Linhas inválidas são ignoradas (não derrubam as outras). */
+    fun decode(text: String?): List<ExtraKmCost> {
+        if (text.isNullOrBlank()) return emptyList()
+        return text.split('\n').mapNotNull { row ->
+            val c = row.split(SEP)
+            if (c.size < 3 || c[0] != "v1") return@mapNotNull null
+            val perKm = c[2].toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return@mapNotNull null
+            ExtraKmCost(c[1], perKm)
+        }
+    }
 }
 
 enum class ZoneType(val label: String, val defaultColorArgb: Long) {

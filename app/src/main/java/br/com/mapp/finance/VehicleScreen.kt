@@ -4,6 +4,7 @@ package br.com.mapp.finance
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -12,18 +13,27 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -34,9 +44,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.com.mapp.MappApp
+import br.com.mapp.core.model.ExtraKmCost
 import br.com.mapp.core.model.FuelType
 import br.com.mapp.core.model.VehicleCostConfig
 import kotlinx.coroutines.launch
+
+/** Linha em edição de um custo por km extra. [key] só identifica a linha na tela. */
+private data class ExtraRow(val key: Int, val name: String, val value: String)
 
 @Composable
 fun VehicleScreen(onBack: () -> Unit) {
@@ -85,15 +99,30 @@ private fun VehicleForm(initial: VehicleCostConfig, modifier: Modifier, onSave: 
     }
     var maintenance by remember(initial) { mutableStateOf(Format.input(initial.maintenancePerKm)) }
     var depreciation by remember(initial) { mutableStateOf(Format.input(initial.depreciationPerKm)) }
+    val extras = remember(initial) {
+        mutableStateListOf<ExtraRow>().apply {
+            initial.extraCosts.forEachIndexed { i, c -> add(ExtraRow(i, c.name, Format.input(c.perKm))) }
+        }
+    }
+    var nextKey by remember(initial) { mutableStateOf(initial.extraCosts.size) }
+
+    // Linha toda vazia é ignorada; sem nome vira "Outro custo"; valor inválido bloqueia o Salvar.
+    val extraCosts: List<ExtraKmCost>? = extras
+        .filterNot { it.name.isBlank() && it.value.isBlank() }
+        .map { row ->
+            val v = Format.parse(row.value)?.takeIf { it >= 0 } ?: return@map null
+            ExtraKmCost(row.name.trim().ifEmpty { "Outro custo" }, v)
+        }
+        .let { list -> if (list.any { it == null }) null else list.filterNotNull() }
 
     val fuelV = Format.parse(fuel)
     val kmlV = Format.parse(kmPerLiter)
     val maintV = Format.parse(maintenance)
     val depV = Format.parse(depreciation)
     val config = if (fuelV != null && kmlV != null && kmlV > 0 && maintV != null && depV != null &&
-        fuelV >= 0 && maintV >= 0 && depV >= 0
+        fuelV >= 0 && maintV >= 0 && depV >= 0 && extraCosts != null
     ) {
-        VehicleCostConfig(fuelType, fuelV, kmlV, maintV, depV)
+        VehicleCostConfig(fuelType, fuelV, kmlV, maintV, depV, extraCosts)
     } else {
         null
     }
@@ -125,6 +154,45 @@ private fun VehicleForm(initial: VehicleCostConfig, modifier: Modifier, onSave: 
         NumberField("Manutenção por km", maintenance, { maintenance = it }, suffix = "R$/km")
         NumberField("Depreciação por km", depreciation, { depreciation = it }, suffix = "R$/km")
 
+        Text("Outros custos por km", style = MaterialTheme.typography.labelLarge)
+        extras.forEachIndexed { i, row ->
+            key(row.key) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = row.name,
+                    onValueChange = { extras[i] = row.copy(name = it) },
+                    label = { Text("Nome") },
+                    placeholder = { Text("Ex.: pneus") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                NumberField(
+                    "Valor",
+                    row.value,
+                    { extras[i] = row.copy(value = it) },
+                    modifier = Modifier.weight(1f),
+                    suffix = "R$/km",
+                )
+                IconButton(onClick = { extras.removeAt(i) }) {
+                    Icon(Icons.Filled.Delete, contentDescription = "Remover custo")
+                }
+            }
+            }
+        }
+        OutlinedButton(
+            onClick = { extras.add(ExtraRow(nextKey++, "", "")) },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(Icons.Filled.Add, contentDescription = null)
+            Text("Adicionar custo por km", Modifier.padding(start = 8.dp))
+        }
+        if (extras.isEmpty()) {
+            Text(
+                "Ex.: pneus, seguro, IPVA, aluguel do carro — divida o valor pelos km rodados no período.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Custo por km", style = MaterialTheme.typography.labelLarge)
@@ -139,7 +207,8 @@ private fun VehicleForm(initial: VehicleCostConfig, modifier: Modifier, onSave: 
                     Text(
                         "${if (fuelType.isElectric) "Energia" else fuelType.label} ${Format.perKm(config.energyCostPerKm)} + " +
                             "manutenção ${Format.perKm(config.maintenancePerKm)} + " +
-                            "depreciação ${Format.perKm(config.depreciationPerKm)}",
+                            "depreciação ${Format.perKm(config.depreciationPerKm)}" +
+                            config.extraCosts.joinToString("") { " + ${it.name} ${Format.perKm(it.perKm)}" },
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
