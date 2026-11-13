@@ -3,11 +3,11 @@ package br.com.mapp.ui
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -34,16 +34,17 @@ object Routes {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { MappTheme { MappNavHost() } }
+        // Barras do sistema no mesmo navy do app.
+        @Suppress("DEPRECATION")
+        window.statusBarColor = 0xFF0A1C24.toInt()
+        @Suppress("DEPRECATION")
+        window.navigationBarColor = 0xFF14102A.toInt()
+        setContent {
+            MappTheme {
+                Box(Modifier.fillMaxSize().background(MappColors.backgroundBrush)) { MappNavHost() }
+            }
+        }
     }
-}
-
-@Composable
-fun MappTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme(),
-        content = content,
-    )
 }
 
 @Composable

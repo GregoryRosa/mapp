@@ -90,18 +90,9 @@ class QuickBubbleView(
 
     // ------------------------------------------------------------------ bolha
 
-    private val bubble = TextView(context).apply {
-        text = "M"
+    private val bubble = LogoBubble(context, ringBg = RING_BG).apply {
         contentDescription = "MApp – ajustes rápidos"
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
-        typeface = Typeface.DEFAULT_BOLD
-        setTextColor(NEON_GREEN)
-        gravity = Gravity.CENTER
-        background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(RING_BG)
-            setStroke(dp(3), NEON_GREEN)
-        }
+        statusColor = NEON_GREEN
         elevation = dp(6).toFloat()
         isClickable = true
         setOnClickListener { onBubbleTap() }
@@ -724,18 +715,15 @@ class QuickBubbleView(
     /** Laranja = ligado sem corrida; verde = em corrida; cinza com "!" = Acessibilidade desligada. */
     private fun paintBubble() {
         val ok = reader.connected
-        bubble.text = if (ok) "M" else "M!"
         val color = when {
             !ok -> GRAY_LIGHT
             shift?.pendingTrip != null -> NEON_GREEN // em corrida
             else -> NEON_ORANGE                      // ligado, sem corrida
         }
-        bubble.setTextColor(color)
-        val running = shift?.paused == false
-        (bubble.background as? GradientDrawable)?.apply {
-            setColor(RING_BG)
-            setStroke(dp(if (running) 4 else 3), color) // anel mais grosso = jornada rodando
-        }
+        bubble.statusColor = color
+        bubble.warning = !ok
+        bubble.thickRing = shift?.paused == false // anel mais grosso = jornada rodando
+        bubble.invalidate()
     }
 
     private fun refreshVoice() {
@@ -1143,5 +1131,82 @@ private class OutlineLabel(context: Context, sizePx: Float, outlinePx: Float) : 
         canvas.drawText(text, x, y, outline)
         fill.color = color
         canvas.drawText(text, x, y, fill)
+    }
+}
+
+/**
+ * Ícone flutuante com o logo do MApp: "M" em forma de rota (gradiente verde-água → lilás) com
+ * ponto de partida e de chegada, mesmo desenho do app (`ui/MappLogo`). O anel mostra o status:
+ * laranja = ligado sem corrida, verde = em corrida, cinza + "!" = leitor desligado.
+ */
+private class LogoBubble(context: Context, private val ringBg: Int) : View(context) {
+    var statusColor: Int = 0xFF00E64D.toInt()
+    var warning = false
+    var thickRing = false
+
+    private val teal = 0xFF5EE6D8.toInt()
+    private val lilac = 0xFFB59CFF.toInt()
+    private val gray = 0xFF9E9E9E.toInt()
+    private val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val dot = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val badge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        typeface = Typeface.DEFAULT_BOLD
+        textAlign = Paint.Align.CENTER
+    }
+    private val path = android.graphics.Path()
+
+    override fun onDraw(canvas: Canvas) {
+        val side = minOf(width, height).toFloat()
+        if (side <= 0f) return
+        val u = side / 24f
+        val cx = width / 2f
+        val cy = height / 2f
+        canvas.save()
+        canvas.translate(cx - side / 2, cy - side / 2)
+
+        bg.shader = android.graphics.RadialGradient(
+            side * 0.35f, side * 0.3f, side * 0.75f, 0xFF16404A.toInt(), ringBg, android.graphics.Shader.TileMode.CLAMP,
+        )
+        canvas.drawCircle(side / 2, side / 2, side / 2, bg)
+        ring.color = statusColor
+        ring.strokeWidth = u * if (thickRing) 2.2f else 1.5f
+        canvas.drawCircle(side / 2, side / 2, side / 2 - ring.strokeWidth / 2, ring)
+
+        val c1 = if (warning) gray else teal
+        val c2 = if (warning) gray else lilac
+        line.strokeWidth = 2.4f * u
+        line.shader = android.graphics.LinearGradient(
+            6.5f * u, 7.5f * u, 17.5f * u, 17.5f * u, c1, c2, android.graphics.Shader.TileMode.CLAMP,
+        )
+        path.reset()
+        path.moveTo(6.5f * u, 17f * u)
+        path.lineTo(6.5f * u, 7.5f * u)
+        path.lineTo(12f * u, 13.5f * u)
+        path.lineTo(17.5f * u, 7.5f * u)
+        path.lineTo(17.5f * u, 15f * u)
+        canvas.drawPath(path, line)
+
+        dot.style = Paint.Style.STROKE
+        dot.strokeWidth = 1.1f * u
+        dot.color = c1
+        canvas.drawCircle(6.5f * u, 17.6f * u, 1.6f * u, dot)
+        dot.style = Paint.Style.FILL
+        dot.color = c2
+        canvas.drawCircle(17.5f * u, 17.2f * u, 1.9f * u, dot)
+
+        if (warning) {
+            dot.color = 0xFFFFB300.toInt()
+            canvas.drawCircle(19.5f * u, 4.5f * u, 3.6f * u, dot)
+            badge.color = 0xFF000000.toInt()
+            badge.textSize = 6f * u
+            canvas.drawText("!", 19.5f * u, 6.6f * u, badge)
+        }
+        canvas.restore()
     }
 }
