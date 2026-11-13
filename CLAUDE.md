@@ -16,7 +16,7 @@ Documentação completa (pesquisa, requisitos, arquitetura, roadmap): **README.m
 | `core/engine/OfferEvaluator` | `evaluate(raw, profile, cost, zones, pickup, dropoff)` | overlay |
 | `data/DataModule.create(context): Repositories` | implementações de `core/repo/*` | `MappApp.repos` |
 | `overlay/OverlayService` | `companion fun start(ctx)`, `stop(ctx)` | ui/HomeScreen |
-| `reader/OfferAccessibilityService` | serviço declarado no manifest | sistema |
+| `reader/OfferAccessibilityService` | serviço declarado no manifest; `windowContext` (contexto do serviço conectado, ou null) para abrir cartão/ícone como `TYPE_ACCESSIBILITY_OVERLAY` — a Uber esconde `TYPE_APPLICATION_OVERLAY` durante a solicitação | sistema; overlay/OverlayService (`OverlayHost`) |
 | `reader/ReaderStatus` | `state`, `lines()`, `report(ctx)`, `versionOf(ctx)` (diagnóstico, só em memória) | ui/HomeScreen, overlay/QuickBubbleView |
 | `core/card/CardLayout` + `CardValues` | linhas do cabeçalho do cartão (`place`, `remove`, `withFont` — tamanho das letras por linha 70–160%, `encode/decode`), valores e cores por informação | overlay/CardHeaderView, ui/CardStyleScreen |
 | `overlay/OverlayPrefs` | `cardLayout(ctx)`, `setCardLayout(ctx, l)` (estilo do cartão salvo) | overlay, ui/CardStyleScreen |
