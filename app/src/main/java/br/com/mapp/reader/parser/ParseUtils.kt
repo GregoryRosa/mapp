@@ -58,8 +58,31 @@ object ParseUtils {
     // ---------------------------------------------------------------- texto vindo de imagem (OCR)
 
     private const val OCR_SEPARATORS = """[.·•*«»°:;,|\-–—]*"""
-    // Ícone do cartão lido como letra antes do número: "O] 6 min", "[0] 29 minutos", "(E) 9 min".
-    private val OCR_LEADING_ICON = Regex("""^[\[(]?[OoQ0@©eE+][\])]?\s*(?=\d+\s*(?:min|h\b|km))""")
+    // Ícone do cartão lido como sinal/letra antes do número, no começo da linha: "O] 6 min",
+    // "[0] 29 minutos", "(E) 9 min", "a11 minutos", "&9 min". Não tira l/I/| (são "1": "l6 km").
+    private val OCR_LEADING_ICON = Regex(
+        """^(?:[\[(][^\])]{0,2}[\])]|[^\s\dlI|][\])]?)\s*(?=\d+(?:[.,]\d+)?\s*(?:min|h\b|km))""",
+        RegexOption.IGNORE_CASE,
+    )
+    // Unidade mal lida logo depois do número: "11 mín", "11 rnin", "11 mlnutos", "11 minut0s", "3.4 krn".
+    private const val DIGITISH = """[\dOoQDlI|SsBZz]"""
+    private val OCR_MIN_UNIT = Regex(
+        """((?<![\p{L}\d.,])""" + DIGITISH + """{1,3}\s?)(?:m|rn)[iIl1íìîïı|]n(?:([uúü]t[oO0]s?)|(s))?(?![\p{L}])""",
+    )
+    private val OCR_KM_UNIT = Regex("""(""" + DIGITISH + """\s?)[kK](?:rn|RN)(?![\p{L}\d])""")
+    // Número de tempo/distância com letra no lugar de dígito: "1O min" (10), "ll minutos" (11), "B min" (8),
+    // "S.4 km" (5.4). Só o número colado na unidade; nunca endereço nem valor em R$.
+    private val OCR_LOOKALIKE_MIN = Regex(
+        """(?<![\p{L}\d.,$])(""" + DIGITISH + """{1,3})(?=\s?(?:minutos|minuto|mins|min)(?![\p{L}]))""",
+    )
+    private val OCR_LOOKALIKE_KM = Regex(
+        """(?<![\p{L}\d.,$\-])(""" + DIGITISH + """{1,3}(?:[.,]""" + DIGITISH + """{1,2})?)(?=\s?[kK][mM](?![\p{L}\d]))""",
+    )
+    private val LOOKALIKE_DIGITS = mapOf(
+        'O' to '0', 'o' to '0', 'Q' to '0', 'D' to '0',
+        'l' to '1', 'I' to '1', '|' to '1',
+        'Z' to '2', 'z' to '2', 'S' to '5', 's' to '5', 'B' to '8',
+    )
     // "6 min1.6km", "9 min.3.9 km", "29 minutos·14.8km": o "•" entre tempo e distância some ou vira outro sinal.
     private val OCR_AFTER_MIN = Regex(
         """(\d\s*(?:minutos|minuto|mins|min))\s*""" + OCR_SEPARATORS + """\s*(?=\d)""",
@@ -82,12 +105,29 @@ object ParseUtils {
     /** Conserta os erros mais comuns do OCR em linhas de tempo/distância. Não mexe nas outras linhas. */
     fun cleanOcrLine(text: String): String {
         var t = normalize(text)
+        t = OCR_MIN_UNIT.replace(t) { m ->
+            m.groupValues[1] + "min" + when {
+                m.groupValues[2].isNotEmpty() -> "uto" + (if (m.groupValues[2].endsWith("s")) "s" else "")
+                m.groupValues[3].isNotEmpty() -> "s"
+                else -> ""
+            }
+        }
+        t = OCR_KM_UNIT.replace(t) { it.groupValues[1] + "km" }
         t = OCR_LEADING_ICON.replace(t, "")
         t = OCR_LEADING_PUNCT.replace(t, "")
         t = OCR_L_AS_ONE.replace(t, "1")
+        t = OCR_LOOKALIKE_MIN.replace(t) { lookalikeNumber(it.value) }
+        t = OCR_LOOKALIKE_KM.replace(t) { lookalikeNumber(it.value) }
         t = OCR_AFTER_MIN.replace(t) { it.groupValues[1] + " • " }
         t = OCR_AFTER_KM.replace(t) { it.groupValues[1] + " • " }
         return restoreLostDecimal(t)
+    }
+
+    /** "1O" → "10", "ll" → "11", "B" → "8". Sem letra parecida, ou só zeros (ícone "O"): fica como está. */
+    private fun lookalikeNumber(token: String): String {
+        if (token.none { it in LOOKALIKE_DIGITS }) return token
+        val digits = token.map { LOOKALIKE_DIGITS[it] ?: it }.joinToString("")
+        return if (digits.all { it == '0' || it == '.' || it == ',' }) token else digits
     }
 
     /**

@@ -98,6 +98,18 @@ class CardLayoutTest {
     }
 
     @Test
+    fun `tempo estimado aparece com til`() {
+        // Corrida de 13/11 07:03: tempo da viagem ilegível → estimado pela velocidade da busca.
+        val raw = RawOffer(Platform.UBER, 10.08, tripKm = 3.4, tripMin = null, pickupKm = 1.3, pickupMin = 4)
+        val o = OfferEvaluator.evaluate(raw, FilterProfile(), VehicleCostConfig())
+        assertEquals("~R$ 42/h", CardValues.full(PER_HOUR, o))
+        assertEquals("~42", CardValues.compact(PER_HOUR, o))
+        assertEquals("~14 min", CardValues.full(TOTAL_TIME, o))
+        assertEquals("2,14", CardValues.compact(PER_KM, o)) // km lidos: sem til
+        assertEquals(false, CardValues.full(NET_PROFIT, o).contains("~"))
+    }
+
+    @Test
     fun `tamanho das letras salva, limita e le texto antigo`() {
         val l = def.withFont(CardLine.TOP, 130).withFont(CardLine.BOTTOM, 500)
         assertEquals(130, l.topFont)

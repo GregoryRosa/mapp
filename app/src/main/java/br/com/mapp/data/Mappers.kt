@@ -1,5 +1,6 @@
 package br.com.mapp.data
 
+import br.com.mapp.core.engine.OfferEvaluator
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.GeoPoint
@@ -135,7 +136,8 @@ fun OfferEntity.toRecord(): OfferRecord {
     )
     val evaluated = EvaluatedOffer(
         raw = raw,
-        metrics = OfferMetrics(totalKm, totalMin, perKm, perHour, netProfit, netPerKm),
+        // Gravadas com trecho incompleto contado como zero (R$/h absurdo): refaz com a estimativa.
+        metrics = OfferEvaluator.repaired(raw, OfferMetrics(totalKm, totalMin, perKm, perHour, netProfit, netPerKm)),
         signal = enumOrNull<Signal>(signal) ?: Signal.YELLOW,
         reasons = if (reasons.isEmpty()) emptyList() else reasons.split(REASON_SEPARATOR),
         pickup = point(pickupLat, pickupLon),
