@@ -24,7 +24,9 @@ import br.com.mapp.core.bus.OfferBus
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.RawOffer
+import br.com.mapp.core.model.TripEvent
 import br.com.mapp.core.model.TripStage
+import br.com.mapp.core.shift.TripMatcher
 import br.com.mapp.core.model.Zone
 import br.com.mapp.core.model.ZoneHit
 import br.com.mapp.core.model.ZoneType
@@ -84,6 +86,8 @@ class OverlayService : LifecycleService() {
     private var lastFinishedAt = 0L
     /** Houve aceite automático desde a última corrida finalizada? */
     private var acceptedSinceFinish = false
+    /** Qual oferta foi aceita: pelo nome do passageiro na tela (vale para corrida aceita durante outra). */
+    private val matcher = TripMatcher<RawOffer>()
     private val odometer = Odometer()
 
     override fun onCreate() {
@@ -186,6 +190,7 @@ class OverlayService : LifecycleService() {
         override fun endShift() {
             val ended = ShiftTracker.end(this@OverlayService, costPerKm) ?: return
             countedKey = null
+            matcher.reset()
             val s = ShiftMath.summary(ended, costPerKm, System.currentTimeMillis())
             toast("Jornada encerrada: ${s.trips} corridas · lucro ${ShiftMath.money(s.profit)}")
         }
@@ -194,22 +199,14 @@ class OverlayService : LifecycleService() {
 
         override fun finishPendingTrip() = finishPending(auto = false)
 
-        override fun cancelPendingTrip() {
-            val pending = ShiftTracker.current(this@OverlayService).value?.pendingTrip ?: return
-            ShiftTracker.cancelPending(this@OverlayService)
-            countedOffer?.let { markAccepted(it, null) }
-            countedOffer = null
-            countedKey = null
-            acceptedSinceFinish = false
-            refreshCountButton()
-            toast("Corrida cancelada: ${ShiftMath.money(pending.price)} fora do lucro")
-        }
+        override fun cancelPendingTrip() = cancelPending(auto = false)
 
         override fun undoLastTrip() {
             val shift = ShiftTracker.current(this@OverlayService).value ?: return
             if (shift.trips.isEmpty()) { toast("Nenhuma corrida para desfazer"); return }
             ShiftTracker.undoLastTrip(this@OverlayService)
             countedOffer?.let { markAccepted(it, null) }
+            countedKey?.let { matcher.forget(it) }
             countedOffer = null
             countedKey = null
             refreshCountButton()
@@ -306,6 +303,7 @@ class OverlayService : LifecycleService() {
         val trip = ShiftTrip.from(raw.copy(category = categoryFor(raw)), System.currentTimeMillis(), finished = alreadyFinished)
         ShiftTracker.addTrip(this, trip)
         countedKey = key
+        matcher.markCounted(key)
         countedOffer = offer
         markAccepted(offer, true)
         refreshCountButton()
@@ -321,31 +319,40 @@ class OverlayService : LifecycleService() {
     }
 
     /**
-     * Jornada automática: "Encontro com…" na tela = a última oferta foi aceita → conta;
-     * "Como foi a viagem?" = corrida finalizada.
+     * Jornada automática pelas telas depois da oferta:
+     * - "Encontro com <nome>" / "Destino de <nome>" com passageiro NOVO = a última oferta foi aceita →
+     *   conta (inclusive a aceita durante outra viagem, contada quando o novo nome aparece);
+     * - "Como foi a viagem?" = a corrida mais antiga em andamento terminou.
      */
-    private fun onTripStage(stage: TripStage) {
-        if (stage == TripStage.ACCEPTED) {
+    private fun onTripStage(event: TripEvent) {
+        val now = System.currentTimeMillis()
+        val match = matcher.onStage(event, now)
+        val key = match.count
+        val offer = lastOffer?.takeIf { key != null && it.raw.key() == key }
+        if (offer != null) {
             // Histórico: marca a oferta como aceita mesmo sem jornada aberta.
-            val offer = lastOffer
-            if (offer != null && System.currentTimeMillis() - lastOfferSeenAt <= ACCEPT_WINDOW_MS) markAccepted(offer, true)
+            markAccepted(offer, true)
+            matcher.markCounted(key!!)
         }
         if (ShiftTracker.current(this).value == null) return
-        when (stage) {
-            TripStage.ACCEPTED -> {
-                val offer = lastOffer ?: return
-                val fresh = System.currentTimeMillis() - lastOfferSeenAt <= ACCEPT_WINDOW_MS
-                if (offer.raw.key() == countedKey) return // já contada (ex.: +1)
-                if (!fresh) {
-                    toast("Vi corrida aceita, mas a última oferta lida é antiga: toque +1 se for o caso")
-                    return
+        // "Encontro com <outro>" sem o embarque da busca anterior: ela foi cancelada.
+        if (match.cancelledPickup) cancelPending(auto = true)
+        if (match.started && offer == null) {
+            event.passenger?.let { toast("Viagem iniciada ✓ ${it.replaceFirstChar { c -> c.uppercase() }} embarcou") }
+        }
+        when (event.stage) {
+            TripStage.ACCEPTED, TripStage.ON_TRIP -> {
+                if (offer != null) {
+                    if (offer.raw.key() == countedKey) return // já contada (ex.: +1)
+                    acceptedSinceFinish = true
+                    countOffer(offer, auto = true)
+                } else if (match.newRide && event.stage == TripStage.ACCEPTED && lastOffer?.raw?.key() != countedKey) {
+                    toast("Vi corrida aceita, mas não li a oferta dela: toque +1 se for o caso")
                 }
-                acceptedSinceFinish = true
-                countOffer(offer, auto = true)
             }
             TripStage.FINISHED -> {
-                lastFinishedAt = System.currentTimeMillis()
-                if (ShiftTracker.current(this).value?.pendingTrip != null) {
+                lastFinishedAt = now
+                if (ShiftTracker.current(this).value?.nextToFinish != null) {
                     finishPending(auto = true)
                 } else {
                     toast("Corrida finalizada, mas não vi o aceite: toque +1 Contar última se for o caso")
@@ -355,9 +362,25 @@ class OverlayService : LifecycleService() {
         }
     }
 
+    /** Corrida aceita que não aconteceu (✕ no painel, ou outra busca começou sem este embarque). */
+    private fun cancelPending(auto: Boolean) {
+        val pending = ShiftTracker.current(this).value?.pendingTrip ?: return
+        ShiftTracker.cancelPending(this)
+        countedOffer?.let { markAccepted(it, null) }
+        countedKey?.let { matcher.forget(it) }
+        countedOffer = null
+        countedKey = null
+        acceptedSinceFinish = false
+        refreshCountButton()
+        toast(
+            if (auto) "Busca anterior cancelada: ${ShiftMath.money(pending.price)} fora da jornada"
+            else "Corrida cancelada: ${ShiftMath.money(pending.price)} fora do lucro",
+        )
+    }
+
     /** Corrida em andamento terminou: o valor entra no ganho/lucro do dia. */
     private fun finishPending(auto: Boolean) {
-        val pending = ShiftTracker.current(this).value?.pendingTrip ?: run {
+        val pending = ShiftTracker.current(this).value?.nextToFinish ?: run {
             if (!auto) toast("Nenhuma corrida em andamento")
             return
         }
@@ -443,6 +466,7 @@ class OverlayService : LifecycleService() {
         // Endereço lido depois (quadro mais completo) não é oferta nova: nada de repetir a voz.
         val key = offer.raw.key()
         lastOfferSeenAt = System.currentTimeMillis()
+        matcher.offerSeen(key, lastOfferSeenAt)
         if (lastOffer?.raw?.key() != key) {
             lastOffer = offer
             pushShift()
@@ -555,8 +579,6 @@ class OverlayService : LifecycleService() {
         private const val ACTION_STOP = "br.com.mapp.overlay.STOP"
         private const val SHIFT_TICK_MS = 30_000L
         private const val PIN_FIX_MS = 4_000L
-        /** Aceite automático só vale para oferta vista há até 90 s (a tela de oferta some ao aceitar). */
-        private const val ACCEPT_WINDOW_MS = 90_000L
 
         private val _running = MutableStateFlow(false)
         /** true enquanto o copiloto (serviço) está ativo — a tela inicial mostra o estado. */

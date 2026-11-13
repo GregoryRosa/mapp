@@ -20,7 +20,7 @@ import br.com.mapp.reader.parser.OcrLayout
 import br.com.mapp.reader.parser.OfferParsers
 import br.com.mapp.reader.parser.TripScreens
 import br.com.mapp.reader.parser.TripStageTracker
-import br.com.mapp.core.model.TripStage
+import br.com.mapp.core.model.TripEvent
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
@@ -238,7 +238,7 @@ class OfferAccessibilityService : AccessibilityService() {
     }
 
     /** Main thread: tela de corrida aceita/finalizada vira evento para a jornada. */
-    private fun onStage(stage: TripStage?) {
+    private fun onStage(stage: TripEvent?) {
         safely {
             stages.onScreen(stage, SystemClock.elapsedRealtime())?.let {
                 if (debugCapture) Log.d(TAG, "Etapa da corrida: $it")

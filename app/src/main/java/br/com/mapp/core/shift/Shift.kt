@@ -73,9 +73,15 @@ data class Shift(
 
     private val pendingIndex: Int get() = trips.indexOfLast { !it.finished }
 
-    /** Corrida em andamento terminou: passa a contar no ganho/lucro. */
+    /**
+     * Próxima a terminar: a aceita mais ANTIGA ainda aberta. Com corrida aceita durante outra viagem
+     * há duas abertas, e a que termina primeiro é a que já estava em andamento.
+     */
+    val nextToFinish: ShiftTrip? get() = trips.firstOrNull { !it.finished }
+
+    /** Corrida em andamento terminou ([nextToFinish]): passa a contar no ganho/lucro. */
     fun finishPending(): Shift {
-        val i = pendingIndex
+        val i = trips.indexOfFirst { !it.finished }
         if (i < 0) return this
         return copy(trips = trips.mapIndexed { j, t -> if (j == i) t.copy(finished = true) else t })
     }

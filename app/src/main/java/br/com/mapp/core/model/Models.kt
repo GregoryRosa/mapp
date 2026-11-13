@@ -102,9 +102,17 @@ enum class Signal { GREEN, YELLOW, RED }
 enum class TripStage {
     /** Corrida aceita: indo buscar o passageiro (Uber: "Encontro com <nome>"). */
     ACCEPTED,
+    /** Passageiro a bordo (Uber: "Destino de <nome>"). */
+    ON_TRIP,
     /** Corrida encerrada (Uber: "Como foi a viagem?" / "Avaliar usuário"). */
     FINISHED,
 }
+
+/**
+ * Etapa lida na tela + primeiro nome do passageiro, em minúsculas e sem acento ("caio"), quando a
+ * tela mostra (null = não leu). Nome novo = corrida nova, mesmo aceita durante outra viagem.
+ */
+data class TripEvent(val stage: TripStage, val passenger: String? = null)
 
 enum class PointRole { PICKUP, DROPOFF }
 
