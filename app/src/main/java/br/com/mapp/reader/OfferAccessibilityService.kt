@@ -233,8 +233,9 @@ class OfferAccessibilityService : AccessibilityService() {
             }
             val parsed = if (texts.isEmpty()) null else OfferParsers.forPlatform(platform).parse(texts)
             if (parsed == null && texts.isNotEmpty()) {
-                val stage = TripScreens.detect(texts)
-                handler.post { onStage(stage) }
+                // Texto: só o que ACHOU conta (ele quase nunca traz as telas da Uber; um "nada" daqui
+                // não pode descartar a etapa que a imagem acabou de ler).
+                TripScreens.detect(texts)?.let { stage -> handler.post { onStage(stage.copy(platform = platform)) } }
             }
             ReaderStatus.onRead(ReaderStatus.SOURCE_TREE, platform.label, texts, parsed?.let(::summary))
             lastPlatform = platform
@@ -244,13 +245,18 @@ class OfferAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Main thread: tela de corrida aceita/finalizada vira evento para a jornada. */
+    /**
+     * Main thread: tela de corrida aceita/finalizada/inicial vira evento para a jornada. [stage] null =
+     * a imagem não viu nenhuma dessas telas (ou o app de corrida saiu da frente).
+     */
     private fun onStage(stage: TripEvent?) {
         safely {
-            stages.onScreen(stage, SystemClock.elapsedRealtime())?.let {
-                if (debugCapture) Log.d(TAG, "Etapa da corrida: $it")
-                OfferBus.publishTripStage(it)
+            for (event in stages.read(stage, SystemClock.elapsedRealtime())) {
+                if (debugCapture) Log.d(TAG, "Etapa da corrida: $event")
+                OfferBus.publishTripStage(event)
             }
+            // Etapa lida uma vez: confere logo (aceite/fim rápido some da tela em 1–2 s).
+            if (stages.hasPending) requestOcrSoon(screenChanged = true, delayMs = OCR_CONFIRM_MS)
         }
     }
 
@@ -274,13 +280,15 @@ class OfferAccessibilityService : AccessibilityService() {
     }
 
     /** Evento do app de corrida: se a próxima leitura por imagem está longe, traz para perto. */
-    private fun requestOcrSoon(screenChanged: Boolean) {
+    private fun requestOcrSoon(screenChanged: Boolean, delayMs: Long = OCR_AFTER_EVENT_MS) {
         if (ocr == null || ocrBusy || !OfferBus.hasListeners) return
         // Com a oferta já no cartão, a animação da contagem não deve disparar OCR sem parar;
         // só troca de tela (oferta aceita/recusada/sumiu) adianta a conferência.
         if (tracker.shown != null && !screenChanged) return
         val now = SystemClock.elapsedRealtime()
-        val due = maxOf(now + OCR_AFTER_EVENT_MS, lastCycleAt + OCR_MIN_INTERVAL_MS)
+        // Troca de tela: intervalo menor (aceite, embarque e fim podem ficar na tela só 1–2 s).
+        val gap = if (screenChanged) OCR_FAST_INTERVAL_MS else OCR_MIN_INTERVAL_MS
+        val due = maxOf(now + delayMs, lastCycleAt + gap)
         if (due + 50L < ocrDueAt) scheduleTick(due - now)
     }
 
@@ -301,7 +309,7 @@ class OfferAccessibilityService : AccessibilityService() {
         // O texto já entregou a oferta completa: não precisa da imagem agora.
         if (tracker.treeHasIt) return OCR_POLL_MS
         val sinceLast = now - lastCycleAt
-        if (sinceLast < OCR_MIN_INTERVAL_MS) return OCR_MIN_INTERVAL_MS - sinceLast
+        if (sinceLast < OCR_FAST_INTERVAL_MS) return OCR_FAST_INTERVAL_MS - sinceLast
         return startCycle(engine, now)
     }
 
@@ -311,9 +319,11 @@ class OfferAccessibilityService : AccessibilityService() {
         ReaderStatus.onWindows(scene.summary)
         val target = scene.target
         if (target == null) {
-            // Nenhuma janela de app de corrida na tela: uma oferta lida por imagem não está mais lá.
+            // Nenhuma janela de app de corrida na tela: uma oferta lida por imagem não está mais lá,
+            // e uma etapa lida uma vez (Waze abriu logo depois do aceite) já não vai se repetir.
             val wasShown = tracker.shownByImage
             tracker.onNoTarget()
+            onStage(null)
             return if (wasShown) OCR_POLL_MS else OCR_NO_TARGET_MS
         }
         lastCycleAt = now
@@ -367,10 +377,10 @@ class OfferAccessibilityService : AccessibilityService() {
                     val (texts, offer) = try {
                         val lines = OcrLayout.toTexts(result.lines, result.excluded)
                         val parsed = if (lines.isEmpty()) null else parser.parse(lines, fromOcr = true)
-                        if (parsed == null) {
-                            val stage = TripScreens.detect(lines)
-                            handler.post { onStage(stage) }
-                        }
+                        // Toda leitura da imagem informa a etapa (null = nenhuma): é o que descarta ou
+                        // confirma uma etapa lida uma vez.
+                        val stage = if (parsed == null) TripScreens.detect(lines, fromOcr = true)?.copy(platform = platform) else null
+                        handler.post { onStage(stage) }
                         ReaderStatus.onRead(
                             ReaderStatus.SOURCE_OCR + "/" + mode.label,
                             platform.label,
@@ -582,6 +592,10 @@ class OfferAccessibilityService : AccessibilityService() {
         private const val OCR_IDLE_MS = 5_000L
         private const val OCR_AFTER_EVENT_MS = 250L
         private const val OCR_MIN_INTERVAL_MS = 700L
+
+        /** Troca de tela / etapa esperando 2ª leitura: o sistema aceita captura a cada ~1/3 s. */
+        private const val OCR_FAST_INTERVAL_MS = 450L
+        private const val OCR_CONFIRM_MS = 150L
         private const val OCR_BETWEEN_MODES_MS = 400L
         private const val OCR_BUSY_RETRY_MS = 300L
         private const val OCR_TIMEOUT_MS = 6_000L

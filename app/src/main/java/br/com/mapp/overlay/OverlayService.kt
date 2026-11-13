@@ -21,6 +21,7 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import br.com.mapp.MappApp
 import br.com.mapp.core.bus.OfferBus
+import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.RawOffer
@@ -210,6 +211,7 @@ class OverlayService : LifecycleService() {
         override fun undoLastTrip() {
             val shift = ShiftTracker.current(this@OverlayService).value ?: return
             if (shift.trips.isEmpty()) { toast("Nenhuma corrida para desfazer"); return }
+            if (!shift.trips.last().finished) matcher.closedNewest()
             ShiftTracker.undoLastTrip(this@OverlayService)
             countedOffer?.let { markAccepted(it, null) }
             countedKey?.let { matcher.forget(it) }
@@ -309,7 +311,8 @@ class OverlayService : LifecycleService() {
         val trip = ShiftTrip.from(raw.copy(category = categoryFor(raw)), System.currentTimeMillis(), finished = alreadyFinished)
         ShiftTracker.addTrip(this, trip)
         countedKey = key
-        matcher.markCounted(key)
+        // +1 com a corrida em andamento: o leitor passa a acompanhar o fim dela também.
+        if (!auto && !alreadyFinished) matcher.manualCount(key, System.currentTimeMillis()) else matcher.markCounted(key)
         countedOffer = offer
         markAccepted(offer, true)
         refreshCountButton()
@@ -327,8 +330,11 @@ class OverlayService : LifecycleService() {
     /**
      * Jornada automática pelas telas depois da oferta:
      * - "Encontro com <nome>" / "Destino de <nome>" com passageiro NOVO = a última oferta foi aceita →
-     *   conta (inclusive a aceita durante outra viagem, contada quando o novo nome aparece);
-     * - "Como foi a viagem?" = a corrida mais antiga em andamento terminou.
+     *   conta (inclusive a aceita durante outra viagem, contada quando o novo nome aparece, e a de
+     *   aceite rápido demais, contada no embarque);
+     * - "Como foi a viagem?" = a corrida mais antiga em andamento terminou;
+     * - fim que passou sem ser lido (passageiro novo na tela, ou "Procurando viagens"): o
+     *   [TripMatcher] decide quais corridas abertas terminaram e quais foram canceladas.
      */
     private fun onTripStage(event: TripEvent) {
         val now = System.currentTimeMillis()
@@ -341,8 +347,11 @@ class OverlayService : LifecycleService() {
             matcher.markCounted(key!!)
         }
         if (ShiftTracker.current(this).value == null) return
-        // "Encontro com <outro>" sem o embarque da busca anterior: ela foi cancelada.
-        if (match.cancelledPickup) cancelPending(auto = true)
+        // Corridas que terminaram sem a tela de fim ter sido lida (da mais antiga).
+        repeat(match.finishedUnseen) { finishPending(auto = true, platform = match.platform) }
+        if (match.finishedUnseen > 0) lastFinishedAt = now
+        // Busca sem embarque que saiu da tela cedo demais para ter virado viagem: foi cancelada.
+        if (match.cancelledPickup) cancelPending(auto = true, platform = match.platform)
         if (match.started && offer == null) {
             event.passenger?.let { toast("Viagem iniciada ✓ ${it.replaceFirstChar { c -> c.uppercase() }} embarcou") }
         }
@@ -352,26 +361,31 @@ class OverlayService : LifecycleService() {
                     if (offer.raw.key() == countedKey) return // já contada (ex.: +1)
                     acceptedSinceFinish = true
                     countOffer(offer, auto = true)
-                } else if (match.newRide && event.stage == TripStage.ACCEPTED && lastOffer?.raw?.key() != countedKey) {
-                    toast("Vi corrida aceita, mas não li a oferta dela: toque +1 se for o caso")
+                } else if (match.newRide && lastOffer?.raw?.key() != countedKey) {
+                    toast(
+                        if (event.stage == TripStage.ACCEPTED) "Vi corrida aceita, mas não li a oferta dela: toque +1 se for o caso"
+                        else "Vi passageiro a bordo, mas não li a oferta dela: toque +1 se for o caso",
+                    )
                 }
             }
             TripStage.FINISHED -> {
                 lastFinishedAt = now
-                if (ShiftTracker.current(this).value?.nextToFinish != null) {
-                    finishPending(auto = true)
+                if (ShiftTracker.current(this).value?.nextToFinish(event.platform) != null) {
+                    finishPending(auto = true, platform = event.platform)
                 } else {
                     toast("Corrida finalizada, mas não vi o aceite: toque +1 Contar última se for o caso")
                 }
                 acceptedSinceFinish = false
             }
+            TripStage.IDLE -> Unit // fechamentos já aplicados acima
         }
     }
 
     /** Corrida aceita que não aconteceu (✕ no painel, ou outra busca começou sem este embarque). */
-    private fun cancelPending(auto: Boolean) {
-        val pending = ShiftTracker.current(this).value?.pendingTrip ?: return
-        ShiftTracker.cancelPending(this)
+    private fun cancelPending(auto: Boolean, platform: Platform? = null) {
+        val pending = ShiftTracker.current(this).value?.pendingTrip(platform) ?: return
+        if (!auto) matcher.closedNewest()
+        ShiftTracker.cancelPending(this, platform)
         countedOffer?.let { markAccepted(it, null) }
         countedKey?.let { matcher.forget(it) }
         countedOffer = null
@@ -385,12 +399,13 @@ class OverlayService : LifecycleService() {
     }
 
     /** Corrida em andamento terminou: o valor entra no ganho/lucro do dia. */
-    private fun finishPending(auto: Boolean) {
-        val pending = ShiftTracker.current(this).value?.nextToFinish ?: run {
+    private fun finishPending(auto: Boolean, platform: Platform? = null) {
+        val pending = ShiftTracker.current(this).value?.nextToFinish(platform) ?: run {
             if (!auto) toast("Nenhuma corrida em andamento")
             return
         }
-        ShiftTracker.finishPending(this)
+        if (!auto) matcher.closedOldest()
+        ShiftTracker.finishPending(this, platform)
         toast("Corrida finalizada ✓ +${ShiftMath.money(pending.price)} no lucro")
     }
 
@@ -473,7 +488,15 @@ class OverlayService : LifecycleService() {
         // Endereço lido depois (quadro mais completo) não é oferta nova: nada de repetir a voz.
         val key = offer.raw.key()
         lastOfferSeenAt = System.currentTimeMillis()
-        matcher.offerSeen(key, lastOfferSeenAt)
+        // Km e duração prevista: conferem a tela seguinte e decidem fim × cancelamento não lidos.
+        matcher.offerSeen(
+            key,
+            lastOfferSeenAt,
+            pickupKm = offer.raw.pickupKm,
+            tripKm = offer.raw.tripKm,
+            expectedMs = offer.metrics.totalMin?.let { it * 60_000L },
+            platform = offer.raw.platform,
+        )
         if (lastOffer?.raw?.key() != key) {
             lastOffer = offer
             pushShift()

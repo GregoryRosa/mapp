@@ -2,6 +2,7 @@ package br.com.mapp.overlay
 
 import android.content.Context
 import android.content.SharedPreferences
+import br.com.mapp.core.model.Platform
 import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftCodec
 import br.com.mapp.core.shift.ShiftMath
@@ -79,10 +80,10 @@ object ShiftTracker {
     fun undoLastTrip(ctx: Context) = update(ctx) { it?.undoLastTrip() }
 
     /** Corrida em andamento terminou (entra no lucro). */
-    fun finishPending(ctx: Context) = update(ctx) { it?.finishPending() }
+    fun finishPending(ctx: Context, platform: Platform? = null) = update(ctx) { it?.finishPending(platform) }
 
     /** Corrida em andamento foi cancelada (sai da jornada). */
-    fun cancelPending(ctx: Context) = update(ctx) { it?.cancelPending() }
+    fun cancelPending(ctx: Context, platform: Platform? = null) = update(ctx) { it?.cancelPending(platform) }
 
     /**
      * Marcação manual no histórico de ofertas: coloca/tira a corrida na jornada em que a oferta

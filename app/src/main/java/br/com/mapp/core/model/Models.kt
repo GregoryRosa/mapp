@@ -137,13 +137,27 @@ enum class TripStage {
     ON_TRIP,
     /** Corrida encerrada (Uber: "Como foi a viagem?" / "Avaliar usuário"). */
     FINISHED,
+    /**
+     * Sem corrida: tela inicial esperando chamada (Uber: "Procurando viagens"). Corrida que ainda
+     * estava aberta terminou sem a tela de fim ter sido lida (só pela imagem — o texto mistura a
+     * tela de fundo).
+     */
+    IDLE,
 }
 
 /**
  * Etapa lida na tela + primeiro nome do passageiro, em minúsculas e sem acento ("caio"), quando a
  * tela mostra (null = não leu). Nome novo = corrida nova, mesmo aceita durante outra viagem.
+ * [km] = distância que a tela mostra até a busca/destino ("2 min · 0,9 km"), para conferir se a
+ * oferta contada combina com a corrida. [platform] = app da tela.
  */
-data class TripEvent(val stage: TripStage, val passenger: String? = null)
+data class TripEvent(
+    val stage: TripStage,
+    val passenger: String? = null,
+    val km: Double? = null,
+    /** App em que a tela foi lida: a tela inicial da Uber não fecha corrida da 99. */
+    val platform: Platform? = null,
+)
 
 enum class PointRole { PICKUP, DROPOFF }
 
