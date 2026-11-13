@@ -26,6 +26,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -169,6 +170,18 @@ fun CardStyleScreen(onBack: () -> Unit) {
                         }
                     }
 
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Tamanho das letras", fontWeight = FontWeight.SemiBold)
+                            FontStepper("Linha de cima", layout.topFont) { update(layout.withFont(CardLine.TOP, it)) }
+                            FontStepper("Números grandes", layout.bottomFont) { update(layout.withFont(CardLine.BOTTOM, it)) }
+                            Text(
+                                "Os números de baixo diminuem sozinhos se não couberem no cartão.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+
                     CardLine.entries.forEach { line ->
                         val items = layout.line(line)
                         Row(Modifier.fillMaxWidth()) {
@@ -307,3 +320,20 @@ private val SAMPLES = listOf(
     "Média" to RawOffer(Platform.NINETY_NINE, 21.90, tripKm = 9.5, tripMin = 22, pickupKm = 2.1, pickupMin = 6, passengerRating = 4.85),
     "Longa" to RawOffer(Platform.UBER, 29.20, tripKm = 22.0, tripMin = 45, pickupKm = 5.8, pickupMin = 15, passengerRating = 4.20),
 )
+
+/** "Linha de cima   [−] 100% [+]" — passos de 10%. */
+@Composable
+private fun FontStepper(label: String, percent: Int, onChange: (Int) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, Modifier.weight(1f))
+        OutlinedButton(
+            onClick = { onChange(percent - CardLayout.FONT_STEP) },
+            enabled = percent > CardLayout.FONT_MIN,
+        ) { Text("−") }
+        Text("$percent%", Modifier.width(56.dp), textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold)
+        OutlinedButton(
+            onClick = { onChange(percent + CardLayout.FONT_STEP) },
+            enabled = percent < CardLayout.FONT_MAX,
+        ) { Text("+") }
+    }
+}

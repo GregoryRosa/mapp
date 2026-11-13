@@ -65,6 +65,9 @@ class QuickBubbleView(
         /** Conta a última oferta vista como corrida pega. */
         fun countLastOffer()
         fun undoLastTrip()
+        /** Corrida em andamento terminou / foi cancelada (correção manual do automático). */
+        fun finishPendingTrip()
+        fun cancelPendingTrip()
 
         /** Marca um pin no local atual (zona para desenhar depois no editor). */
         fun markPin(type: ZoneType)
@@ -247,6 +250,12 @@ class QuickBubbleView(
         button("↶ Desfazer") { actions.undoLastTrip() },
         labelWeight = false,
     )
+    private val pendingText = text(13f, bold = true, color = NEON_GREEN)
+    private val pendingRow = row(
+        button("✓ Finalizada", color = GREEN) { actions.finishPendingTrip() },
+        button("✕ Cancelada", color = RED) { actions.cancelPendingTrip() },
+        labelWeight = false,
+    )
     private val shiftBox = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(10), dp(8), dp(10), dp(8))
@@ -257,6 +266,8 @@ class QuickBubbleView(
         addView(runningRow, fullWidth(4))
         addView(pausedRow, fullWidth(4))
         addView(shiftMetrics, fullWidth(6))
+        addView(pendingText, fullWidth(6))
+        addView(pendingRow, fullWidth(2))
         addView(tripRow, fullWidth(4))
         addView(lastOfferText, fullWidth(2))
     }
@@ -399,14 +410,13 @@ class QuickBubbleView(
 
     /** Jornada atual (null = nenhuma), resumo e a última oferta que pode ser contada. */
     fun updateShift(current: Shift?, sum: ShiftSummary?, lastOffer: String?) {
-        val wasActive = shift?.let { !it.paused }
         shift = current
         summary = sum
         lastOfferLabel = lastOffer
         if (current == null) confirmEnd = false
         if (panelAttached) { bindShift(); relayoutPanel() }
         bindRadial()
-        if (wasActive != current?.let { !it.paused }) paintBubble()
+        paintBubble()
     }
 
     /** Quantos pins esperam virar zona. */
@@ -670,6 +680,12 @@ class QuickBubbleView(
         shiftMetrics.visibility = if (s != null && sum != null) View.VISIBLE else View.GONE
         tripRow.visibility = if (s != null) View.VISIBLE else View.GONE
         lastOfferText.visibility = if (s != null) View.VISIBLE else View.GONE
+        val pending = s?.pendingTrip
+        pendingText.visibility = if (pending != null) View.VISIBLE else View.GONE
+        pendingRow.visibility = if (pending != null) View.VISIBLE else View.GONE
+        if (pending != null) {
+            pendingText.text = "🚕 Em corrida: ${listOfNotNull(pending.category, ShiftMath.money(pending.price)).joinToString(" ")}"
+        }
 
         shiftState.text = when {
             s == null -> "Parada · toque ▶ ao começar a rodar"
@@ -704,16 +720,20 @@ class QuickBubbleView(
         readerText.setTextColor(if (r.connected) SECONDARY else YELLOW)
     }
 
-    /** Neon verde = leitor ligado; cinza com "!" = Acessibilidade desligada. Anel âmbar = jornada rodando. */
+    /** Laranja = ligado sem corrida; verde = em corrida; cinza com "!" = Acessibilidade desligada. */
     private fun paintBubble() {
         val ok = reader.connected
         bubble.text = if (ok) "M" else "M!"
-        val color = if (ok) NEON_GREEN else GRAY_LIGHT
+        val color = when {
+            !ok -> GRAY_LIGHT
+            shift?.pendingTrip != null -> NEON_GREEN // em corrida
+            else -> NEON_ORANGE                      // ligado, sem corrida
+        }
         bubble.setTextColor(color)
         val running = shift?.paused == false
         (bubble.background as? GradientDrawable)?.apply {
             setColor(RING_BG)
-            setStroke(dp(if (running) 4 else 3), if (running) AMBER else color)
+            setStroke(dp(if (running) 4 else 3), color) // anel mais grosso = jornada rodando
         }
     }
 

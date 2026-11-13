@@ -96,4 +96,17 @@ class CardLayoutTest {
         assertNull(CardValues.tone(RATING, o, profile)) // sem nota mínima no perfil
         assertEquals("9 min", CardValues.duration(9))
     }
+
+    @Test
+    fun `tamanho das letras salva, limita e le texto antigo`() {
+        val l = def.withFont(CardLine.TOP, 130).withFont(CardLine.BOTTOM, 500)
+        assertEquals(130, l.topFont)
+        assertEquals(CardLayout.FONT_MAX, l.bottomFont)
+        assertEquals(CardLayout.FONT_MIN, def.withFont(CardLine.TOP, 10).topFont)
+        assertEquals(120, def.withFont(CardLine.TOP, 117).topFont) // passos de 10%
+        assertEquals(l, CardLayout.decode(l.encode()))
+        val antigo = CardLayout.decode("top=price;bottom=per_km;platform=1")
+        assertEquals(100, antigo.topFont)
+        assertEquals(100, antigo.bottomFont)
+    }
 }

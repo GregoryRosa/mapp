@@ -80,6 +80,8 @@ class OverlayService : LifecycleService() {
     private var markedAcceptedKey: RawOffer? = null
     /** Quando a [lastOffer] esteve no cartão pela última vez (para o aceite automático). */
     private var lastOfferSeenAt = 0L
+    /** Quando o leitor viu a tela de corrida finalizada pela última vez. */
+    private var lastFinishedAt = 0L
     /** Houve aceite automático desde a última corrida finalizada? */
     private var acceptedSinceFinish = false
     private val odometer = Odometer()
@@ -190,6 +192,19 @@ class OverlayService : LifecycleService() {
 
         override fun countLastOffer() = countOffer(lastOffer)
 
+        override fun finishPendingTrip() = finishPending(auto = false)
+
+        override fun cancelPendingTrip() {
+            val pending = ShiftTracker.current(this@OverlayService).value?.pendingTrip ?: return
+            ShiftTracker.cancelPending(this@OverlayService)
+            countedOffer?.let { markAccepted(it, null) }
+            countedOffer = null
+            countedKey = null
+            acceptedSinceFinish = false
+            refreshCountButton()
+            toast("Corrida cancelada: ${ShiftMath.money(pending.price)} fora do lucro")
+        }
+
         override fun undoLastTrip() {
             val shift = ShiftTracker.current(this@OverlayService).value ?: return
             if (shift.trips.isEmpty()) { toast("Nenhuma corrida para desfazer"); return }
@@ -285,7 +300,10 @@ class OverlayService : LifecycleService() {
         val raw = offer?.raw ?: run { toast("Nenhuma oferta lida ainda"); return }
         val key = raw.key()
         if (key == countedKey) { toast("Esta corrida já foi contada"); return }
-        val trip = ShiftTrip.from(raw.copy(category = categoryFor(raw)), System.currentTimeMillis())
+        // Aceita = em andamento: só entra no lucro ao finalizar (cancelada nunca entra). Se a tela de
+        // corrida finalizada já passou depois desta oferta (+1 tocado no fim), já entra finalizada.
+        val alreadyFinished = !auto && lastFinishedAt > lastOfferSeenAt
+        val trip = ShiftTrip.from(raw.copy(category = categoryFor(raw)), System.currentTimeMillis(), finished = alreadyFinished)
         ShiftTracker.addTrip(this, trip)
         countedKey = key
         countedOffer = offer
@@ -293,7 +311,13 @@ class OverlayService : LifecycleService() {
         refreshCountButton()
         pushShift()
         val label = offerLabel(raw).removeSuffix(" ✓ contada")
-        toast(if (auto) "Corrida aceita — contada: $label" else "Corrida contada: $label")
+        toast(
+            when {
+                alreadyFinished -> "Corrida contada: $label"
+                auto -> "Corrida aceita: $label · soma no lucro ao finalizar"
+                else -> "Corrida em andamento: $label · soma no lucro ao finalizar"
+            },
+        )
     }
 
     /**
@@ -320,15 +344,25 @@ class OverlayService : LifecycleService() {
                 countOffer(offer, auto = true)
             }
             TripStage.FINISHED -> {
-                val counted = acceptedSinceFinish || (countedKey != null && lastOffer?.raw?.key() == countedKey)
-                if (counted) {
-                    toast("Corrida finalizada ✓")
+                lastFinishedAt = System.currentTimeMillis()
+                if (ShiftTracker.current(this).value?.pendingTrip != null) {
+                    finishPending(auto = true)
                 } else {
                     toast("Corrida finalizada, mas não vi o aceite: toque +1 Contar última se for o caso")
                 }
                 acceptedSinceFinish = false
             }
         }
+    }
+
+    /** Corrida em andamento terminou: o valor entra no ganho/lucro do dia. */
+    private fun finishPending(auto: Boolean) {
+        val pending = ShiftTracker.current(this).value?.pendingTrip ?: run {
+            if (!auto) toast("Nenhuma corrida em andamento")
+            return
+        }
+        ShiftTracker.finishPending(this)
+        toast("Corrida finalizada ✓ +${ShiftMath.money(pending.price)} no lucro")
     }
 
     /** Grava no histórico de ofertas se a corrida foi aceita (aba "Aceitas hoje"). */

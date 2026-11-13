@@ -78,6 +78,12 @@ object ShiftTracker {
 
     fun undoLastTrip(ctx: Context) = update(ctx) { it?.undoLastTrip() }
 
+    /** Corrida em andamento terminou (entra no lucro). */
+    fun finishPending(ctx: Context) = update(ctx) { it?.finishPending() }
+
+    /** Corrida em andamento foi cancelada (sai da jornada). */
+    fun cancelPending(ctx: Context) = update(ctx) { it?.cancelPending() }
+
     /**
      * Marcação manual no histórico de ofertas: coloca/tira a corrida na jornada em que a oferta
      * apareceu (a atual ou uma encerrada). Devolve false se nenhuma jornada cobre esse horário.
