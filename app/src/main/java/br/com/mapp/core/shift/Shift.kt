@@ -79,19 +79,30 @@ data class Shift(
      */
     val nextToFinish: ShiftTrip? get() = trips.firstOrNull { !it.finished }
 
-    /** Corrida em andamento terminou ([nextToFinish]): passa a contar no ganho/lucro. */
-    fun finishPending(): Shift {
-        val i = trips.indexOfFirst { !it.finished }
+    /**
+     * Corrida em andamento terminou ([nextToFinish]): passa a contar no ganho/lucro. Com [platform],
+     * a mais antiga aberta daquele app (Uber e 99 ligados juntos).
+     */
+    fun finishPending(platform: Platform? = null): Shift {
+        val i = trips.indexOfFirst { !it.finished && (platform == null || it.platform == platform) }
         if (i < 0) return this
         return copy(trips = trips.mapIndexed { j, t -> if (j == i) t.copy(finished = true) else t })
     }
 
-    /** Corrida em andamento foi cancelada: sai da jornada. */
-    fun cancelPending(): Shift {
-        val i = pendingIndex
+    /** Corrida em andamento foi cancelada: sai da jornada (a mais recente; com [platform], daquele app). */
+    fun cancelPending(platform: Platform? = null): Shift {
+        val i = if (platform == null) pendingIndex else trips.indexOfLast { !it.finished && it.platform == platform }
         if (i < 0) return this
         return copy(trips = trips.filterIndexed { j, _ -> j != i })
     }
+
+    /** Corrida aberta mais antiga de [platform] (null = de qualquer app). */
+    fun nextToFinish(platform: Platform?): ShiftTrip? =
+        trips.firstOrNull { !it.finished && (platform == null || it.platform == platform) }
+
+    /** Corrida aberta mais recente de [platform] (null = de qualquer app). */
+    fun pendingTrip(platform: Platform?): ShiftTrip? =
+        trips.lastOrNull { !it.finished && (platform == null || it.platform == platform) }
 
     /**
      * Posição da corrida desta oferta na jornada: mesma plataforma e valor, contada perto do horário

@@ -22,6 +22,19 @@ class ShiftTest {
     private fun trip(cat: String?, price: Double, pickup: Double?, km: Double?) =
         ShiftTrip(0, Platform.UBER, cat, price, pickup, km)
 
+    @Test fun finalizar_e_cancelar_pelo_app_da_tela() {
+        val uber = ShiftTrip(1 * h, Platform.UBER, null, 10.0, 1.0, 3.0, finished = false)
+        val n99 = ShiftTrip(2 * h, Platform.NINETY_NINE, null, 12.0, 1.0, 4.0, finished = false)
+        val s = Shift(startedAt = 0, trips = listOf(uber, n99))
+        // Fim lido na 99: fecha a da 99, mesmo a da Uber sendo mais antiga.
+        assertEquals(listOf(false, true), s.finishPending(Platform.NINETY_NINE).trips.map { it.finished })
+        assertEquals(listOf(true, false), s.finishPending().trips.map { it.finished })
+        // Cancelada na Uber: sai a da Uber, mesmo a da 99 sendo mais recente.
+        assertEquals(listOf(Platform.NINETY_NINE), s.cancelPending(Platform.UBER).trips.map { it.platform })
+        assertEquals(uber, s.nextToFinish(Platform.UBER))
+        assertNull(s.pendingTrip(Platform.INDRIVE))
+    }
+
     @Test fun marcacao_manual_coloca_e_tira_a_corrida_sem_duplicar() {
         val offerAt = 10 * h
         val auto = ShiftTrip(offerAt + 40_000, Platform.UBER, "UberX", 14.06, 1.0, 2.9) // contada sozinha
