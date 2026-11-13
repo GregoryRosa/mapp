@@ -2,6 +2,7 @@ package br.com.mapp.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import br.com.mapp.core.model.ExtraKmCostCodec
 import br.com.mapp.core.model.FuelType
 import br.com.mapp.core.model.VehicleCostConfig
 import br.com.mapp.core.repo.Goals
@@ -51,6 +52,7 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
             kmPerUnit = getDouble(KM_PER_LITER) ?: d.kmPerUnit,
             maintenancePerKm = getDouble(MAINTENANCE) ?: d.maintenancePerKm,
             depreciationPerKm = getDouble(DEPRECIATION) ?: d.depreciationPerKm,
+            extraCosts = ExtraKmCostCodec.decode(getString(EXTRA_COSTS, null)),
         )
     }
 
@@ -62,6 +64,7 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
                 .putDouble(KM_PER_LITER, config.kmPerUnit)
                 .putDouble(MAINTENANCE, config.maintenancePerKm)
                 .putDouble(DEPRECIATION, config.depreciationPerKm)
+                .putString(EXTRA_COSTS, ExtraKmCostCodec.encode(config.extraCosts))
                 .commit()
         }
     }
@@ -75,6 +78,7 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
         const val KM_PER_LITER = "km_per_liter"
         const val MAINTENANCE = "maintenance_per_km"
         const val DEPRECIATION = "depreciation_per_km"
+        const val EXTRA_COSTS = "extra_costs_per_km"
     }
 }
 
