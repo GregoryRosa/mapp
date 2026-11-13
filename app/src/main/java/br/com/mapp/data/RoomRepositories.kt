@@ -53,9 +53,17 @@ class RoomOfferHistoryRepository(private val dao: OfferDao) : OfferHistoryReposi
     private val lock = Mutex()
     private val pending = HashMap<Pair<Long, Double>, Boolean?>()
 
+    /**
+     * Grava a oferta. A mesma oferta completada depois pelo leitor (mesmo horário da 1ª leitura e
+     * app) substitui a linha anterior, mantendo a marca de aceita.
+     */
     override suspend fun record(offer: EvaluatedOffer): Long = lock.withLock {
         val key = offer.raw.capturedAt to offer.raw.price
-        val accepted = if (pending.containsKey(key)) pending.remove(key) else null
+        var accepted = if (pending.containsKey(key)) pending.remove(key) else null
+        dao.findOffer(offer.raw.capturedAt, offer.raw.platform.name)?.let { prior ->
+            if (accepted == null) accepted = prior.accepted
+            dao.deleteOffer(prior.id)
+        }
         dao.insert(offer.toEntity(accepted))
     }
 

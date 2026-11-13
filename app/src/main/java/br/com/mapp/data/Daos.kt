@@ -95,6 +95,13 @@ interface OfferDao {
     @Query("UPDATE offers SET accepted = :accepted WHERE capturedAt = :capturedAt AND price = :price")
     suspend fun setAccepted(capturedAt: Long, price: Double, accepted: Boolean?): Int
 
+    /** Linha já gravada da mesma oferta (mesmo horário da 1ª leitura e app), se houver. */
+    @Query("SELECT * FROM offers WHERE capturedAt = :capturedAt AND platform = :platform ORDER BY id DESC LIMIT 1")
+    suspend fun findOffer(capturedAt: Long, platform: String): OfferEntity?
+
+    @Query("DELETE FROM offers WHERE id = :id")
+    suspend fun deleteOffer(id: Long)
+
     @Query("UPDATE offers SET accepted = :accepted WHERE id = :id")
     suspend fun setAcceptedById(id: Long, accepted: Boolean?)
 }

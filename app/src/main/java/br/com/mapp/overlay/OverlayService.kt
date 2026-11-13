@@ -70,8 +70,8 @@ class OverlayService : LifecycleService() {
     private var activeProfile: FilterProfile = FilterProfile()
 
     private var zones: List<Zone> = emptyList()
-    private var shownKey: RawOffer? = null
-    private var dismissedKey: RawOffer? = null
+    private var shownKey: OfferKey? = null
+    private var dismissedKey: OfferKey? = null
     private var announcedZones: Set<ZoneHit> = emptySet()
 
     // ---- Jornada ----
@@ -79,12 +79,12 @@ class OverlayService : LifecycleService() {
     /** Última oferta avaliada (para "+1 Contar última" depois que o cartão some). */
     private var lastOffer: EvaluatedOffer? = null
     /** Tipo lido em algum quadro da oferta atual (o OCR às vezes não lê o "UberX"). */
-    private var lastCategory: Pair<RawOffer, String>? = null
-    private var countedKey: RawOffer? = null
+    private var lastCategory: Pair<OfferKey, String>? = null
+    private var countedKey: OfferKey? = null
     /** Oferta contada por último (para desfazer a marca de aceita no histórico). */
     private var countedOffer: EvaluatedOffer? = null
     /** Oferta já marcada como aceita no histórico (não regravar a cada quadro). */
-    private var markedAcceptedKey: RawOffer? = null
+    private var markedAcceptedKey: OfferKey? = null
     /** Quando a [lastOffer] esteve no cartão pela última vez (para o aceite automático). */
     private var lastOfferSeenAt = 0L
     /** Quando o leitor viu a tela de corrida finalizada pela última vez. */
@@ -92,7 +92,7 @@ class OverlayService : LifecycleService() {
     /** Houve aceite automático desde a última corrida finalizada? */
     private var acceptedSinceFinish = false
     /** Qual oferta foi aceita: pelo nome do passageiro na tela (vale para corrida aceita durante outra). */
-    private val matcher = TripMatcher<RawOffer>()
+    private val matcher = TripMatcher<OfferKey>()
     private val odometer = Odometer()
 
     override fun onCreate() {
@@ -246,7 +246,14 @@ class OverlayService : LifecycleService() {
     // ------------------------------------------------------------------ jornada
 
     /** Mesma oferta mesmo com endereço/tipo lidos em quadros diferentes. */
-    private fun RawOffer.key(): RawOffer = identity().copy(pickupAddress = null, dropoffAddress = null)
+    /**
+     * Identidade da oferta no cartão, na voz e na jornada: app + horário da 1ª leitura. O leitor
+     * mantém esse horário quando só completa a oferta (tempo, km ou endereço lidos depois), então
+     * completar não repete a voz nem vira outra corrida.
+     */
+    private data class OfferKey(val platform: Platform, val capturedAt: Long)
+
+    private fun RawOffer.key(): OfferKey = OfferKey(platform, capturedAt)
 
     private fun startShiftMonitor(loc: LocationProvider) {
         lifecycleScope.launch { MappApp.repos.vehicle.config().collect { costPerKm = it.costPerKm; pushShift() } }
