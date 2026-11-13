@@ -57,10 +57,10 @@ fun ReportsScreen(onBack: () -> Unit) {
 
     // Ganhos = lançamentos + corridas marcadas como aceitas no histórico de ofertas.
     val all = remember(entries, offers) { entries + ReportMath.ridesAsIncome(offers) }
-    val summary = remember(all) { ReportMath.summarize(all) }
+    // Mesma conta da tela inicial e de Ganhos e gastos (jornadas + corridas fora de jornada + lançamentos).
+    val totals = rememberPeriodTotals(period)
     val byWeekday = remember(all) { ReportMath.incomeByWeekday(all) }
     val byHour = remember(all) { ReportMath.incomeByHour(all, bucketHours = HOUR_BAND) }
-    val accepted = remember(offers) { ReportMath.summarizeAccepted(offers) }
     val offerSummary = remember(offers) { ReportMath.summarizeOffers(offers) }
     val bestHours = remember(offers) { ReportMath.bestHours(offers, top = 5) }
 
@@ -84,24 +84,29 @@ fun ReportsScreen(onBack: () -> Unit) {
             )
 
             Text(
-                "Ganhos incluem ${accepted.count} corridas aceitas (${Format.brl(accepted.total)}) + lançamentos.",
+                "Bruto = ${totals.rides} corridas (${Format.brl(totals.ridesGross)}) + ganhos lançados " +
+                    "(${Format.brl(totals.manualIncome)}). Custos = carro (km × custo/km) + gastos lançados.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatCard("Ganhos", Format.brl(summary.income), Modifier.weight(1f))
-                StatCard("Gastos", Format.brl(summary.expense), Modifier.weight(1f))
+                StatCard("Ganho bruto", Format.brl(totals.gross), Modifier.weight(1f))
+                StatCard("Corridas", totals.rides.toString(), Modifier.weight(1f))
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatCard("Custos", Format.brl(totals.cost), Modifier.weight(1f))
                 StatCard(
-                    "Lucro",
-                    Format.brl(summary.profit),
+                    "Líquido",
+                    Format.brl(totals.net),
                     Modifier.weight(1f),
-                    valueColor = if (summary.profit < 0) RedSignal else GreenSignal,
+                    valueColor = if (totals.net < 0) RedSignal else GreenSignal,
                 )
-                StatCard("Km rodados", Format.km(summary.km.takeIf { it > 0 }), Modifier.weight(1f))
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatCard("R$/km médio (ganhos)", Format.perKm(summary.incomePerKm), Modifier.weight(1f))
+                StatCard("Km rodados", Format.km(totals.km.takeIf { it > 0 }), Modifier.weight(1f))
+                StatCard("R$/km (bruto)", Format.perKm(totals.perKm), Modifier.weight(1f))
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatCard("R$/hora (bruto)", Format.perHour(totals.perHour), Modifier.weight(1f))
                 StatCard("R$/km médio (ofertas)", Format.perKm(offerSummary.avgPerKm), Modifier.weight(1f))
             }
 

@@ -4,9 +4,12 @@ import br.com.mapp.core.model.Signal
 import br.com.mapp.core.repo.EntryKind
 import br.com.mapp.core.repo.FinanceEntry
 import br.com.mapp.core.repo.OfferRecord
+import java.time.DayOfWeek
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import java.time.temporal.TemporalAdjusters
 
 /** Intervalo de tempo inclusivo [from, to] em epoch millis (mesma semântica dos repositórios). */
 data class Period(val from: Long, val to: Long) {
@@ -63,6 +66,34 @@ object ReportMath {
 
     fun today(now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault()): Period =
         lastDays(1, now, zone)
+
+    /** Um dia inteiro do calendário (00:00 até 23:59:59,999). */
+    fun day(date: LocalDate, zone: ZoneId = ZoneId.systemDefault()): Period {
+        val start = date.atStartOfDay(zone)
+        val end = date.plusDays(1).atStartOfDay(zone)
+        return Period(start.toInstant().toEpochMilli(), end.toInstant().toEpochMilli() - 1)
+    }
+
+    /** Dia do calendário em que [millis] cai. */
+    fun dayOf(millis: Long, zone: ZoneId = ZoneId.systemDefault()): Period = day(dateOf(millis, zone), zone)
+
+    fun dateOf(millis: Long, zone: ZoneId = ZoneId.systemDefault()): LocalDate =
+        Instant.ofEpochMilli(millis).atZone(zone).toLocalDate()
+
+    /** Hora em que a semana de ganhos da Uber vira (segunda-feira). */
+    const val UBER_WEEK_HOUR = 4
+
+    /**
+     * Semana de ganhos da Uber que contém [now]: começa na segunda-feira às 4h e termina na segunda
+     * seguinte às 4h (fechamento do extrato semanal). Segunda antes das 4h ainda é a semana anterior.
+     */
+    fun uberWeek(now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault()): Period {
+        val shifted = Instant.ofEpochMilli(now).atZone(zone).minusHours(UBER_WEEK_HOUR.toLong())
+        val monday = shifted.toLocalDate().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+        val start = monday.atTime(UBER_WEEK_HOUR, 0).atZone(zone)
+        val end = start.plusWeeks(1)
+        return Period(start.toInstant().toEpochMilli(), end.toInstant().toEpochMilli() - 1)
+    }
 
     /** Últimos [days] dias corridos, incluindo hoje (de 00:00 de hoje-(days-1) até o fim de hoje). */
     fun lastDays(days: Int, now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault()): Period {

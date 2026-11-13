@@ -208,4 +208,24 @@ class ReportMathTest {
         assertNull(Format.parse(""))
         assertNull(Format.parse("abc"))
     }
+
+    @Test fun semana_da_uber_vai_de_segunda_4h_a_segunda_4h() {
+        // Sexta 13/11 15h: semana de seg 09/11 4h até seg 16/11 4h.
+        val w = ReportMath.uberWeek(t(13, 15), zone)
+        assertEquals(t(9, 4), w.from)
+        assertEquals(t(16, 4) - 1, w.to)
+        // Segunda antes das 4h ainda é a semana anterior; às 4h começa a nova.
+        assertEquals(t(9, 4), ReportMath.uberWeek(t(16, 3, 59), zone).from)
+        assertEquals(t(16, 4), ReportMath.uberWeek(t(16, 4), zone).from)
+        // Domingo à noite e segunda de manhã cedo na mesma semana.
+        assertEquals(t(9, 4), ReportMath.uberWeek(t(15, 23), zone).from)
+    }
+
+    @Test fun dia_do_calendario() {
+        val d = ReportMath.dayOf(t(12, 15, 30), zone)
+        assertEquals(t(12, 0), d.from)
+        assertEquals(t(13, 0) - 1, d.to)
+        assertEquals(d, ReportMath.day(java.time.LocalDate.of(2026, 11, 12), zone))
+        assertEquals(ReportMath.today(t(12, 1), zone), d)
+    }
 }

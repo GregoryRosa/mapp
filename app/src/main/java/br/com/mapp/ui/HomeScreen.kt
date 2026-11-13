@@ -57,7 +57,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -69,12 +70,14 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import br.com.mapp.MappApp
-import br.com.mapp.core.model.VehicleCostConfig
 import br.com.mapp.core.shift.ShiftMath
+import br.com.mapp.finance.Format
+import br.com.mapp.finance.NetToggle
+import br.com.mapp.finance.ReportMath
+import br.com.mapp.finance.rememberNow
+import br.com.mapp.finance.rememberPeriodTotals
 import br.com.mapp.overlay.OverlayService
 import br.com.mapp.overlay.ShiftTracker
-import kotlinx.coroutines.delay
 import br.com.mapp.reader.OfferAccessibilityService
 import br.com.mapp.reader.ReaderStatus
 
@@ -317,33 +320,38 @@ private fun versionChange(ctx: Context, current: String): String? {
     return last ?: ""
 }
 
-/** Jornada atual (ou a última encerrada): mesmos números do painel do ícone "M". */
+/**
+ * Jornada e números do dia (o da jornada aberta, mesmo que tenha começado ontem; senão hoje). Mesma
+ * conta de Ganhos e gastos e do histórico ([rememberPeriodTotals]). Valor bruto sempre à vista; o botão
+ * ao lado do título troca para o líquido (tirando o custo do carro e os gastos lançados).
+ */
 @Composable
 private fun ShiftCard(copilotRunning: Boolean) {
     val ctx = LocalContext.current
     val current by remember { ShiftTracker.current(ctx) }.collectAsStateWithLifecycle()
-    val last by remember { ShiftTracker.last(ctx) }.collectAsStateWithLifecycle()
-    val cost by remember { MappApp.repos.vehicle.config() }.collectAsStateWithLifecycle(VehicleCostConfig())
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(current) {
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(30_000)
-        }
-    }
-    val shift = current ?: last
+    val now = rememberNow()
+    val cur = current
+    val period = ReportMath.dayOf(cur?.startedAt ?: now)
+    val t = rememberPeriodTotals(period, now)
+    val today = ReportMath.dayOf(now)
+    var net by rememberSaveable { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SectionTitle(
                 when {
-                    current == null -> if (shift == null) "Jornada" else "Última jornada"
-                    current!!.paused -> "⏸ Jornada pausada"
+                    cur == null -> "Hoje"
+                    cur.paused -> "⏸ Jornada pausada"
                     else -> "● Jornada rodando"
-                },
-                Modifier.weight(1f),
+                } + if (period != today) " · ${Format.day(period.from)}" else "",
+            )
+            Spacer(Modifier.width(10.dp))
+            NetToggle(
+                net, onToggle = { net = !net },
+                modifier = Modifier.padding(top = 4.dp),
+                activeColor = MappColors.Profit, idleColor = MappColors.TextDim,
             )
         }
-        if (shift == null) {
+        if (t.isEmpty) {
             GlassCard {
                 Text(
                     "Ao começar a rodar, toque no ícone flutuante e em ▶ Iniciar jornada. O MApp soma os km pelo GPS e " +
@@ -353,38 +361,51 @@ private fun ShiftCard(copilotRunning: Boolean) {
                 )
             }
         } else {
-            val s = ShiftMath.summary(shift, cost.costPerKm, now)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                StatTile("Tempo", ShiftMath.duration(s.hours), Modifier.weight(1f))
-                StatTile("Corridas", s.trips.toString(), Modifier.weight(1f))
-                StatTile(
-                    "Lucro", ShiftMath.money(s.profit), Modifier.weight(1f),
-                    valueColor = if (s.profit >= 0) MappColors.Profit else MappColors.Loss,
-                )
+                StatTile("Tempo", ShiftMath.duration(t.hours), Modifier.weight(1f))
+                StatTile("Corridas", t.rides.toString(), Modifier.weight(1f))
+                if (net) {
+                    StatTile(
+                        "Líquido", ShiftMath.money(t.net), Modifier.weight(1f),
+                        valueColor = if (t.net >= 0) MappColors.Profit else MappColors.Loss,
+                    )
+                } else {
+                    StatTile("Ganho", ShiftMath.money(t.gross), Modifier.weight(1f))
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                StatTile("Rodados", ShiftMath.km(s.totalKm), Modifier.weight(1f))
-                StatTile("R$/km", s.perKm?.let { ShiftMath.num(it, 2) } ?: "—", Modifier.weight(1f))
-                StatTile("R$/hora", s.perHour?.let { ShiftMath.num(it, 2) } ?: "—", Modifier.weight(1f))
+                StatTile("Rodados", ShiftMath.km(t.km), Modifier.weight(1f))
+                val perKm = if (net) t.netPerKm else t.perKm
+                val perHour = if (net) t.netPerHour else t.perHour
+                StatTile(if (net) "R$/km líq." else "R$/km", perKm?.let { ShiftMath.num(it, 2) } ?: "—", Modifier.weight(1f))
+                StatTile(if (net) "R$/h líq." else "R$/hora", perHour?.let { ShiftMath.num(it, 2) } ?: "—", Modifier.weight(1f))
             }
             GlassCard(padding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
                 val dim = MaterialTheme.typography.bodySmall
-                Text("Ganho ${ShiftMath.money(s.revenue)} · Custo ${ShiftMath.money(s.cost)}", style = MaterialTheme.typography.bodyMedium)
-                if (s.pendingTrips > 0) {
-                    Text("🚕 ${s.pendingTrips} em andamento · soma no lucro ao finalizar", style = dim, color = MappColors.Teal)
+                Text("Ganho ${ShiftMath.money(t.gross)} · Custos ${ShiftMath.money(t.cost)}", style = MaterialTheme.typography.bodyMedium)
+                if (net) {
+                    Text(
+                        "Carro ${ShiftMath.money(t.carCost)} (${ShiftMath.km(t.km)} × R$ " +
+                            "${t.carCostPerKm?.let { ShiftMath.num(it, 2) } ?: "—"}/km)" +
+                            if (t.expenses > 0) " + gastos lançados ${ShiftMath.money(t.expenses)}" else "",
+                        style = dim, color = MappColors.TextDim,
+                    )
+                }
+                if (t.pendingRides > 0) {
+                    Text("🚕 ${t.pendingRides} em andamento · soma no ganho ao finalizar", style = dim, color = MappColors.Teal)
                 }
                 Text(
-                    "Com passageiro ${ShiftMath.km(s.kmWithTrip)} · sem ${ShiftMath.km(s.kmWithoutTrip)}",
+                    "Com passageiro ${ShiftMath.km(t.kmWithTrip)} · sem ${ShiftMath.km(t.kmWithoutTrip)}",
                     style = dim, color = MappColors.TextDim,
                 )
-                Text("Média por corrida ${s.avgTripKm?.let { ShiftMath.km(it) } ?: "—"}", style = dim, color = MappColors.TextDim)
-                if (s.categories.isNotEmpty()) {
+                Text("Média por corrida ${t.avgTripKm?.let { ShiftMath.km(it) } ?: "—"}", style = dim, color = MappColors.TextDim)
+                if (t.categories.isNotEmpty()) {
                     Text(
-                        s.categories.joinToString(" · ") { "${it.label} ${ShiftMath.num(it.percent, 0)}%" },
+                        t.categories.joinToString(" · ") { "${it.label} ${ShiftMath.num(it.percent, 0)}%" },
                         style = dim, color = MappColors.Lilac,
                     )
                 }
-                if (current != null && !current!!.paused && !copilotRunning) {
+                if (cur != null && !cur.paused && !copilotRunning) {
                     Text("⚠️ Copiloto parado: os km não estão sendo contados.", style = dim, color = MappColors.Warn)
                 }
             }
