@@ -15,7 +15,10 @@ import kotlin.math.max
  * as corridas que ele marca como pegas. Persistência e GPS ficam em overlay/ShiftTracker.
  */
 
-/** Corrida pega durante a jornada (valores da oferta lida na tela). */
+/**
+ * Corrida pega durante a jornada (valores da oferta lida na tela). [finished] = false: aceita e ainda
+ * em andamento — não entra no ganho/lucro até ser finalizada (se for cancelada, nunca entra).
+ */
 data class ShiftTrip(
     val atMillis: Long,
     val platform: Platform,
@@ -23,15 +26,17 @@ data class ShiftTrip(
     val price: Double,
     val pickupKm: Double?,
     val tripKm: Double?,
+    val finished: Boolean = true,
 ) {
     companion object {
-        fun from(offer: RawOffer, atMillis: Long) = ShiftTrip(
+        fun from(offer: RawOffer, atMillis: Long, finished: Boolean = true) = ShiftTrip(
             atMillis = atMillis,
             platform = offer.platform,
             category = offer.category,
             price = offer.price,
             pickupKm = offer.pickupKm,
             tripKm = offer.tripKm,
+            finished = finished,
         )
     }
 }
@@ -63,6 +68,25 @@ data class Shift(
 
     fun undoLastTrip(): Shift = copy(trips = trips.dropLast(1))
 
+    /** Corrida aceita mais recente que ainda não terminou (null = nenhuma). */
+    val pendingTrip: ShiftTrip? get() = trips.lastOrNull { !it.finished }
+
+    private val pendingIndex: Int get() = trips.indexOfLast { !it.finished }
+
+    /** Corrida em andamento terminou: passa a contar no ganho/lucro. */
+    fun finishPending(): Shift {
+        val i = pendingIndex
+        if (i < 0) return this
+        return copy(trips = trips.mapIndexed { j, t -> if (j == i) t.copy(finished = true) else t })
+    }
+
+    /** Corrida em andamento foi cancelada: sai da jornada. */
+    fun cancelPending(): Shift {
+        val i = pendingIndex
+        if (i < 0) return this
+        return copy(trips = trips.filterIndexed { j, _ -> j != i })
+    }
+
     /**
      * Posição da corrida desta oferta na jornada: mesma plataforma e valor, contada perto do horário
      * em que a oferta apareceu ([offerAt]). -1 = não está.
@@ -72,11 +96,15 @@ data class Shift(
             it.atMillis in (offerAt - MATCH_BEFORE_MS)..(offerAt + MATCH_AFTER_MS)
     }
 
-    /** Marcação manual no histórico: coloca a corrida (se ainda não está) ou tira. */
+    /**
+     * Marcação manual no histórico: coloca a corrida (se ainda não está) ou tira. Marcar como aceita
+     * depois do fato = corrida feita, então ela entra (ou fica) como finalizada.
+     */
     fun withTrip(trip: ShiftTrip, offerAt: Long, present: Boolean): Shift {
         val i = tripIndexFor(trip.platform, trip.price, offerAt)
         return when {
-            present && i < 0 -> copy(trips = (trips + trip).sortedBy { it.atMillis })
+            present && i < 0 -> copy(trips = (trips + trip.copy(finished = true)).sortedBy { it.atMillis })
+            present && !trips[i].finished -> copy(trips = trips.mapIndexed { j, t -> if (j == i) t.copy(finished = true) else t })
             !present && i >= 0 -> copy(trips = trips.filterIndexed { j, _ -> j != i })
             else -> this
         }
@@ -107,19 +135,25 @@ data class ShiftSummary(
     val perHour: Double?,
     val avgTripKm: Double?,
     val categories: List<CategoryShare>,
+    /** Corridas aceitas ainda em andamento (fora do ganho/lucro até finalizar). */
+    val pendingTrips: Int = 0,
 )
 
 object ShiftMath {
     const val NO_CATEGORY = "Outros"
 
-    /** [costPerKm] vale só se a jornada não guardou o seu ([Shift.costPerKm], gravado ao encerrar). */
+    /**
+     * [costPerKm] vale só se a jornada não guardou o seu ([Shift.costPerKm], gravado ao encerrar).
+     * Ganho/lucro: só corridas finalizadas. Custo: km do GPS × custo/km (sobe a cada trecho rodado,
+     * não salta quando uma corrida é aceita); sem GPS, usa os km das corridas finalizadas.
+     */
     fun summary(shift: Shift, costPerKm: Double, now: Long): ShiftSummary {
         val costPerKm = shift.costPerKm ?: costPerKm
-        val trips = shift.trips
+        val trips = shift.trips.filter { it.finished }
         val revenue = trips.sumOf { it.price }
         val withTrip = trips.sumOf { it.tripKm ?: 0.0 }
         val offersKm = trips.sumOf { (it.pickupKm ?: 0.0) + (it.tripKm ?: 0.0) }
-        val total = max(shift.gpsKm, offersKm)
+        val total = if (shift.gpsKm > 0) shift.gpsKm else offersKm
         val hours = shift.elapsedMs(now) / 3_600_000.0
         val cost = total * costPerKm
         val withKm = trips.mapNotNull { it.tripKm }
@@ -136,6 +170,7 @@ object ShiftMath {
             perHour = if (hours >= 1.0 / 60 && trips.isNotEmpty()) revenue / hours else null,
             avgTripKm = if (withKm.isNotEmpty()) withKm.average() else null,
             categories = categories(trips),
+            pendingTrips = shift.trips.size - trips.size,
         )
     }
 
@@ -179,16 +214,16 @@ object ShiftMath {
     }
 
     /**
-     * Jornada "do dia" mostrada junto ao ícone "M": a atual (mesmo que tenha começado ontem) ou,
-     * sem jornada aberta, a última encerrada se ela começou hoje.
-     */
-    /**
      * Jornada em que uma oferta de [at] aconteceu: a atual (se começou antes) ou a encerrada mais
      * recente que começou antes dela ([history] da mais nova para a mais antiga). null = nenhuma.
      */
     fun ownerOf(at: Long, current: Shift?, history: List<Shift>): Shift? =
         current?.takeIf { at >= it.startedAt } ?: history.firstOrNull { at >= it.startedAt }
 
+    /**
+     * Jornada "do dia" mostrada junto ao ícone "M": a atual (mesmo que tenha começado ontem) ou,
+     * sem jornada aberta, a última encerrada se ela começou hoje.
+     */
     fun ofToday(current: Shift?, last: Shift?, now: Long, zone: ZoneId = ZoneId.systemDefault()): Shift? =
         current ?: last?.takeIf { sameDay(it.startedAt, now, zone) }
 
@@ -198,6 +233,7 @@ object ShiftMath {
     /** Linhas de texto do resumo (ícone "M" e tela inicial). */
     fun lines(s: ShiftSummary): List<String> = buildList {
         add("⏱ ${duration(s.hours)} · ${s.trips} corrida${if (s.trips == 1) "" else "s"}")
+        if (s.pendingTrips > 0) add("🚕 ${s.pendingTrips} em andamento · soma no lucro ao finalizar")
         add("💰 Ganho ${money(s.revenue)} · Custo ${money(s.cost)}")
         add("${if (s.profit >= 0) "✅" else "🔻"} Lucro ${money(s.profit)}")
         add("🚗 ${km(s.totalKm)} rodados")
@@ -262,8 +298,10 @@ object ShiftCodec {
         s.trips.forEach { t ->
             append('\n')
             append(
-                listOf(t.atMillis, t.platform.name, clean(t.category), t.price, t.pickupKm ?: "", t.tripKm ?: "")
-                    .joinToString(SEP),
+                listOf(
+                    t.atMillis, t.platform.name, clean(t.category), t.price, t.pickupKm ?: "", t.tripKm ?: "",
+                    if (t.finished) "" else "0",
+                ).joinToString(SEP),
             )
         }
     }
@@ -289,6 +327,7 @@ object ShiftCodec {
                         price = c[3].toDouble(),
                         pickupKm = c[4].toDoubleOrNull(),
                         tripKm = c[5].toDoubleOrNull(),
+                        finished = c.getOrNull(6) != "0", // gravações antigas: finalizada
                     )
                 },
             )

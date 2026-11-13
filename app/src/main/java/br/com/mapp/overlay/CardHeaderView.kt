@@ -75,30 +75,35 @@ class CardHeaderView(private val context: Context, private val trailing: List<Te
         platformChip.setTextColor(if (o.signal == Signal.YELLOW) WHITE else DARK_TEXT)
         (platformChip.background as GradientDrawable).setColor(if (o.signal == Signal.YELLOW) DARK_TEXT else WHITE)
 
+        // Tamanho das letras escolhido em "Estilo do cartão" (% do padrão).
+        val ts = layout.topFont / 100f
+        val bs = layout.bottomFont / 100f
+        platformChip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f * ts)
+        topText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f * ts)
         topText.setTextColor(fg)
-        topText.text = topLine(o, profile, layout.top)
+        topText.text = topLine(o, profile, layout.top, ts)
 
         bottomRow.removeAllViews()
         bottomRow.visibility = if (layout.bottom.isEmpty()) View.GONE else View.VISIBLE
-        val valueSp = when (layout.bottom.size) {
+        val valueSp = bs * when (layout.bottom.size) {
             1, 2 -> 34f
             3 -> 30f
             else -> 24f
         }
         layout.bottom.forEach { metric ->
-            bottomRow.addView(cell(metric, o, profile, fg, valueSp), LinearLayout.LayoutParams(0, WRAP, 1f))
+            bottomRow.addView(cell(metric, o, profile, fg, valueSp, bs), LinearLayout.LayoutParams(0, WRAP, 1f))
         }
     }
 
     /** "R$ 29,20 · 1h00m · ★ 4,20" — valor maior; item vermelho pelo perfil ganha fundo branco. */
-    private fun topLine(o: EvaluatedOffer, profile: FilterProfile?, metrics: List<CardMetric>): CharSequence {
+    private fun topLine(o: EvaluatedOffer, profile: FilterProfile?, metrics: List<CardMetric>, scale: Float): CharSequence {
         val sb = SpannableStringBuilder()
         metrics.forEachIndexed { i, metric ->
             if (i > 0) sb.append("  ·  ")
             val start = sb.length
             sb.append(CardValues.full(metric, o))
             val end = sb.length
-            if (metric == CardMetric.PRICE) sb.setSpan(AbsoluteSizeSpan(19, true), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            if (metric == CardMetric.PRICE) sb.setSpan(AbsoluteSizeSpan(Math.round(19 * scale), true), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             if (CardValues.tone(metric, o, profile) == Signal.RED) {
                 sb.setSpan(BackgroundColorSpan(WHITE), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 sb.setSpan(ForegroundColorSpan(RED_BG), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -108,10 +113,10 @@ class CardHeaderView(private val context: Context, private val trailing: List<Te
         return sb
     }
 
-    private fun cell(metric: CardMetric, o: EvaluatedOffer, profile: FilterProfile?, fg: Int, valueSp: Float): View {
+    private fun cell(metric: CardMetric, o: EvaluatedOffer, profile: FilterProfile?, fg: Int, valueSp: Float, scale: Float): View {
         val label = TextView(context).apply {
             text = CardValues.shortLabel(metric)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f * scale)
             setTextColor(fg)
             alpha = 0.85f
             maxLines = 1
@@ -132,7 +137,7 @@ class CardHeaderView(private val context: Context, private val trailing: List<Te
             typeface = Typeface.DEFAULT_BOLD
             maxLines = 1
             includeFontPadding = false
-            setAutoSizeTextTypeUniformWithConfiguration(12, valueSp.toInt(), 1, TypedValue.COMPLEX_UNIT_SP)
+            setAutoSizeTextTypeUniformWithConfiguration(minOf(12, valueSp.toInt()), valueSp.toInt(), 1, TypedValue.COMPLEX_UNIT_SP)
         }
         val valueRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL

@@ -73,11 +73,50 @@ class ShiftTest {
         assertEquals(25.0, s.categories[1].percent, eps)
     }
 
-    @Test fun gps_menor_que_as_corridas_usa_as_corridas() {
-        val shift = Shift(startedAt = 0, gpsKm = 3.0, trips = listOf(trip("UberX", 20.0, 2.0, 10.0)))
+    @Test fun custo_segue_o_gps_e_nao_salta_ao_aceitar() {
+        val aceita = Shift(startedAt = 0, gpsKm = 3.0).addTrip(trip("UberX", 20.0, 2.0, 10.0).copy(finished = false))
+        val s = ShiftMath.summary(aceita, 0.5, h)
+        assertEquals(3.0, s.totalKm, eps)    // só o GPS: não pula para os 12 km da oferta
+        assertEquals(1.5, s.cost, eps)
+        assertEquals(0.0, s.revenue, eps)    // em andamento: fora do ganho
+        assertEquals(-1.5, s.profit, eps)
+        assertEquals(0, s.trips)
+        assertEquals(1, s.pendingTrips)
+
+        val fim = ShiftMath.summary(aceita.addKm(9.0).finishPending(), 0.5, h)
+        assertEquals(12.0, fim.totalKm, eps)
+        assertEquals(20.0, fim.revenue, eps)  // finalizada: entra no lucro
+        assertEquals(14.0, fim.profit, eps)
+        assertEquals(0, fim.pendingTrips)
+    }
+
+    @Test fun corrida_cancelada_nao_entra_no_lucro() {
+        val s = Shift(startedAt = 0, gpsKm = 4.0)
+            .addTrip(trip("UberX", 9.0, 1.0, 3.0))
+            .addTrip(trip("UberX", 30.0, 2.0, 12.0).copy(finished = false))
+        assertEquals(30.0, s.pendingTrip!!.price, eps)
+        val cancelada = s.cancelPending()
+        assertEquals(listOf(9.0), cancelada.trips.map { it.price })
+        assertNull(cancelada.pendingTrip)
+        assertEquals(cancelada, cancelada.finishPending()) // nada pendente: não muda
+    }
+
+    @Test fun sem_gps_usa_km_das_corridas_finalizadas() {
+        val shift = Shift(startedAt = 0, trips = listOf(
+            trip("UberX", 20.0, 2.0, 10.0),
+            trip("UberX", 50.0, 5.0, 30.0).copy(finished = false),
+        ))
         val s = ShiftMath.summary(shift, 0.0, h)
         assertEquals(12.0, s.totalKm, eps)
         assertEquals(2.0, s.kmWithoutTrip, eps)
+    }
+
+    @Test fun marcar_no_historico_finaliza_a_pendente() {
+        val offerAt = 10 * h
+        val s = Shift(startedAt = 8 * h).addTrip(ShiftTrip(offerAt + 30_000, Platform.UBER, null, 14.06, 1.0, 2.9, finished = false))
+        val marcada = s.withTrip(ShiftTrip(offerAt, Platform.UBER, null, 14.06, 1.0, 2.9), offerAt, present = true)
+        assertEquals(1, marcada.trips.size)
+        assertTrue(marcada.trips[0].finished)
     }
 
     @Test fun jornada_sem_corridas_nao_divide_por_zero() {
@@ -100,8 +139,11 @@ class ShiftTest {
         val shift = Shift(startedAt = 10, activeMs = 20, resumedAt = null, gpsKm = 12.5, trips = listOf(
             ShiftTrip(30, Platform.NINETY_NINE, "Pop", 14.9, 0.9, 9.4),
             ShiftTrip(40, Platform.UBER, null, 20.0, null, null),
+            ShiftTrip(50, Platform.UBER, "UberX", 9.5, 1.0, 3.0, finished = false),
         ))
         assertEquals(shift, ShiftCodec.decode(ShiftCodec.encode(shift)))
+        // Gravação antiga (sem a coluna "finalizada") volta como finalizada.
+        assertTrue(ShiftCodec.decode("v1\t0\t0\t\t0.0\n1\tUBER\t\t10.0\t\t")!!.trips.single().finished)
         assertEquals(Shift(startedAt = 5), ShiftCodec.decode(ShiftCodec.encode(Shift(startedAt = 5))))
         assertNull(ShiftCodec.decode("lixo"))
         assertNull(ShiftCodec.decode(null))

@@ -39,7 +39,19 @@ data class CardLayout(
     val bottom: List<CardMetric>,
     /** Mostra o nome do app (Uber/99/inDrive) no cartão. */
     val showPlatform: Boolean = true,
+    /** Tamanho das letras da linha de cima, em % do padrão ([FONT_MIN]..[FONT_MAX]). */
+    val topFont: Int = 100,
+    /** Tamanho dos números grandes da linha de baixo, em % do padrão. */
+    val bottomFont: Int = 100,
 ) {
+    fun font(line: CardLine): Int = if (line == CardLine.TOP) topFont else bottomFont
+
+    /** Muda o tamanho das letras de uma linha (limitado e em passos de [FONT_STEP]). */
+    fun withFont(line: CardLine, percent: Int): CardLayout {
+        val v = clampFont(percent)
+        return if (line == CardLine.TOP) copy(topFont = v) else copy(bottomFont = v)
+    }
+
     fun line(line: CardLine): List<CardMetric> = if (line == CardLine.TOP) top else bottom
 
     /** Itens que ainda não estão em nenhuma linha. */
@@ -82,6 +94,8 @@ data class CardLayout(
         append("top=").append(top.joinToString(",") { it.id })
         append(";bottom=").append(bottom.joinToString(",") { it.id })
         append(";platform=").append(if (showPlatform) 1 else 0)
+        append(";topfont=").append(topFont)
+        append(";bottomfont=").append(bottomFont)
     }
 
     companion object {
@@ -101,7 +115,20 @@ data class CardLayout(
             fun metrics(s: String?) = s.orEmpty().split(',').mapNotNull { CardMetric.fromId(it.trim()) }
             val top = metrics(parts["top"]).distinct().take(CardLine.TOP.slots)
             val bottom = metrics(parts["bottom"]).distinct().filter { it !in top }.take(CardLine.BOTTOM.slots)
-            return CardLayout(top, bottom, parts["platform"] != "0")
+            return CardLayout(
+                top, bottom, parts["platform"] != "0",
+                topFont = parts["topfont"]?.toIntOrNull()?.let(::clampFont) ?: 100,
+                bottomFont = parts["bottomfont"]?.toIntOrNull()?.let(::clampFont) ?: 100,
+            )
+        }
+
+        const val FONT_MIN = 70
+        const val FONT_MAX = 160
+        const val FONT_STEP = 10
+
+        fun clampFont(percent: Int): Int {
+            val stepped = Math.round(percent / FONT_STEP.toDouble()).toInt() * FONT_STEP
+            return stepped.coerceIn(FONT_MIN, FONT_MAX)
         }
     }
 }
