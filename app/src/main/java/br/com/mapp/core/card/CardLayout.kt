@@ -1,5 +1,6 @@
 package br.com.mapp.core.card
 
+import br.com.mapp.core.engine.OfferEvaluator
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.Signal
@@ -138,7 +139,9 @@ object CardValues {
     private val PT_BR: Locale = Locale.forLanguageTag("pt-BR")
 
     /** Forma da linha de cima: com unidade ("R$ 29,20", "1h00m", "★ 4,92", "R$ 1,05/km"). */
-    fun full(metric: CardMetric, o: EvaluatedOffer): String {
+    fun full(metric: CardMetric, o: EvaluatedOffer): String = approx(metric, o, fullValue(metric, o))
+
+    private fun fullValue(metric: CardMetric, o: EvaluatedOffer): String {
         val m = o.metrics
         return when (metric) {
             CardMetric.PRICE -> money(o.raw.price)
@@ -156,7 +159,9 @@ object CardValues {
     }
 
     /** Forma da linha de baixo: só o número ("29,20", "1,05", "29", "62%"). */
-    fun compact(metric: CardMetric, o: EvaluatedOffer): String {
+    fun compact(metric: CardMetric, o: EvaluatedOffer): String = approx(metric, o, compactValue(metric, o))
+
+    private fun compactValue(metric: CardMetric, o: EvaluatedOffer): String {
         val m = o.metrics
         return when (metric) {
             CardMetric.PRICE -> num(o.raw.price, 2)
@@ -172,6 +177,24 @@ object CardValues {
             CardMetric.NET_PERCENT -> netPercent(o)?.let { num(it, 0) + "%" } ?: "—"
         }
     }
+
+    /**
+     * "~" na frente do que depende de um número que o leitor não conseguiu ler (tempo ou km de um
+     * trecho estimado pela velocidade — ver OfferEvaluator.legs).
+     */
+    private fun approx(metric: CardMetric, o: EvaluatedOffer, text: String): String {
+        if (text.contains('—')) return text // sem valor
+        val legs = OfferEvaluator.legs(o.raw)
+        val byTime = legs.timeEstimated && metric in TIME_METRICS
+        val byKm = legs.kmEstimated && metric in KM_METRICS
+        if (!byTime && !byKm) return text
+        val label = LABELS.firstOrNull { text.startsWith(it) } ?: return "~$text"
+        return label + "~" + text.substring(label.length)
+    }
+
+    private val TIME_METRICS = setOf(CardMetric.TOTAL_TIME, CardMetric.PER_HOUR, CardMetric.PER_MIN, CardMetric.NET_PER_HOUR)
+    private val KM_METRICS = setOf(CardMetric.TOTAL_KM, CardMetric.PER_KM, CardMetric.NET_PROFIT, CardMetric.NET_PER_HOUR, CardMetric.NET_PERCENT)
+    private val LABELS = listOf("Lucro ")
 
     /** Rótulo curto da linha de baixo. */
     fun shortLabel(metric: CardMetric): String = when (metric) {

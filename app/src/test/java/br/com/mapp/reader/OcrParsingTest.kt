@@ -231,6 +231,31 @@ class OcrParsingTest {
         assertNull(ParseUtils.findPerKmRate(listOf("R$ 8,43", "+R$ 1,96 incluída para retirada")))
     }
 
+    // ------------------------------------------------------------------ tempo da viagem ilegível (13/11/2026, 07:03)
+
+    // Corrida de R$ 10,08 (Lg. Vespasiano Júlio Veppo → Av. Mariland): saiu viagem 3,4 km sem tempo e
+    // R$ 151,20/h. Variações de erro do OCR no número/unidade do tempo, todas têm que dar 11 min.
+    private fun veppo(tripLine: String) = listOf(
+        "UberX", "Exclusivo", "R$ 10,08", "Est. de R$2,14/km", "+10% de ganhos Uber Pro", "4 min • 1.3 km",
+        "Lg. Vespasiano Júlio Veppo, Centro", "Histórico, Porto Alegre", "* 4,85 (310)", tripLine,
+        "Av. Mariland, 450, Auxiliadora, Porto", "Alegre", "Aceitar",
+    )
+
+    @Test fun tempo_da_viagem_com_erro_de_ocr() {
+        val variacoes = listOf(
+            "11 minutos • 3.4 km", "ll minutos • 3.4 km", "1l minutos 3.4 km", "Il min • 3.4 km", "11 mín • 3.4 km",
+            "11 rnin • 3.4 km", "11 mlnutos • 3.4 km", "11 minut0s • 3.4 krn", "a11 minutos • 3.4 km", "&11 min • 3.4 km",
+        )
+        for (line in variacoes) {
+            val o = UberParser.parse(veppo(line), fromOcr = true)
+            assertEquals(line, 11, o?.tripMin)
+            assertEquals(line, 3.4, o!!.tripKm!!, eps)
+            assertEquals(4, o.pickupMin)
+            assertEquals(1.3, o.pickupKm!!, eps)
+            assertEquals(10.08, o.price, eps)
+        }
+    }
+
     // ------------------------------------------------------------------ limpeza de linha
 
     @Test fun limpa_erros_comuns_do_ocr() {
@@ -242,6 +267,17 @@ class OcrParsingTest {
         assertEquals("4 min • 1.6 km", ParseUtils.cleanOcrLine("4 min•l6 km"))
         assertEquals("4 min • 1.6 km", ParseUtils.cleanOcrLine("4 min l6 km"))
         assertEquals("5 minutos • 2.7 km", ParseUtils.cleanOcrLine(".5 minutos• 2.7 km"))
+        // Unidade e número com letra no lugar de dígito.
+        assertEquals("11 min • 3.4 km", ParseUtils.cleanOcrLine("11 mín • 3.4 km"))
+        assertEquals("11 minutos • 3.4 km", ParseUtils.cleanOcrLine("ll mlnutos • 3.4 krn"))
+        assertEquals("10 min • 5.4 km", ParseUtils.cleanOcrLine("1O min S.4 km"))
+        assertEquals("8 min • 2.0 km", ParseUtils.cleanOcrLine("B min • 2.0 km"))
+        assertEquals("11 minutos • 3.4 km", ParseUtils.cleanOcrLine("a11 minutos • 3.4 km"))
+        // Endereço, valor e taxa não mudam.
+        assertEquals("Lg. Vespasiano Júlio Veppo, Centro", ParseUtils.cleanOcrLine("Lg. Vespasiano Júlio Veppo, Centro"))
+        assertEquals("Est. de R$2,14/km", ParseUtils.cleanOcrLine("Est. de R$2,14/km"))
+        assertEquals("Minas Gerais, 120", ParseUtils.cleanOcrLine("Minas Gerais, 120"))
+        assertEquals("+10% de ganhos Uber Pro", ParseUtils.cleanOcrLine("+10% de ganhos Uber Pro"))
         // Velocidade possível: não mexe.
         assertEquals("29 minutos • 14 km", ParseUtils.cleanOcrLine("29 minutos • 14 km"))
         assertEquals("1 h 5 min • 75 km", ParseUtils.cleanOcrLine("1 h 5 min • 75 km"))
