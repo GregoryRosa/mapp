@@ -268,7 +268,7 @@ private val MENU = listOf(
     MenuItem("Jornadas", Icons.Outlined.Timer, Routes.SHIFTS),
     MenuItem("Ofertas", Icons.Outlined.History, Routes.HISTORY),
     MenuItem("Perfis", Icons.Outlined.Tune, Routes.PROFILES),
-    MenuItem("Cartão", Icons.Outlined.Style, Routes.CARD_STYLE),
+    MenuItem("Card", Icons.Outlined.Style, Routes.CARD_STYLE),
     MenuItem("Veículo", Icons.Outlined.DirectionsCar, Routes.VEHICLE),
     MenuItem("Zonas", Icons.Outlined.Map, Routes.ZONES),
 )

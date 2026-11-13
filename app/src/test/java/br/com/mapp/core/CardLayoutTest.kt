@@ -110,6 +110,28 @@ class CardLayoutTest {
     }
 
     @Test
+    fun `corrida otima so com tudo verde no Card`() {
+        val profile = FilterProfile(minRating = 4.7)
+        val great = RawOffer(Platform.UBER, 30.0, tripKm = 10.0, tripMin = 15, pickupKm = 1.0, pickupMin = 3, passengerRating = 4.95)
+        val o = OfferEvaluator.evaluate(great, profile, VehicleCostConfig())
+        assertEquals(Signal.GREEN, o.signal)
+        assertEquals(true, CardValues.allGreen(o, profile, def))
+        // R$/km amarelo: não é ótima.
+        val yellow = OfferEvaluator.evaluate(great.copy(price = 20.0), profile, VehicleCostConfig())
+        assertEquals(false, CardValues.allGreen(yellow, profile, def))
+        // Semáforo verde, mas o lucro no Card está vermelho (custo do carro alto).
+        val easy = FilterProfile(minPerKm = 0.4, goodPerKm = 0.5, minPerHour = 5.0, goodPerHour = 10.0)
+        val costly = VehicleCostConfig(fuelPricePerUnit = 6.0, kmPerUnit = 1.0)
+        val red = OfferEvaluator.evaluate(great, easy, costly)
+        assertEquals(Signal.GREEN, red.signal)
+        assertEquals(false, CardValues.allGreen(red, easy, def))
+        assertEquals(true, CardValues.allGreen(red, easy, def.remove(NET_PROFIT)))
+        // Sem km lido não dá para saber.
+        val unknown = OfferEvaluator.evaluate(RawOffer(Platform.UBER, 30.0), profile, VehicleCostConfig())
+        assertEquals(false, CardValues.allGreen(unknown, profile, def))
+    }
+
+    @Test
     fun `tamanho das letras salva, limita e le texto antigo`() {
         val l = def.withFont(CardLine.TOP, 130).withFont(CardLine.BOTTOM, 500)
         assertEquals(130, l.topFont)

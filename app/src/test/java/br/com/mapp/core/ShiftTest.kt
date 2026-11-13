@@ -172,6 +172,13 @@ class ShiftTest {
         assertNull(ShiftCodec.decode(null))
     }
 
+    @Test fun tipo_eletrico_antigo_vira_electric() {
+        val old = ShiftCodec.decode("v1\t0\t0\t\t0.0\n1\tUBER\tElétrico\t10.0\t\t\t1")!!
+        assertEquals("Electric", old.trips.single().category)
+        assertEquals("Comfort", ShiftTrip.categoryName("Comfort"))
+        assertNull(ShiftTrip.categoryName(""))
+    }
+
     @Test fun hodometro_ignora_tremido_impreciso_e_salto() {
         val o = Odometer()
         val base = GeoPoint(-30.0, -51.0)

@@ -50,11 +50,11 @@ object UberParser : BaseOfferParser(Platform.UBER) {
         "uberx" to "UberX",
         "comfort" to "Comfort", "ubercomfort" to "Comfort",
         "black" to "Black", "uberblack" to "Black", "blackbag" to "Black", "uberblackbag" to "Black",
-        "eletrico" to "Elétrico", "ubereletrico" to "Elétrico", "comforteletrico" to "Elétrico",
-        // A Uber mostra a modalidade em inglês ("Electric"); o OCR às vezes perde/troca uma letra.
-        "electric" to "Elétrico", "uberelectric" to "Elétrico", "comfortelectric" to "Elétrico",
-        "uberxelectric" to "Elétrico", "eletric" to "Elétrico", "electrc" to "Elétrico", "elecric" to "Elétrico",
-        "green" to "Elétrico", "ubergreen" to "Elétrico", "planet" to "Elétrico", "uberplanet" to "Elétrico",
+        "eletrico" to "Electric", "ubereletrico" to "Electric", "comforteletrico" to "Electric",
+        // A Uber mostra a modalidade em inglês ("Electric") e o MApp usa o mesmo nome; o OCR às vezes perde/troca uma letra.
+        "electric" to "Electric", "uberelectric" to "Electric", "comfortelectric" to "Electric",
+        "uberxelectric" to "Electric", "eletric" to "Electric", "electrc" to "Electric", "elecric" to "Electric",
+        "green" to "Electric", "ubergreen" to "Electric", "planet" to "Electric", "uberplanet" to "Electric",
         "flash" to "Flash", "uberflash" to "Flash", "flashmoto" to "Flash",
         "moto" to "Moto", "ubermoto" to "Moto",
         "priority" to "Prioridade", "prioridade" to "Prioridade", "uberpriority" to "Prioridade",
