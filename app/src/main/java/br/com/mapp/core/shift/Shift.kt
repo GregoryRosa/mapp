@@ -4,6 +4,9 @@ import br.com.mapp.core.geo.Geo
 import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.RawOffer
+import br.com.mapp.core.repo.EntryKind
+import br.com.mapp.core.repo.FinanceEntry
+import br.com.mapp.core.repo.OfferRecord
 import java.time.Instant
 import java.time.ZoneId
 import java.util.Locale
@@ -53,6 +56,8 @@ data class Shift(
     val trips: List<ShiftTrip> = emptyList(),
     /** Custo/km do veículo no momento em que a jornada foi encerrada (null = usar o atual). */
     val costPerKm: Double? = null,
+    /** Quando foi encerrada (null = aberta, ou gravada por versão antiga). */
+    val endedAt: Long? = null,
 ) {
     val paused: Boolean get() = resumedAt == null
 
@@ -274,6 +279,116 @@ object ShiftMath {
     private val PT_BR: Locale = Locale.forLanguageTag("pt-BR")
 }
 
+/**
+ * Totais de um período (dia, semana da Uber, mês). É a MESMA conta em todas as telas — tela inicial,
+ * Aceitas hoje, Ganhos e gastos e Relatórios —, então os números batem entre elas.
+ */
+data class PeriodTotals(
+    /** Corridas finalizadas nas jornadas + corridas aceitas fora de jornada. */
+    val rides: Int = 0,
+    val ridesGross: Double = 0.0,
+    /** Ganhos lançados à mão em Ganhos e gastos. */
+    val manualIncome: Double = 0.0,
+    /** Corridas aceitas ainda em andamento (entram no ganho ao finalizar). */
+    val pendingRides: Int = 0,
+    /** Km rodados: GPS das jornadas (com e sem passageiro) + km das corridas fora de jornada. */
+    val km: Double = 0.0,
+    val kmWithTrip: Double = 0.0,
+    /** Tempo trabalhado: jornadas (sem as pausas) + tempo das corridas fora de jornada. */
+    val hours: Double = 0.0,
+    /** Custo do carro: km rodados × custo/km do veículo. */
+    val carCost: Double = 0.0,
+    /** Gastos lançados à mão. */
+    val expenses: Double = 0.0,
+    val avgTripKm: Double? = null,
+    val categories: List<CategoryShare> = emptyList(),
+    val shifts: Int = 0,
+) {
+    /** Valor bruto: tudo o que entrou, sem tirar custos. */
+    val gross: Double get() = ridesGross + manualIncome
+    val cost: Double get() = carCost + expenses
+    /** Valor líquido: bruto − custo do carro − gastos lançados. */
+    val net: Double get() = gross - cost
+    val kmWithoutTrip: Double get() = max(0.0, km - kmWithTrip)
+    private val hasKm: Boolean get() = km >= 0.1 && gross > 0
+    private val hasTime: Boolean get() = hours >= 1.0 / 60 && gross > 0
+    val perKm: Double? get() = if (hasKm) gross / km else null
+    val netPerKm: Double? get() = if (hasKm) net / km else null
+    val perHour: Double? get() = if (hasTime) gross / hours else null
+    val netPerHour: Double? get() = if (hasTime) net / hours else null
+    /** Custo/km efetivo do período (jornadas encerradas guardam o custo/km do dia). */
+    val carCostPerKm: Double? get() = if (km > 0) carCost / km else null
+    val isEmpty: Boolean
+        get() = rides == 0 && pendingRides == 0 && shifts == 0 && manualIncome <= 0.0 && expenses <= 0.0
+}
+
+object PeriodMath {
+    /**
+     * Soma o período [from]..[to] sem contar nada duas vezes:
+     * - jornadas que COMEÇARAM no período: corridas finalizadas, km do GPS, tempo e custo
+     *   ([ShiftMath.summary]). Dentro do horário de uma jornada, ela manda: corrida cancelada lá não
+     *   conta, mesmo que tenha ficado marcada como aceita no histórico de ofertas;
+     * - corridas marcadas como aceitas no histórico FORA de qualquer jornada: valor, km (busca + viagem)
+     *   e tempo da oferta, custo = km × [costPerKm];
+     * - lançamentos manuais: ganho soma no bruto (km informado soma nos km e no custo do carro), gasto
+     *   soma nos custos.
+     * [current] = jornada aberta (vale até [now]); [history] = encerradas.
+     */
+    fun totals(
+        from: Long,
+        to: Long,
+        current: Shift?,
+        history: List<Shift>,
+        offers: List<OfferRecord>,
+        entries: List<FinanceEntry>,
+        costPerKm: Double,
+        now: Long,
+    ): PeriodTotals {
+        val spans = listOfNotNull(current).map { it to max(now, it.startedAt) } +
+            history.map { it to (it.endedAt ?: (it.startedAt + it.activeMs)) }
+        val inPeriod = spans.map { it.first }.filter { it.startedAt in from..to }
+        val summaries = inPeriod.map { ShiftMath.summary(it, costPerKm, now) }
+
+        val loose = offers.filter { r ->
+            val raw = r.evaluated.raw
+            r.accepted == true && raw.capturedAt in from..to &&
+                spans.none { (s, end) ->
+                    raw.capturedAt in s.startedAt..end || s.tripIndexFor(raw.platform, raw.price, raw.capturedAt) >= 0
+                }
+        }
+        val looseKm = loose.sumOf { offerKm(it) }
+        val looseHours = loose.sumOf { it.evaluated.metrics.totalMin ?: 0 } / 60.0
+
+        val inRange = entries.filter { it.atMillis in from..to }
+        val income = inRange.filter { it.kind == EntryKind.INCOME }
+        val manualKm = income.sumOf { e -> e.km?.takeIf { it > 0 } ?: 0.0 }
+
+        val rides = inPeriod.flatMap { s -> s.trips.filter { it.finished } } +
+            loose.map { ShiftTrip.from(it.evaluated.raw, it.evaluated.raw.capturedAt) }
+        val tripKms = rides.mapNotNull { it.tripKm }
+        return PeriodTotals(
+            rides = rides.size,
+            ridesGross = rides.sumOf { it.price },
+            manualIncome = income.sumOf { it.amount },
+            pendingRides = inPeriod.sumOf { s -> s.trips.count { !it.finished } },
+            km = summaries.sumOf { it.totalKm } + looseKm + manualKm,
+            kmWithTrip = tripKms.sum(),
+            hours = summaries.sumOf { it.hours } + looseHours,
+            carCost = summaries.sumOf { it.cost } + (looseKm + manualKm) * costPerKm,
+            expenses = inRange.filter { it.kind == EntryKind.EXPENSE }.sumOf { it.amount },
+            avgTripKm = if (tripKms.isNotEmpty()) tripKms.average() else null,
+            categories = ShiftMath.categories(rides),
+            shifts = inPeriod.size,
+        )
+    }
+
+    /** Km da oferta: busca + viagem (com o que foi estimado quando o OCR não leu). */
+    private fun offerKm(r: OfferRecord): Double {
+        val raw = r.evaluated.raw
+        return r.evaluated.metrics.totalKm ?: ((raw.pickupKm ?: 0.0) + (raw.tripKm ?: 0.0))
+    }
+}
+
 /** Posição do GPS com precisão (metros) e horário. */
 data class Fix(val point: GeoPoint, val accuracyM: Float?, val atMillis: Long)
 
@@ -311,7 +426,10 @@ object ShiftCodec {
     private const val SEP = "\t"
 
     fun encode(s: Shift): String = buildString {
-        append(listOf("v1", s.startedAt, s.activeMs, s.resumedAt ?: "", s.gpsKm, s.costPerKm ?: "").joinToString(SEP))
+        append(
+            listOf("v1", s.startedAt, s.activeMs, s.resumedAt ?: "", s.gpsKm, s.costPerKm ?: "", s.endedAt ?: "")
+                .joinToString(SEP),
+        )
         s.trips.forEach { t ->
             append('\n')
             append(
@@ -335,6 +453,7 @@ object ShiftCodec {
                 resumedAt = h[3].toLongOrNull(),
                 gpsKm = h[4].toDouble(),
                 costPerKm = h.getOrNull(5)?.toDoubleOrNull(),
+                endedAt = h.getOrNull(6)?.toLongOrNull(),
                 trips = rows.drop(1).filter { it.isNotBlank() }.map { row ->
                     val c = row.split(SEP)
                     ShiftTrip(

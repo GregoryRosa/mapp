@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.com.mapp.MappApp
 import br.com.mapp.core.repo.OfferRecord
+import br.com.mapp.core.shift.PeriodTotals
 import br.com.mapp.core.shift.ShiftTrip
 import br.com.mapp.overlay.ShiftTracker
 import kotlinx.coroutines.launch
@@ -53,13 +54,15 @@ fun HistoryScreen(onBack: () -> Unit) {
     val repos = MappApp.repos
     // 0 = Aceitas hoje (padrão: o que importa na jornada), 1 = Todas as ofertas.
     var tab by rememberSaveable { mutableIntStateOf(0) }
-    val today = remember { ReportMath.today() }
-    val todayOffers by remember { repos.offers.between(today.from, today.to) }
+    val now = rememberNow()
+    val today = ReportMath.today(now)
+    val todayOffers by remember(today) { repos.offers.between(today.from, today.to) }
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val offers by remember { repos.offers.recent(HISTORY_LIMIT) }
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val accepted = remember(todayOffers) { ReportMath.accepted(todayOffers) }
-    val summary = remember(todayOffers) { ReportMath.summarizeAccepted(todayOffers) }
+    // Resumo do dia com a mesma conta da tela inicial e de Ganhos e gastos (km do GPS, tempo da jornada).
+    val summary = rememberPeriodTotals(today, now)
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
     val toggle: (OfferRecord) -> Unit = { r ->
@@ -118,18 +121,27 @@ fun HistoryScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun AcceptedSummaryCard(s: AcceptedSummary) {
+private fun AcceptedSummaryCard(t: PeriodTotals) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
-                "${s.count} ${if (s.count == 1) "corrida" else "corridas"} · ${Format.brl(s.total)}",
+                "${t.rides} ${if (t.rides == 1) "corrida" else "corridas"} · ${Format.brl(t.ridesGross)}",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                "Lucro ${Format.brl(s.profit)} · ${Format.perKm(s.avgPerKm)} · ${Format.perHour(s.avgPerHour)}",
+                "${Format.km(t.km)} rodados · ${Format.perKm(t.perKm)} · ${Format.perHour(t.perHour)}",
                 style = MaterialTheme.typography.bodyMedium,
             )
+            if (t.manualIncome > 0) {
+                Text("+ ${Format.brl(t.manualIncome)} em ganhos lançados", style = MaterialTheme.typography.bodySmall)
+            }
+            if (t.pendingRides > 0) {
+                Text(
+                    "🚕 ${t.pendingRides} em andamento · soma no ganho ao finalizar",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
     }
 }

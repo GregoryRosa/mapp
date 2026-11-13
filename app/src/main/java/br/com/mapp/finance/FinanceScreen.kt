@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -19,8 +21,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
@@ -31,14 +36,18 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -48,7 +57,12 @@ import br.com.mapp.core.model.Platform
 import br.com.mapp.core.repo.EntryKind
 import br.com.mapp.core.repo.FinanceEntry
 import br.com.mapp.core.repo.Goals
+import br.com.mapp.core.shift.PeriodTotals
+import br.com.mapp.core.shift.ShiftMath
 import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZoneOffset
 
 private val EXPENSE_CATEGORIES = listOf("Combustível", "Manutenção", "Alimentação", "Lavagem", "Outros")
 private const val OTHER_PLATFORM = "Outros"
@@ -57,21 +71,27 @@ private const val OTHER_PLATFORM = "Outros"
 fun FinanceScreen(onBack: () -> Unit) {
     val repos = MappApp.repos
     val scope = rememberCoroutineScope()
-    val month = remember { ReportMath.currentMonth() }
-    val today = remember { ReportMath.today() }
+    val now = rememberNow()
+    val zone = remember { ZoneId.systemDefault() }
+    val todayDate = ReportMath.dateOf(now, zone)
+    // Dia escolhido no calendário da seção "Hoje" (null = hoje). Guardado como dia epoch.
+    var pickedDay by rememberSaveable { mutableStateOf<Long?>(null) }
+    val date = pickedDay?.let { LocalDate.ofEpochDay(it) }?.takeIf { it <= todayDate } ?: todayDate
+    // Períodos são data classes: recalculados a cada minuto, só mudam na virada do dia/semana/mês.
+    val day = ReportMath.day(date, zone)
+    val week = ReportMath.uberWeek(now, zone)
+    val month = ReportMath.currentMonth(now, zone)
 
     val entries by remember(month) { repos.finance.entries(month.from, month.to) }
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val goals by remember { repos.finance.goals() }.collectAsStateWithLifecycle(initialValue = Goals())
 
-    val offers by remember(month) { repos.offers.between(month.from, month.to) }
-        .collectAsStateWithLifecycle(initialValue = emptyList())
-    // Corridas marcadas como aceitas no histórico de ofertas entram nos ganhos.
-    val rides = remember(offers) { ReportMath.ridesAsIncome(offers) }
-    val withRides = remember(entries, rides) { entries + rides }
-    val todaySummary = remember(withRides, today) { ReportMath.summarize(withRides, today) }
-    val monthSummary = remember(withRides) { ReportMath.summarize(withRides) }
+    // Mesma conta da tela inicial e do histórico: jornadas + corridas aceitas fora de jornada + lançamentos.
+    val dayTotals = rememberPeriodTotals(day, now)
+    val weekTotals = rememberPeriodTotals(week, now)
+    val monthTotals = rememberPeriodTotals(month, now)
 
+    var showPicker by remember { mutableStateOf(false) }
     var showEntryDialog by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<FinanceEntry?>(null) }
     var showGoals by remember { mutableStateOf(false) }
@@ -96,13 +116,46 @@ fun FinanceScreen(onBack: () -> Unit) {
             contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item { SummaryCard("Hoje", todaySummary, ReportMath.goalProgress(todaySummary.income, goals.daily)) }
-            item { SummaryCard("Mês", monthSummary, ReportMath.goalProgress(monthSummary.income, goals.monthly)) }
-            if (rides.isNotEmpty()) {
+            item {
+                PeriodCard(
+                    title = dayTitle(date, todayDate),
+                    subtitle = null,
+                    totals = dayTotals,
+                    goal = ReportMath.goalProgress(dayTotals.gross, goals.daily),
+                    goalHint = true,
+                    titleActions = {
+                        IconButton(onClick = { showPicker = true }) {
+                            Icon(Icons.Outlined.CalendarMonth, contentDescription = "Escolher o dia")
+                        }
+                        if (date != todayDate) {
+                            TextButton(onClick = { pickedDay = null }) { Text("Hoje") }
+                        }
+                    },
+                )
+            }
+            item {
+                PeriodCard(
+                    title = "Semana",
+                    subtitle = "Seg ${Format.day(week.from)} às 4h até seg ${Format.day(week.to)} às 4h (fechamento da Uber)",
+                    totals = weekTotals,
+                    goal = null,
+                    goalHint = false,
+                )
+            }
+            item {
+                PeriodCard(
+                    title = "Mês",
+                    subtitle = null,
+                    totals = monthTotals,
+                    goal = ReportMath.goalProgress(monthTotals.gross, goals.monthly),
+                    goalHint = true,
+                )
+            }
+            if (monthTotals.rides > 0) {
                 item {
                     Text(
-                        "Ganhos incluem ${rides.size} corridas aceitas no mês (${Format.brl(rides.sumOf { it.amount })}). " +
-                            "Não lance essas corridas de novo aqui.",
+                        "Ganhos incluem ${monthTotals.rides} corridas do mês (${Format.brl(monthTotals.ridesGross)}), " +
+                            "contadas sozinhas pela jornada e pelo histórico de ofertas. Não lance essas corridas de novo aqui.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -121,6 +174,14 @@ fun FinanceScreen(onBack: () -> Unit) {
         }
     }
 
+    if (showPicker) {
+        DayPickerDialog(
+            selected = date,
+            today = todayDate,
+            onPick = { picked -> pickedDay = if (picked == todayDate) null else picked.toEpochDay() },
+            onDismiss = { showPicker = false },
+        )
+    }
     if (showEntryDialog) {
         EntryDialog(
             initial = editing,
@@ -151,24 +212,81 @@ fun FinanceScreen(onBack: () -> Unit) {
     }
 }
 
+/** "Hoje", "Ontem, 12/11" ou "Qua, 11/11". */
+private fun dayTitle(date: LocalDate, today: LocalDate): String {
+    val dm = "%02d/%02d".format(date.dayOfMonth, date.monthValue)
+    return when (date) {
+        today -> "Hoje"
+        today.minusDays(1) -> "Ontem, $dm"
+        else -> "${Format.WEEKDAYS[date.dayOfWeek.value - 1]}, $dm"
+    }
+}
+
+/**
+ * Resumo de um período. O valor bruto fica sempre à vista; o botão Bruto/Líquido mostra o que sobra
+ * tirando os custos (carro: km × custo/km do veículo; mais os gastos lançados).
+ */
 @Composable
-private fun SummaryCard(title: String, s: PeriodSummary, goal: GoalProgress?) {
+private fun PeriodCard(
+    title: String,
+    subtitle: String?,
+    totals: PeriodTotals,
+    goal: GoalProgress?,
+    goalHint: Boolean,
+    titleActions: @Composable RowScope.() -> Unit = {},
+) {
+    var net by rememberSaveable { mutableStateOf(false) }
+    val t = totals
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                titleActions()
+                Spacer(Modifier.weight(1f))
+                NetToggle(net, onToggle = { net = !net })
+            }
+            subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             Row(Modifier.fillMaxWidth()) {
-                LabeledValue("Ganhos", Format.brl(s.income), Modifier.weight(1f))
-                LabeledValue("Gastos", Format.brl(s.expense), Modifier.weight(1f))
-                LabeledValue(
-                    "Lucro",
-                    Format.brl(s.profit),
-                    Modifier.weight(1f),
-                    color = if (s.profit < 0) RedSignal else GreenSignal,
+                LabeledValue("Ganho bruto", Format.brl(t.gross), Modifier.weight(1f))
+                if (net) {
+                    LabeledValue("Custos", Format.brl(t.cost), Modifier.weight(1f), color = RedSignal)
+                    LabeledValue(
+                        "Líquido",
+                        Format.brl(t.net),
+                        Modifier.weight(1f),
+                        color = if (t.net < 0) RedSignal else GreenSignal,
+                    )
+                } else {
+                    LabeledValue("Corridas", t.rides.toString(), Modifier.weight(1f))
+                    LabeledValue("Tempo", ShiftMath.duration(t.hours), Modifier.weight(1f))
+                }
+            }
+            if (t.km > 0) {
+                Text(
+                    if (net) {
+                        "${Format.km(t.km)} · ${Format.perKm(t.netPerKm)} · ${Format.perHour(t.netPerHour)} líquidos"
+                    } else {
+                        "${Format.km(t.km)} · ${Format.perKm(t.perKm)} · ${Format.perHour(t.perHour)}"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
                 )
             }
-            if (s.km > 0) {
+            if (net) {
                 Text(
-                    "${Format.km(s.km)} · ${Format.perKm(s.incomePerKm)}",
+                    "Custos: carro ${Format.brl(t.carCost)} (${Format.km(t.km)} × ${Format.perKm(t.carCostPerKm)})" +
+                        " + gastos lançados ${Format.brl(t.expenses)}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (t.manualIncome > 0) {
+                Text(
+                    "Bruto = corridas ${Format.brl(t.ridesGross)} + ganhos lançados ${Format.brl(t.manualIncome)}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (t.pendingRides > 0) {
+                Text(
+                    "🚕 ${t.pendingRides} em andamento · soma no ganho ao finalizar",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -182,10 +300,36 @@ private fun SummaryCard(title: String, s: PeriodSummary, goal: GoalProgress?) {
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
-            } else {
+            } else if (goalHint) {
                 Text("Sem meta definida (toque na bandeira).", style = MaterialTheme.typography.bodySmall)
             }
         }
+    }
+}
+
+/** Calendário para escolher o dia da seção "Hoje" (até hoje). */
+@Composable
+private fun DayPickerDialog(selected: LocalDate, today: LocalDate, onPick: (LocalDate) -> Unit, onDismiss: () -> Unit) {
+    // O DatePicker trabalha com meia-noite UTC de cada data.
+    val todayUtc = today.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+    val state = rememberDatePickerState(
+        initialSelectedDateMillis = selected.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
+        selectableDates = object : SelectableDates {
+            override fun isSelectableDate(utcTimeMillis: Long): Boolean = utcTimeMillis <= todayUtc
+            override fun isSelectableYear(year: Int): Boolean = year <= today.year
+        },
+    )
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = {
+                state.selectedDateMillis?.let { onPick(LocalDate.ofEpochDay(Math.floorDiv(it, 86_400_000L))) }
+                onDismiss()
+            }) { Text("Ver dia") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
+    ) {
+        DatePicker(state = state)
     }
 }
 
@@ -215,7 +359,7 @@ private fun EntryRow(entry: FinanceEntry, onClick: () -> Unit, onDelete: () -> U
         headlineContent = { Text(if (income) "Ganho · ${entry.category}" else "Gasto · ${entry.category}") },
         supportingContent = { Text(details) },
         trailingContent = {
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     (if (income) "+" else "−") + Format.brl(entry.amount),
                     color = if (income) GreenSignal else RedSignal,

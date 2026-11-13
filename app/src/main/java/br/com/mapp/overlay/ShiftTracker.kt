@@ -60,7 +60,7 @@ object ShiftTracker {
     @Synchronized
     fun end(ctx: Context, costPerKm: Double? = null, now: Long = System.currentTimeMillis()): Shift? {
         load(ctx)
-        val ended = _current.value?.pause(now)?.copy(costPerKm = costPerKm) ?: return null
+        val ended = _current.value?.pause(now)?.copy(costPerKm = costPerKm, endedAt = now) ?: return null
         val list = (listOf(ended) + _history.value).take(HISTORY_MAX)
         _current.value = null
         _last.value = ended

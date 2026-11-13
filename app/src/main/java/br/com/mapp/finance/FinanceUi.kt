@@ -1,11 +1,14 @@
 package br.com.mapp.finance
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -16,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.Calculate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -27,15 +31,31 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import br.com.mapp.MappApp
 import br.com.mapp.core.model.Signal
+import br.com.mapp.core.model.VehicleCostConfig
+import br.com.mapp.core.repo.FinanceEntry
+import br.com.mapp.core.repo.OfferRecord
+import br.com.mapp.core.shift.PeriodMath
+import br.com.mapp.core.shift.PeriodTotals
+import br.com.mapp.overlay.ShiftTracker
+import kotlinx.coroutines.delay
 
 /* Componentes compartilhados pelas telas de finance/. */
 
@@ -166,4 +186,70 @@ internal fun EmptyText(text: String, modifier: Modifier = Modifier) {
         textAlign = TextAlign.Center,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+/** Relógio da tela: atualiza a cada 30 s (tempo da jornada aberta, virada do dia). */
+@Composable
+fun rememberNow(): Long {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            now = System.currentTimeMillis()
+        }
+    }
+    return now
+}
+
+/**
+ * Totais do período com a mesma conta em todas as telas ([PeriodMath.totals]): jornadas (km do GPS,
+ * tempo, custo), corridas aceitas fora de jornada e lançamentos manuais.
+ */
+@Composable
+fun rememberPeriodTotals(period: Period, now: Long = rememberNow()): PeriodTotals {
+    val ctx = LocalContext.current
+    val repos = MappApp.repos
+    val current by remember { ShiftTracker.current(ctx) }.collectAsStateWithLifecycle()
+    val history by remember { ShiftTracker.history(ctx) }.collectAsStateWithLifecycle()
+    val cost by remember { repos.vehicle.config() }.collectAsStateWithLifecycle(VehicleCostConfig())
+    val offers by remember(period) { repos.offers.between(period.from, period.to) }
+        .collectAsStateWithLifecycle(initialValue = emptyList<OfferRecord>())
+    val entries by remember(period) { repos.finance.entries(period.from, period.to) }
+        .collectAsStateWithLifecycle(initialValue = emptyList<FinanceEntry>())
+    return remember(period, current, history, cost, offers, entries, now) {
+        PeriodMath.totals(period.from, period.to, current, history, offers, entries, cost.costPerKm, now)
+    }
+}
+
+/**
+ * Botão "tirar os custos": alterna entre o valor bruto (padrão) e o líquido (bruto − custo do carro −
+ * gastos lançados).
+ */
+@Composable
+fun NetToggle(
+    net: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+    activeColor: Color = GreenSignal,
+    idleColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+) {
+    val color = if (net) activeColor else idleColor
+    val shape = RoundedCornerShape(50)
+    Row(
+        modifier.clip(shape)
+            .background(if (net) color.copy(alpha = 0.15f) else Color.Transparent)
+            .border(1.dp, color.copy(alpha = 0.6f), shape)
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.Calculate,
+            contentDescription = if (net) "Mostrar valor bruto" else "Tirar os custos (valor líquido)",
+            tint = color,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(if (net) "Líquido" else "Bruto", style = MaterialTheme.typography.labelMedium, color = color)
+    }
 }
