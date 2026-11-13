@@ -53,6 +53,12 @@ class OfferPipeline(
     private var lastEvaluated: EvaluatedOffer? = null
     private var lastSeenAt = 0L
     private var job: Job? = null
+    private var evaluation: Run? = null
+
+    /** Uma avaliação. [superseded] = a mesma oferta chegou completada: esta não grava no histórico. */
+    private class Run(val raw: RawOffer) {
+        @Volatile var superseded = false
+    }
 
     /** Suspende enquanto o escopo estiver ativo (rodar no lifecycleScope do serviço). */
     suspend fun run(): Unit = coroutineScope {
@@ -68,13 +74,20 @@ class OfferPipeline(
                 lastEvaluated?.let { OfferBus.publishEvaluated(it) }
                 return@collect
             }
+            // Mesmo horário de 1ª leitura = a oferta na tela, completada pelo leitor (tempo que faltava,
+            // endereço): reavalia, e só a avaliação nova grava (substitui a linha no histórico).
+            val previous = evaluation
+            if (previous != null && previous.raw.capturedAt == raw.capturedAt && previous.raw.platform == raw.platform) {
+                previous.superseded = true
+            }
             job?.cancel()
             lastIdentity = identity
             lastEvaluated = null
             lastSeenAt = raw.capturedAt
+            val current = Run(raw).also { evaluation = it }
             job = launch {
                 try {
-                    handle(raw)
+                    handle(current)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -84,7 +97,8 @@ class OfferPipeline(
         }
     }
 
-    private suspend fun handle(raw: RawOffer) {
+    private suspend fun handle(current: Run) {
+        val raw = current.raw
         val profile = profile ?: orDefault(FilterProfile()) { repos.profiles.active().first() }
         val cost = cost ?: orDefault(VehicleCostConfig()) { repos.vehicle.config().first() }
         val zones = zones ?: orDefault(emptyList()) { repos.zones.all().first() }
@@ -109,7 +123,7 @@ class OfferPipeline(
                 }
             }
         } finally {
-            withContext(NonCancellable) {
+            if (!current.superseded) withContext(NonCancellable) {
                 try {
                     repos.offers.record(result)
                 } catch (e: Exception) {

@@ -14,6 +14,11 @@ import java.util.EnumSet
  *  - quem publicou a oferta é quem decide que ela sumiu;
  *  - na imagem, os trechos (tempo + km de busca e viagem) identificam a oferta: um quadro com o preço
  *    lido errado, ou coberto, não vira "oferta nova" (nada de repetir voz/cartão);
+ *  - na imagem, os quadros da mesma oferta se SOMAM: o que um quadro não leu, outro completa, e cada
+ *    número fica com o valor lido mais vezes. Um quadro sem o tempo da viagem, ou com um dígito
+ *    errado, não troca o cartão (antes o tempo total e o R$/h ficavam piscando entre duas leituras);
+ *  - a oferta mantém o horário da 1ª leitura ([RawOffer.capturedAt]) quando é só completada: é a
+ *    identidade dela no cartão, na voz, na jornada e no histórico;
  *  - enquanto nenhum modo de captura provou que enxerga a oferta, usam-se os dois por ciclo; depois
  *    fica só o que funcionou (janela tem preferência).
  *
@@ -51,6 +56,16 @@ class OfferTracker(
     private var windowFailures = 0
     private val hits = EnumMap<Mode, Int>(Mode::class.java)
     private val treeProven: MutableSet<Platform> = EnumSet.noneOf(Platform::class.java)
+
+    /** Votos de cada número (tempo/km da busca e da viagem) nas leituras por imagem da oferta na tela. */
+    private val votes = HashMap<Leg, HashMap<Number, Int>>()
+
+    private enum class Leg(val of: (RawOffer) -> Number?) {
+        PICKUP_MIN({ it.pickupMin }),
+        PICKUP_KM({ it.pickupKm }),
+        TRIP_MIN({ it.tripMin }),
+        TRIP_KM({ it.tripKm }),
+    }
 
     val shownByImage: Boolean get() = shown != null && source == Source.IMAGE
 
@@ -152,28 +167,74 @@ class OfferTracker(
         val current = shown
         if (current != null && from != source) {
             // A outra fonte viu a mesma oferta: quem publicou continua no comando.
-            if (sameOffer(current, offer, lenient = true)) return
+            if (related(current, offer)) return
             // Imagem no comando: o texto (incompleto nesse app) não troca a oferta.
             if (from == Source.TREE) return
             // Texto no comando e a imagem vê outra coisa: a imagem (regra mais rígida) assume.
         }
         lastSeenAt = now
         imageMisses = 0
-        if (current != null && from == source && sameOffer(current, offer, lenient = from == Source.IMAGE)) {
-            // Mesma oferta. Na imagem, um quadro mais completo (endereço que faltava) atualiza o cartão.
-            val better = from == Source.IMAGE && offer.price == current.price &&
-                completeness(offer) > completeness(current)
-            if (better) show(offer, from)
-        } else {
-            show(offer, from)
+        when {
+            current == null || from != source -> show(offer, from, fresh = true)
+            from == Source.TREE -> when {
+                exact(current, offer) -> Unit
+                // Texto é exato: fica com a leitura nova, mas é a mesma oferta (mesma identidade).
+                related(current, offer) -> show(offer.copy(capturedAt = current.capturedAt), from, fresh = false)
+                else -> show(offer, from, fresh = true)
+            }
+            related(current, offer) -> {
+                // Imagem, mesma oferta: soma o quadro aos anteriores; só republica se o resultado mudou.
+                vote(offer)
+                val merged = merge(current, offer)
+                if (merged != current) show(merged, from, fresh = false)
+            }
+            else -> show(offer, from, fresh = true)
         }
     }
 
-    private fun show(offer: RawOffer, from: Source) {
+    /** [fresh] = oferta nova (zera os votos); senão é a oferta na tela, completada. */
+    private fun show(offer: RawOffer, from: Source, fresh: Boolean) {
+        if (fresh) {
+            votes.clear()
+            if (from == Source.IMAGE) vote(offer)
+        }
         shown = offer
         source = from
         if (from == Source.TREE && complete(offer)) treeProven += offer.platform
         publish(offer)
+    }
+
+    private fun vote(o: RawOffer) {
+        for (leg in Leg.values()) {
+            val v = leg.of(o) ?: continue
+            val box = votes.getOrPut(leg) { HashMap() }
+            box[v] = (box[v] ?: 0) + 1
+        }
+    }
+
+    /** Valor mais lido do número; empate fica com o que já está no cartão. */
+    private fun best(leg: Leg, current: Number?): Number? {
+        val box = votes[leg] ?: return current
+        val top = box.maxOfOrNull { it.value } ?: return current
+        if (current != null && (box[current] ?: 0) >= top) return current
+        return box.entries.first { it.value == top }.key
+    }
+
+    /**
+     * Oferta na tela completada por um quadro da mesma oferta: números pelo voto; endereço/tipo que
+     * faltavam vêm do quadro (endereço só se o preço bate — leitura confiável).
+     */
+    private fun merge(current: RawOffer, frame: RawOffer): RawOffer {
+        val samePrice = frame.price == current.price
+        return current.copy(
+            pickupMin = best(Leg.PICKUP_MIN, current.pickupMin)?.toInt(),
+            pickupKm = best(Leg.PICKUP_KM, current.pickupKm)?.toDouble(),
+            tripMin = best(Leg.TRIP_MIN, current.tripMin)?.toInt(),
+            tripKm = best(Leg.TRIP_KM, current.tripKm)?.toDouble(),
+            pickupAddress = current.pickupAddress ?: frame.pickupAddress.takeIf { samePrice },
+            dropoffAddress = current.dropoffAddress ?: frame.dropoffAddress.takeIf { samePrice },
+            category = current.category ?: frame.category,
+        )
     }
 
     /** Conta quadros de imagem sem a oferta; ela some depois de [IMAGE_CYCLES_TO_CLEAR] ciclos seguidos. */
@@ -193,28 +254,43 @@ class OfferTracker(
             }
         }
         hits.clear()
+        votes.clear()
         shown = null
         source = null
         imageMisses = 0
         clear()
     }
 
+    /** Texto: tudo igual (menos o texto bruto e o horário da leitura). */
+    private fun exact(a: RawOffer, b: RawOffer): Boolean =
+        a.copy(rawText = "", capturedAt = 0L) == b.copy(rawText = "", capturedAt = 0L)
+
     /**
-     * Mesma oferta? Texto ([lenient] = false): tudo igual. Imagem: os trechos identificam a oferta —
-     * o preço pode sair errado num quadro em que parte do cartão está coberta.
+     * É a mesma oferta? Os números da busca e da viagem identificam: os que as duas leituras têm
+     * precisam bater — um número a mais ou a menos é só leitura incompleta; um diferente pode ser
+     * dígito mal lido se o resto (2+ números e o preço) bate. Sem números em comum: preço e endereços.
      */
-    private fun sameOffer(a: RawOffer, b: RawOffer, lenient: Boolean): Boolean {
-        if (!lenient) return a.copy(rawText = "", capturedAt = 0L) == b.copy(rawText = "", capturedAt = 0L)
+    private fun related(a: RawOffer, b: RawOffer): Boolean {
         if (a.platform != b.platform) return false
-        val sameLegs = a.pickupKm == b.pickupKm && a.pickupMin == b.pickupMin &&
-            a.tripKm == b.tripKm && a.tripMin == b.tripMin
-        val hasLegs = a.tripKm != null || a.pickupKm != null
-        if (hasLegs) return sameLegs
-        return sameLegs && a.price == b.price && a.pickupAddress == b.pickupAddress &&
-            a.dropoffAddress == b.dropoffAddress
+        var agree = 0
+        var conflict = 0
+        for (leg in Leg.values()) {
+            val x = leg.of(a) ?: continue
+            val y = leg.of(b) ?: continue
+            if (x == y) agree++ else conflict++
+        }
+        val samePrice = a.price == b.price
+        if (agree + conflict == 0) {
+            return samePrice && compatible(a.pickupAddress, b.pickupAddress) && compatible(a.dropoffAddress, b.dropoffAddress)
+        }
+        return when (conflict) {
+            0 -> agree >= 2 || samePrice
+            1 -> agree >= 2 && samePrice
+            else -> false
+        }
     }
 
-    private fun completeness(o: RawOffer): Int = listOfNotNull(o.pickupAddress, o.dropoffAddress).size
+    private fun compatible(x: String?, y: String?): Boolean = x == null || y == null || x == y
 
     /** Busca e viagem com tempo e km: leitura completa. */
     private fun complete(o: RawOffer): Boolean =

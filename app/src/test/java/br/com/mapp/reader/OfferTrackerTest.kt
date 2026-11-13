@@ -91,6 +91,60 @@ class OfferTrackerTest {
         assertEquals(2, published.size)
     }
 
+    @Test fun quadros_alternando_tempo_lido_e_nao_lido_nao_piscam() {
+        // 13/11: tempo total e R$/h piscavam — um quadro lia "11 minutos" da viagem, o outro não.
+        val t = tracker()
+        val veppo = RawOffer(Platform.UBER, 10.08, tripKm = 3.4, tripMin = null, pickupKm = 1.3, pickupMin = 4, capturedAt = 100L)
+        t.cycle(1_000) { if (it == Mode.WINDOW) veppo else null }
+        t.cycle(2_500) { if (it == Mode.WINDOW) veppo.copy(tripMin = 11, capturedAt = 200L) else null }
+        repeat(6) { i ->
+            val frame = if (i % 2 == 0) veppo.copy(capturedAt = 300L + i) else veppo.copy(tripMin = 11, capturedAt = 300L + i)
+            t.cycle(4_000L + i * 1_500) { if (it == Mode.WINDOW) frame else null }
+        }
+        // Uma vez a leitura incompleta, uma vez completada — e nunca de volta.
+        assertEquals(listOf(null, 11), published.map { it.tripMin })
+        assertEquals(listOf(100L, 100L), published.map { it.capturedAt }) // mesma identidade
+        assertEquals(11, t.shown?.tripMin)
+    }
+
+    @Test fun digito_mal_lido_fica_com_o_valor_mais_lido() {
+        val t = tracker()
+        val base = RawOffer(Platform.UBER, 10.08, tripKm = 3.4, tripMin = 11, pickupKm = 1.3, pickupMin = 4, capturedAt = 1L)
+        t.cycle(1_000) { if (it == Mode.WINDOW) base else null }
+        t.cycle(2_500) { if (it == Mode.WINDOW) base.copy(tripMin = 17) else null }  // empate: fica 11
+        t.cycle(4_000) { if (it == Mode.WINDOW) base else null }
+        t.cycle(5_500) { if (it == Mode.WINDOW) base.copy(tripMin = 17) else null }
+        assertEquals(1, published.size)
+        assertEquals(11, t.shown?.tripMin)
+        // 1º quadro errado: o valor certo, lido mais vezes, assume (uma troca só).
+        val t2 = OfferTracker(true, publish = {}, clear = {})
+        t2.cycle(1_000) { if (it == Mode.WINDOW) base.copy(tripMin = 17) else null }
+        t2.cycle(2_500) { if (it == Mode.WINDOW) base else null }
+        assertEquals(17, t2.shown?.tripMin)
+        t2.cycle(4_000) { if (it == Mode.WINDOW) base else null }
+        assertEquals(11, t2.shown?.tripMin)
+        assertEquals(1L, t2.shown?.capturedAt)
+    }
+
+    @Test fun mesma_busca_com_viagem_e_preco_diferentes_e_outra_oferta() {
+        val t = tracker()
+        val a = RawOffer(Platform.UBER, 10.08, tripKm = 3.4, tripMin = 11, pickupKm = 1.3, pickupMin = 4, capturedAt = 1L)
+        val b = RawOffer(Platform.UBER, 18.20, tripKm = 9.1, tripMin = 22, pickupKm = 1.3, pickupMin = 4, capturedAt = 2L)
+        t.cycle(1_000) { if (it == Mode.WINDOW) a else null }
+        t.cycle(2_500) { if (it == Mode.WINDOW) b else null }
+        assertEquals(listOf(a, b), published)
+    }
+
+    @Test fun texto_completando_a_oferta_mantem_a_identidade() {
+        val t = tracker()
+        val semEndereco = offer.copy(pickupAddress = null, capturedAt = 10L)
+        t.onTree(semEndereco, 1_000)
+        t.onTree(offer.copy(capturedAt = 20L), 1_300)
+        assertEquals(2, published.size)
+        assertEquals(10L, published[1].capturedAt)
+        assertEquals("Av. Sen. Salgado Filho", published[1].pickupAddress)
+    }
+
     @Test fun oferta_nova_substitui_a_anterior_sem_limpar() {
         val t = tracker()
         t.cycle(1_000) { offer }
