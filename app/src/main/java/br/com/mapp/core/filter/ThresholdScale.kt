@@ -57,8 +57,10 @@ data class ThresholdScale(val min: Double, val max: Double, val step: Double) {
 }
 
 /**
- * Faixa amarelo/verde de um critério: abaixo de [low] = vermelho, de [low] até [high] = amarelo,
- * a partir de [high] = verde. O amarelo nunca passa do verde: mover um empurra o outro.
+ * Faixa amarelo/verde de um critério, sempre com [low] ≤ [high]. Mais é melhor (R$/km, nota...):
+ * abaixo de [low] = vermelho, de [low] até [high] = amarelo, a partir de [high] = verde. Menos é
+ * melhor (busca — [ofMax]): até [low] = verde, até [high] = amarelo, acima = vermelho. Uma marca
+ * nunca passa da outra: mover uma empurra a outra.
  */
 data class ThresholdRange(val low: Double, val high: Double) {
     fun withLow(value: Double) = ThresholdRange(value, maxOf(high, value))
@@ -75,6 +77,18 @@ data class ThresholdRange(val low: Double, val high: Double) {
             low == null -> ThresholdRange(0.0, high!!)
             high == null -> ThresholdRange(low, low)
             else -> ThresholdRange(minOf(low, high), high)
+        }
+
+        /**
+         * Critério "quanto menos melhor" (busca): [good] = verde até, [max] = amarelo até (vira
+         * [low]/[high]). Só o máximo: "bom" igual a ele (sem faixa amarela, mesmo semáforo). Só o
+         * bom: máximo igual a ele. Nenhum = desligado.
+         */
+        fun ofMax(good: Double?, max: Double?): ThresholdRange? = when {
+            good == null && max == null -> null
+            good == null -> ThresholdRange(max!!, max)
+            max == null -> ThresholdRange(good, good)
+            else -> ThresholdRange(minOf(good, max), max)
         }
     }
 }

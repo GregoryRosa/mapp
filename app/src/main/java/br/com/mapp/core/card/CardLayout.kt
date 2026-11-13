@@ -207,25 +207,22 @@ object CardValues {
     }
 
     /**
-     * Cor da informação pelo perfil ativo: vermelho abaixo do mínimo, amarelo entre mínimo e "bom",
-     * verde acima. Null = sem critério para comparar (fica sem barrinha).
+     * Cor da informação pelo perfil ativo. Mais é melhor (R$/km, R$/h, valor, nota): vermelho abaixo
+     * do mínimo, amarelo entre mínimo e "bom", verde a partir do "bom". Busca (menos é melhor, km e
+     * minutos): vermelho acima do máximo, amarelo entre "bom" e máximo, verde até o "bom" — vale a
+     * pior das duas. Null = sem critério para comparar (fica sem barrinha).
      */
     fun tone(metric: CardMetric, o: EvaluatedOffer, profile: FilterProfile?): Signal? {
         val m = o.metrics
         return when (metric) {
             CardMetric.PER_KM -> range(perKm(o), profile?.minPerKm, profile?.goodPerKm)
             CardMetric.PER_HOUR -> range(m.perHour, profile?.minPerHour, profile?.goodPerHour)
-            CardMetric.PRICE -> range(o.raw.price, profile?.minPrice, null)
-            CardMetric.RATING -> range(o.raw.passengerRating, profile?.minRating, null)
-            CardMetric.PICKUP -> {
-                val kmBad = profile?.maxPickupKm?.let { max -> o.raw.pickupKm?.let { it > max } }
-                val minBad = profile?.maxPickupMin?.let { max -> o.raw.pickupMin?.let { it > max } }
-                when {
-                    kmBad == true || minBad == true -> Signal.RED
-                    kmBad == false || minBad == false -> Signal.GREEN
-                    else -> null
-                }
-            }
+            CardMetric.PRICE -> range(o.raw.price, profile?.minPrice, profile?.goodPrice)
+            CardMetric.RATING -> range(o.raw.passengerRating, profile?.minRating, profile?.goodRating)
+            CardMetric.PICKUP -> worst(
+                rangeMax(o.raw.pickupKm, profile?.maxPickupKm, profile?.goodPickupKm),
+                rangeMax(o.raw.pickupMin?.toDouble(), profile?.maxPickupMin?.toDouble(), profile?.goodPickupMin?.toDouble()),
+            )
             CardMetric.NET_PROFIT -> sign(m.netProfit)
             CardMetric.NET_PER_HOUR -> sign(netPerHour(o))
             CardMetric.NET_PERCENT -> sign(netPercent(o))
@@ -263,6 +260,24 @@ object CardValues {
             good != null && value < good -> Signal.YELLOW
             else -> Signal.GREEN
         }
+    }
+
+    /** Menos é melhor: acima de [max] = vermelho, acima de [good] = amarelo, senão verde. */
+    private fun rangeMax(value: Double?, max: Double?, good: Double?): Signal? {
+        if (value == null || (max == null && good == null)) return null
+        return when {
+            max != null && value > max -> Signal.RED
+            good != null && value > good -> Signal.YELLOW
+            else -> Signal.GREEN
+        }
+    }
+
+    /** Pior cor: vermelho > amarelo > verde; null só se as duas forem null. */
+    private fun worst(a: Signal?, b: Signal?): Signal? = when {
+        a == Signal.RED || b == Signal.RED -> Signal.RED
+        a == Signal.YELLOW || b == Signal.YELLOW -> Signal.YELLOW
+        a == Signal.GREEN || b == Signal.GREEN -> Signal.GREEN
+        else -> null
     }
 
     private fun sign(value: Double?): Signal? = value?.let { if (it < 0) Signal.RED else Signal.GREEN }
