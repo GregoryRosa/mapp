@@ -2,7 +2,7 @@ package br.com.mapp.core.bus
 
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.RawOffer
-import br.com.mapp.core.model.TripStage
+import br.com.mapp.core.model.TripEvent
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -39,13 +39,13 @@ object OfferBus {
         if (offer == null || sameOffer(offer.raw, current)) _evaluated.value = offer
     }
 
-    private val _tripStages = MutableSharedFlow<TripStage>(extraBufferCapacity = 4)
-    /** Corrida aceita / finalizada, reconhecida na tela (jornada automática). */
-    val tripStages: SharedFlow<TripStage> = _tripStages.asSharedFlow()
+    private val _tripStages = MutableSharedFlow<TripEvent>(extraBufferCapacity = 8)
+    /** Corrida aceita / em viagem / finalizada, reconhecida na tela (jornada automática). */
+    val tripStages: SharedFlow<TripEvent> = _tripStages.asSharedFlow()
 
-    /** Chamado pelo leitor quando a tela muda de etapa (só na transição, sem repetir). */
-    fun publishTripStage(stage: TripStage) {
-        _tripStages.tryEmit(stage)
+    /** Chamado pelo leitor quando a tela muda de etapa ou de passageiro (sem repetir). */
+    fun publishTripStage(event: TripEvent) {
+        _tripStages.tryEmit(event)
     }
 
     /** Chamado pelo leitor quando a tela de oferta some. */
