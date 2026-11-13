@@ -30,7 +30,15 @@ data class RawOffer(
     val capturedAt: Long = System.currentTimeMillis(),
 )
 
-/** Perfil de filtro (ex.: "Dia", "Noite", "Aeroporto"). Valores null = critério desligado. */
+/**
+ * Perfil de filtro (ex.: "Dia", "Noite", "Aeroporto"). Valores null = critério desligado.
+ * Cada critério tem duas marcas do semáforo (ver `core/filter/FilterCriterion`):
+ * - mais é melhor (R$/km, R$/h, valor, nota): `min*` = amarelo a partir de (abaixo = vermelho),
+ *   `good*` = verde a partir de;
+ * - menos é melhor (busca km/min): `maxPickup*` = amarelo até (acima = vermelho),
+ *   `goodPickup*` = verde até.
+ * `good*` null = o critério não impede o verde (perfis antigos continuam com o mesmo semáforo).
+ */
 data class FilterProfile(
     val id: Long = 0,
     val name: String = "Padrão",
@@ -39,9 +47,17 @@ data class FilterProfile(
     val minPerHour: Double? = 30.0,
     val goodPerHour: Double? = 45.0,
     val minPrice: Double? = null,
+    /** Valor da corrida verde a partir de ([minPrice] = amarelo a partir de). */
+    val goodPrice: Double? = null,
     val maxPickupKm: Double? = 4.0,
+    /** Busca verde até este km ([maxPickupKm] = amarelo até; acima = vermelho). */
+    val goodPickupKm: Double? = null,
     val maxPickupMin: Int? = null,
+    /** Busca verde até estes minutos ([maxPickupMin] = amarelo até; acima = vermelho). */
+    val goodPickupMin: Int? = null,
     val minRating: Double? = null,
+    /** Nota do passageiro verde a partir de ([minRating] = amarelo a partir de). */
+    val goodRating: Double? = null,
     val active: Boolean = true,
 )
 

@@ -2,11 +2,13 @@ package br.com.mapp.core
 
 import br.com.mapp.core.card.CardLayout
 import br.com.mapp.core.card.CardLine
+import br.com.mapp.core.card.CardMetric
 import br.com.mapp.core.card.CardMetric.NET_PERCENT
 import br.com.mapp.core.card.CardMetric.NET_PROFIT
 import br.com.mapp.core.card.CardMetric.PER_HOUR
 import br.com.mapp.core.card.CardMetric.PER_KM
 import br.com.mapp.core.card.CardMetric.PER_MIN
+import br.com.mapp.core.card.CardMetric.PICKUP
 import br.com.mapp.core.card.CardMetric.PRICE
 import br.com.mapp.core.card.CardMetric.RATING
 import br.com.mapp.core.card.CardMetric.TOTAL_TIME
@@ -129,6 +131,41 @@ class CardLayoutTest {
         // Sem km lido não dá para saber.
         val unknown = OfferEvaluator.evaluate(RawOffer(Platform.UBER, 30.0), profile, VehicleCostConfig())
         assertEquals(false, CardValues.allGreen(unknown, profile, def))
+    }
+
+    @Test
+    fun `valor, nota e busca tambem ficam amarelos`() {
+        val profile = FilterProfile(
+            minPrice = 8.0, goodPrice = 30.0,
+            minRating = 4.7, goodRating = 4.9,
+            maxPickupKm = 4.0, goodPickupKm = 2.0,
+            maxPickupMin = 8, goodPickupMin = 5,
+        )
+        val raw = RawOffer(Platform.UBER, 25.0, tripKm = 9.0, tripMin = 15, pickupKm = 3.0, pickupMin = 4, passengerRating = 4.8)
+        fun tone(metric: CardMetric, r: RawOffer = raw, p: FilterProfile = profile) =
+            CardValues.tone(metric, OfferEvaluator.evaluate(r, p, VehicleCostConfig()), p)
+
+        assertEquals(Signal.YELLOW, tone(PRICE))
+        assertEquals(Signal.RED, tone(PRICE, raw.copy(price = 7.0)))
+        assertEquals(Signal.GREEN, tone(PRICE, raw.copy(price = 30.0)))
+        assertEquals(Signal.YELLOW, tone(RATING))
+        assertEquals(Signal.RED, tone(RATING, raw.copy(passengerRating = 4.5)))
+        assertEquals(Signal.GREEN, tone(RATING, raw.copy(passengerRating = 4.95)))
+        // Busca: vale a pior entre km e minutos.
+        assertEquals(Signal.YELLOW, tone(PICKUP)) // km amarelo, minutos verde
+        assertEquals(Signal.YELLOW, tone(PICKUP, raw.copy(pickupKm = 1.0, pickupMin = 6))) // km verde, minutos amarelo
+        assertEquals(Signal.RED, tone(PICKUP, raw.copy(pickupKm = 1.0, pickupMin = 9))) // minutos acima do máximo
+        assertEquals(Signal.RED, tone(PICKUP, raw.copy(pickupKm = 4.5, pickupMin = 4)))
+        assertEquals(Signal.GREEN, tone(PICKUP, raw.copy(pickupKm = 2.0, pickupMin = 5)))
+        // Só a marca verde: acima dela é amarelo, nunca vermelho.
+        val soBom = FilterProfile(maxPickupKm = null, goodPickupKm = 2.0)
+        assertEquals(Signal.YELLOW, tone(PICKUP, raw.copy(pickupKm = 9.0), soBom))
+        // Sem limite de busca, ou busca não lida: sem barrinha.
+        assertNull(tone(PICKUP, raw, FilterProfile(maxPickupKm = null)))
+        assertNull(tone(PICKUP, raw.copy(pickupKm = null), FilterProfile()))
+        // Perfil antigo (só o máximo): verde até ele.
+        assertEquals(Signal.GREEN, tone(PICKUP, raw, FilterProfile()))
+        assertNull(tone(PRICE, raw, FilterProfile()))
     }
 
     @Test

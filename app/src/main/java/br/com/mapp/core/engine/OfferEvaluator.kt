@@ -14,9 +14,11 @@ import br.com.mapp.core.model.ZoneHit
 import br.com.mapp.core.model.ZoneType
 
 /**
- * Regras do semáforo:
- * - VERMELHO se qualquer critério mínimo falhar ou coleta/destino estiver em zona perigosa com alerta.
- * - VERDE se R$/km e R$/hora atingirem os valores "bons" (critério sem dado é ignorado).
+ * Regras do semáforo (cada critério do perfil tem marca amarela e verde — ver FilterProfile):
+ * - VERMELHO se qualquer critério passar da marca amarela (R$/km, R$/h, valor ou nota abaixo do
+ *   mínimo; busca acima do máximo em km ou minutos) ou coleta/destino estiver em zona perigosa com alerta.
+ * - VERDE se TODOS os critérios atingirem a marca verde: R$/km, R$/h, valor e nota ≥ "bom"; busca
+ *   km e minutos ≤ "bom". Valor não lido ou marca verde desligada (null) não impedem o verde.
  * - AMARELO nos demais casos.
  * Km/min totais = deslocamento até o passageiro + viagem. Trecho com km mas sem tempo (ou o
  * contrário) — o leitor não conseguiu ler um dos números — tem a parte que falta estimada pela
@@ -119,7 +121,7 @@ object OfferEvaluator {
 
         val signal = when {
             reasons.isNotEmpty() -> Signal.RED
-            meets(m.perKm, profile.goodPerKm) && meets(m.perHour, profile.goodPerHour) -> Signal.GREEN
+            isGood(raw, m, profile) -> Signal.GREEN
             else -> Signal.YELLOW
         }
         hits.filter { it.zone.type == ZoneType.HIGH_DEMAND }.forEach {
@@ -129,8 +131,22 @@ object OfferEvaluator {
         return EvaluatedOffer(raw, m, signal, reasons, pickup, dropoff, hits)
     }
 
+    /** Todos os critérios na marca verde (valor não lido ou marca null não impedem). */
+    private fun isGood(raw: RawOffer, m: OfferMetrics, p: FilterProfile): Boolean =
+        meets(m.perKm, p.goodPerKm) &&
+            meets(m.perHour, p.goodPerHour) &&
+            meets(raw.price, p.goodPrice) &&
+            meets(raw.passengerRating, p.goodRating) &&
+            atMost(raw.pickupKm, p.goodPickupKm) &&
+            atMost(raw.pickupMin?.toDouble(), p.goodPickupMin?.toDouble())
+
+    /** Mais é melhor: verde a partir de [target]. */
     private fun meets(value: Double?, target: Double?): Boolean =
         target == null || value == null || value >= target
+
+    /** Menos é melhor: verde até [target]. */
+    private fun atMost(value: Double?, target: Double?): Boolean =
+        target == null || value == null || value <= target
 
     private fun sumOrNull(a: Double?, b: Double?): Double? =
         if (a == null && b == null) null else (a ?: 0.0) + (b ?: 0.0)

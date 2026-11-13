@@ -45,16 +45,18 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -88,6 +90,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.com.mapp.MappApp
+import br.com.mapp.core.filter.FilterCriterion
 import br.com.mapp.core.filter.ThresholdRange
 import br.com.mapp.core.filter.ThresholdScale
 import br.com.mapp.core.model.FilterProfile
@@ -170,13 +173,20 @@ fun ProfilesScreen(onBack: () -> Unit) {
     }
 }
 
-private fun describe(p: FilterProfile): String = buildList {
-    if (p.minPerKm != null || p.goodPerKm != null) add("R$/km ${Format.input(p.minPerKm).ifEmpty { "—" }} / ${Format.input(p.goodPerKm).ifEmpty { "—" }}")
-    if (p.minPerHour != null || p.goodPerHour != null) add("R$/h ${Format.input(p.minPerHour).ifEmpty { "—" }} / ${Format.input(p.goodPerHour).ifEmpty { "—" }}")
-    p.minPrice?.let { add("mín. ${Format.brl(it)}") }
-    p.maxPickupKm?.let { add("busca ≤ ${Format.input(it)} km") }
-    p.maxPickupMin?.let { add("busca ≤ $it min") }
-    p.minRating?.let { add("nota ≥ ${Format.input(it)}") }
+private val SHORT = mapOf(
+    FilterCriterion.PER_KM to "R$/km",
+    FilterCriterion.PER_HOUR to "R$/h",
+    FilterCriterion.RATING to "nota",
+    FilterCriterion.PRICE to "valor",
+    FilterCriterion.PICKUP_KM to "busca",
+    FilterCriterion.PICKUP_MIN to "busca",
+)
+
+/** "R$/km R$ 1,50 → R$ 2,00 · busca 4,0 km ← 2,0 km ..." (amarelo → verde). */
+private fun describe(p: FilterProfile): String = FilterCriterion.entries.mapNotNull { c ->
+    val r = c.range(p) ?: return@mapNotNull null
+    if (c.higherIsBetter) "${SHORT[c]} ${c.format(r.low)}→${c.format(r.high)}"
+    else "${SHORT[c]} ≤${c.format(r.low)}/${c.format(r.high)}"
 }.joinToString(" · ").ifEmpty { "sem critérios" }
 
 @Composable
@@ -198,131 +208,65 @@ private fun ProfileCard(profile: FilterProfile, onActivate: () -> Unit, onEdit: 
 }
 
 /**
- * Editor do perfil em tela cheia, no estilo do print de referência: cada critério é um slider
- * vermelho/amarelo/verde. Tocar no valor em cima do botão abre o teclado para digitar; o slider
- * acompanha o número digitado (e estica a escala se ele passar da ponta). Chave desligada = critério
- * fora do semáforo (o mesmo que deixar o campo em branco antes).
+ * Editor do perfil em tela cheia, no estilo do print de referência: todo critério é um slider com
+ * faixa vermelho/amarelo/verde e entra no semáforo (verde só com tudo verde). Tocar no valor em cima
+ * do botão abre o teclado; o slider acompanha o número digitado (e estica a escala se passar da
+ * ponta). Critério que o perfil ainda não tinha aparece com a faixa sugerida e vale ao salvar.
  */
 @Composable
 private fun ProfileEditorDialog(initial: FilterProfile?, onDismiss: () -> Unit, onSave: (FilterProfile) -> Unit) {
     val base = initial ?: FilterProfile(name = "")
     var name by remember { mutableStateOf(base.name) }
-    var perKm by remember { mutableStateOf(ThresholdRange.of(base.minPerKm, base.goodPerKm)) }
-    var perHour by remember { mutableStateOf(ThresholdRange.of(base.minPerHour, base.goodPerHour)) }
-    var rating by remember { mutableStateOf(base.minRating) }
-    var minPrice by remember { mutableStateOf(base.minPrice) }
-    var pickupKm by remember { mutableStateOf(base.maxPickupKm) }
-    var pickupMin by remember { mutableStateOf(base.maxPickupMin?.toDouble()) }
+    val ranges = remember {
+        mutableStateMapOf<FilterCriterion, ThresholdRange>().apply {
+            FilterCriterion.entries.forEach { c -> put(c, c.range(base) ?: c.default) }
+        }
+    }
 
     fun save() = onSave(
-        base.copy(
-            name = name.trim(),
-            minPerKm = perKm?.low,
-            goodPerKm = perKm?.high,
-            minPerHour = perHour?.low,
-            goodPerHour = perHour?.high,
-            minRating = rating,
-            minPrice = minPrice,
-            maxPickupKm = pickupKm,
-            maxPickupMin = pickupMin?.roundToInt(),
-        ),
+        FilterCriterion.entries.fold(base.copy(name = name.trim())) { p, c -> c.apply(p, ranges[c]) },
     )
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxSize().background(MappColors.backgroundBrush)) {
-            Column(Modifier.fillMaxSize()) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    IconButton(onClick = onDismiss) { Icon(Icons.Filled.Close, contentDescription = "Cancelar") }
-                    Text(
-                        if (initial == null) "Novo perfil" else "Editar perfil",
-                        Modifier.weight(1f),
-                        style = MaterialTheme.typography.titleLarge,
-                    )
-                    TextButton(enabled = name.isNotBlank(), onClick = ::save) { Text("Salvar") }
-                }
-                Column(
-                    Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = { Text("Nome (ex.: Dia, Noite, Aeroporto)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Text(
-                        "Defina o que é corrida boa pra você. Toque no valor para digitar.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MappColors.TextDim,
-                    )
-                    RangeCard(
-                        title = "Valor por km",
-                        icon = Icons.Outlined.AttachMoney,
-                        scale = ThresholdScale.PER_KM,
-                        range = perKm,
-                        default = ThresholdRange(1.50, 2.00),
-                        format = { Format.brl(it) },
-                        onChange = { perKm = it },
-                    )
-                    RangeCard(
-                        title = "Valor por hora",
-                        icon = Icons.Outlined.Schedule,
-                        scale = ThresholdScale.PER_HOUR,
-                        range = perHour,
-                        default = ThresholdRange(30.0, 45.0),
-                        format = { "R$ " + Format.input(it) },
-                        onChange = { perHour = it },
-                    )
-                    SingleCard(
-                        title = "Nota do passageiro",
-                        icon = Icons.Outlined.StarBorder,
-                        kind = SliderKind.AT_LEAST,
-                        scale = ThresholdScale.RATING,
-                        value = rating,
-                        default = 4.70,
-                        format = { String.format(Format.PT_BR, "%.2f", it) },
-                        caption = { "Vermelho abaixo de $it" },
-                        onChange = { rating = it },
-                    )
-                    SingleCard(
-                        title = "Valor mínimo da corrida",
-                        icon = Icons.Outlined.Payments,
-                        kind = SliderKind.AT_LEAST,
-                        scale = ThresholdScale.MIN_PRICE,
-                        value = minPrice,
-                        default = 8.0,
-                        format = { Format.brl(it) },
-                        caption = { "Vermelho abaixo de $it" },
-                        onChange = { minPrice = it },
-                    )
-                    SingleCard(
-                        title = "Busca máxima (km)",
-                        icon = Icons.Outlined.NearMe,
-                        kind = SliderKind.AT_MOST,
-                        scale = ThresholdScale.PICKUP_KM,
-                        value = pickupKm,
-                        default = 4.0,
-                        format = { Format.km(it) },
-                        caption = { "Vermelho acima de $it" },
-                        onChange = { pickupKm = it },
-                    )
-                    SingleCard(
-                        title = "Busca máxima (minutos)",
-                        icon = Icons.Outlined.Timer,
-                        kind = SliderKind.AT_MOST,
-                        scale = ThresholdScale.PICKUP_MIN,
-                        value = pickupMin,
-                        default = 8.0,
-                        format = { "${it.roundToInt()} min" },
-                        caption = { "Vermelho acima de $it" },
-                        onChange = { pickupMin = it?.let { v -> v.roundToInt().toDouble() } },
-                        integer = true,
-                    )
-                    Spacer(Modifier.height(24.dp))
+        // Diálogo não herda a cor do texto da tela: sem isso títulos e ícones saíam pretos no fundo escuro.
+        CompositionLocalProvider(LocalContentColor provides MappColors.Text) {
+            Box(Modifier.fillMaxSize().background(MappColors.backgroundBrush)) {
+                Column(Modifier.fillMaxSize()) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(onClick = onDismiss) { Icon(Icons.Filled.Close, contentDescription = "Cancelar") }
+                        Text(
+                            if (initial == null) "Novo perfil" else "Editar perfil",
+                            Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MappColors.Text,
+                        )
+                        TextButton(enabled = name.isNotBlank(), onClick = ::save) { Text("Salvar") }
+                    }
+                    Column(
+                        Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        OutlinedTextField(
+                            value = name,
+                            onValueChange = { name = it },
+                            label = { Text("Nome (ex.: Dia, Noite, Aeroporto)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            "Defina o que é corrida boa pra você. Todos os itens entram no semáforo: " +
+                                "verde só com tudo verde. Toque no valor para digitar.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MappColors.TextDim,
+                        )
+                        FilterCriterion.entries.forEach { c ->
+                            CriterionCard(c, ranges.getValue(c)) { ranges[c] = it }
+                        }
+                        Spacer(Modifier.height(24.dp))
+                    }
                 }
             }
         }
@@ -334,115 +278,52 @@ private fun ProfileEditorDialog(initial: FilterProfile?, onDismiss: () -> Unit, 
 private val SliderRed = Color(0xFFD24B4B)
 private val SliderYellow = Color(0xFFF2C14E)
 private val SliderGreen = Color(0xFF9ACD45)
-private val SliderOff = Color(0xFF3C5E68)
 
-/** Como o trilho é pintado. */
-private enum class SliderKind {
-    /** Dois botões: vermelho | amarelo | verde (mínimo e bom). */
-    RANGE,
-    /** Um botão, quanto mais melhor: vermelho | verde. */
-    AT_LEAST,
-    /** Um botão, quanto menos melhor: verde | vermelho. */
-    AT_MOST,
+private fun FilterCriterion.icon(): ImageVector = when (this) {
+    FilterCriterion.PER_KM -> Icons.Outlined.AttachMoney
+    FilterCriterion.PER_HOUR -> Icons.Outlined.Schedule
+    FilterCriterion.RATING -> Icons.Outlined.StarBorder
+    FilterCriterion.PRICE -> Icons.Outlined.Payments
+    FilterCriterion.PICKUP_KM -> Icons.Outlined.NearMe
+    FilterCriterion.PICKUP_MIN -> Icons.Outlined.Timer
 }
 
-/** Critério com faixa amarela (R$/km, R$/hora). */
-@Composable
-private fun RangeCard(
-    title: String,
-    icon: ImageVector,
-    scale: ThresholdScale,
-    range: ThresholdRange?,
-    default: ThresholdRange,
-    format: (Double) -> String,
-    onChange: (ThresholdRange?) -> Unit,
-) {
-    val shown = range ?: default
-    ThresholdCard(
-        title = title,
-        icon = icon,
-        kind = SliderKind.RANGE,
-        baseScale = scale,
-        values = listOf(shown.low, shown.high),
-        enabled = range != null,
-        format = format,
-        caption = {
-            buildAnnotatedString {
-                withStyle(SpanStyle(color = SliderYellow, fontWeight = FontWeight.SemiBold)) { append("Amarelo") }
-                append(" de ${format(shown.low)}  ·  ")
-                withStyle(SpanStyle(color = SliderGreen, fontWeight = FontWeight.SemiBold)) { append("Verde") }
-                append(" de ${format(shown.high)}")
-            }
-        },
-        onToggle = { on -> onChange(if (on) shown else null) },
-        onValue = { index, v -> onChange(if (index == 0) shown.withLow(v) else shown.withHigh(v)) },
-    )
-}
+/** Cor de cada botão/número: mais é melhor = amarelo, verde; menos é melhor = verde, amarelo. */
+private fun FilterCriterion.thumbColors(): List<Color> =
+    if (higherIsBetter) listOf(SliderYellow, SliderGreen) else listOf(SliderGreen, SliderYellow)
 
-/** Critério de um valor só (nota, valor mínimo, busca máxima). */
-@Composable
-private fun SingleCard(
-    title: String,
-    icon: ImageVector,
-    kind: SliderKind,
-    scale: ThresholdScale,
-    value: Double?,
-    default: Double,
-    format: (Double) -> String,
-    caption: (String) -> String,
-    onChange: (Double?) -> Unit,
-    integer: Boolean = false,
-) {
-    val shown = value ?: default
-    ThresholdCard(
-        title = title,
-        icon = icon,
-        kind = kind,
-        baseScale = scale,
-        values = listOf(shown),
-        enabled = value != null,
-        format = format,
-        caption = { AnnotatedString(caption(format(shown))) },
-        onToggle = { on -> onChange(if (on) shown else null) },
-        onValue = { _, v -> onChange(v) },
-        integer = integer,
-    )
-}
+/** Trechos do trilho, da esquerda para a direita. */
+private fun FilterCriterion.segmentColors(): List<Color> =
+    if (higherIsBetter) listOf(SliderRed, SliderYellow, SliderGreen) else listOf(SliderGreen, SliderYellow, SliderRed)
 
 @Composable
-private fun ThresholdCard(
-    title: String,
-    icon: ImageVector,
-    kind: SliderKind,
-    baseScale: ThresholdScale,
-    values: List<Double>,
-    enabled: Boolean,
-    format: (Double) -> String,
-    caption: () -> AnnotatedString,
-    onToggle: (Boolean) -> Unit,
-    onValue: (index: Int, value: Double) -> Unit,
-    integer: Boolean = false,
-) {
+private fun CriterionCard(criterion: FilterCriterion, range: ThresholdRange, onChange: (ThresholdRange) -> Unit) {
     // A escala cresce para caber o que foi digitado (o slider acompanha) e não encolhe de volta.
-    var scale by remember { mutableStateOf(baseScale.fitting(*values.toTypedArray())) }
+    var scale by remember { mutableStateOf(criterion.scale.fitting(range.low, range.high)) }
     var typing by remember { mutableStateOf<Int?>(null) }
-    val colors = thumbColors(kind, enabled)
+    val colors = criterion.thumbColors()
+    val values = listOf(range.low, range.high)
+    fun set(index: Int, v: Double) = onChange(if (index == 0) range.withLow(v) else range.withHigh(v))
 
     GlassCard(padding = PaddingValues(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(Color(0x22FFFFFF)),
                 contentAlignment = Alignment.Center,
-            ) { Icon(icon, contentDescription = null, tint = MappColors.Text) }
+            ) { Icon(criterion.icon(), contentDescription = null, tint = MappColors.Text) }
             Spacer(Modifier.width(14.dp))
-            Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Switch(checked = enabled, onCheckedChange = onToggle)
+            Text(
+                criterion.title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MappColors.Text,
+            )
         }
         Spacer(Modifier.height(10.dp))
         ThumbLabels(fractions = values.map { scale.fraction(it).toFloat() }, thumbRadius = THUMB_RADIUS) {
             values.forEachIndexed { i, v ->
                 Text(
-                    format(v),
+                    criterion.format(v),
                     color = colors[i],
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
@@ -453,19 +334,10 @@ private fun ThresholdCard(
                 )
             }
         }
-        ThresholdTrack(
-            scale = scale,
-            values = values,
-            kind = kind,
-            enabled = enabled,
-            onValue = { i, v ->
-                if (!enabled) onToggle(true)
-                onValue(i, v)
-            },
-        )
+        ThresholdTrack(criterion, scale, values, onValue = ::set)
         Spacer(Modifier.height(6.dp))
         Text(
-            if (enabled) caption() else AnnotatedString("Desligado: não entra no semáforo"),
+            caption(criterion, range),
             Modifier.fillMaxWidth(),
             style = MaterialTheme.typography.bodyMedium,
             color = MappColors.TextDim,
@@ -475,25 +347,29 @@ private fun ThresholdCard(
 
     typing?.let { i ->
         TypeValueDialog(
-            title = title,
+            title = criterion.title,
             initial = values[i],
-            integer = integer,
+            integer = criterion.integer,
             onDismiss = { typing = null },
             onConfirm = { v ->
                 typing = null
                 scale = scale.fitting(v)
-                if (!enabled) onToggle(true)
-                onValue(i, v)
+                set(i, v)
             },
         )
     }
 }
 
-/** Cor do número e da borda de cada botão (o 1º da faixa é o amarelo). */
-private fun thumbColors(kind: SliderKind, enabled: Boolean): List<Color> = when {
-    !enabled -> listOf(MappColors.TextDim, MappColors.TextDim)
-    kind == SliderKind.RANGE -> listOf(SliderYellow, SliderGreen)
-    else -> listOf(SliderGreen)
+/** "Amarelo de R$ 1,60 · Verde de R$ 2,00" ou, na busca, "Verde até 2,0 km · Amarelo até 4,0 km". */
+private fun caption(c: FilterCriterion, r: ThresholdRange): AnnotatedString = buildAnnotatedString {
+    fun word(text: String, color: Color) = withStyle(SpanStyle(color = color, fontWeight = FontWeight.SemiBold)) { append(text) }
+    if (c.higherIsBetter) {
+        word("Amarelo", SliderYellow); append(" de ${c.format(r.low)}  ·  ")
+        word("Verde", SliderGreen); append(" de ${c.format(r.high)}")
+    } else {
+        word("Verde", SliderGreen); append(" até ${c.format(r.low)}  ·  ")
+        word("Amarelo", SliderYellow); append(" até ${c.format(r.high)}")
+    }
 }
 
 private val THUMB_RADIUS = 14.dp
@@ -528,19 +404,19 @@ private fun ThumbLabels(fractions: List<Float>, thumbRadius: Dp, content: @Compo
     }
 }
 
-/** Trilho colorido com 1 ou 2 botões; arrastar ou tocar move o botão mais perto. */
+/** Trilho colorido com 2 botões; arrastar ou tocar move o botão mais perto. */
 @Composable
 private fun ThresholdTrack(
+    criterion: FilterCriterion,
     scale: ThresholdScale,
     values: List<Double>,
-    kind: SliderKind,
-    enabled: Boolean,
     onValue: (Int, Double) -> Unit,
 ) {
     val current by rememberUpdatedState(values)
     val currentScale by rememberUpdatedState(scale)
     val emit by rememberUpdatedState(onValue)
-    val colors = thumbColors(kind, enabled)
+    val colors = criterion.thumbColors()
+    val segments = criterion.segmentColors()
     Canvas(
         Modifier
             .fillMaxWidth()
@@ -551,7 +427,6 @@ private fun ThresholdTrack(
                 fun xOf(v: Double) = r + currentScale.fraction(v).toFloat() * (size.width - 2 * r)
                 fun pick(x: Float): Int {
                     val vs = current
-                    if (vs.size < 2) return 0
                     val a = xOf(vs[0])
                     val b = xOf(vs[1])
                     return when {
@@ -588,33 +463,22 @@ private fun ThresholdTrack(
         val left = r
         val right = size.width - r
         val xs = values.map { left + scale.fraction(it).toFloat() * (right - left) }
-        val segments: List<Pair<Float, Color>> = if (!enabled) {
-            listOf(right to SliderOff)
-        } else {
-            when (kind) {
-                SliderKind.RANGE -> listOf(xs[0] to SliderRed, xs[1] to SliderYellow, right to SliderGreen)
-                SliderKind.AT_LEAST -> listOf(xs[0] to SliderRed, right to SliderGreen)
-                SliderKind.AT_MOST -> listOf(xs[0] to SliderGreen, right to SliderRed)
-            }
-        }
-        // Trilho inteiro arredondado na cor da ponta; cada trecho por cima.
+        // Trilho inteiro arredondado na cor da ponta direita; os trechos da esquerda por cima.
         drawRoundRect(
-            segments.last().second,
+            segments[2],
             topLeft = Offset(left - h / 2, cy - h / 2),
             size = Size(right - left + h, h),
             cornerRadius = CornerRadius(h / 2),
         )
-        var from = left - h / 2
-        segments.dropLast(1).forEach { (to, color) ->
-            if (to > from) {
-                drawRoundRect(color, Offset(from, cy - h / 2), Size(to - from, h), CornerRadius(h / 2))
-            }
-            from = to
+        if (xs[1] > xs[0]) {
+            drawRect(segments[1], Offset(xs[0], cy - h / 2), Size(xs[1] - xs[0], h))
         }
+        // Ponta esquerda arredondada; o fim de cada trecho fica embaixo do botão.
+        drawRoundRect(segments[0], Offset(left - h / 2, cy - h / 2), Size(xs[0] - left + h / 2, h), CornerRadius(h / 2))
         xs.forEachIndexed { i, x ->
             drawCircle(Color(0x55000000), radius = r + 1.dp.toPx(), center = Offset(x, cy + 1.dp.toPx()))
             drawCircle(Color.White, radius = r, center = Offset(x, cy))
-            drawCircle(colors.getOrElse(i) { SliderGreen }, radius = r - 1.5.dp.toPx(), center = Offset(x, cy), style = Stroke(3.dp.toPx()))
+            drawCircle(colors[i], radius = r - 1.5.dp.toPx(), center = Offset(x, cy), style = Stroke(3.dp.toPx()))
         }
     }
 }

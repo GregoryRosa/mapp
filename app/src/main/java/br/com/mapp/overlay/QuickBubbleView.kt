@@ -26,6 +26,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import br.com.mapp.core.filter.FilterCriterion
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.ZoneType
 import br.com.mapp.core.shift.Shift
@@ -220,10 +221,20 @@ class QuickBubbleView(
     // ------------------------------------------------------------------ painel
 
     private val profileName = text(15f, bold = true).apply { gravity = Gravity.CENTER }
-    private val perKmValue = text(15f, bold = true)
-    private val perHourValue = text(15f, bold = true)
-    private val pickupValue = text(15f, bold = true)
-    private val minPriceValue = text(15f, bold = true)
+    /** Um slider de faixa por critério do perfil (igual à tela Perfis); grava ao soltar o dedo. */
+    private val sliders = FilterCriterion.entries.associateWith { c ->
+        RangeSliderView(context, c) { r -> actions.updateProfile { c.apply(it, r) } }
+    }
+    private val filterBox = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(10), dp(8), dp(10), dp(8))
+        background = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(SECTION_BG) }
+        addView(text(11f, color = SECONDARY).apply { text = "SEMÁFORO DO PERFIL · ARRASTE E SOLTE" })
+        sliders.forEach { (c, slider) ->
+            addView(text(12f, color = WHITE).apply { text = c.title }, fullWidth(8))
+            addView(slider, fullWidth(2))
+        }
+    }
     private val voiceButton = button("") { actions.toggleVoice(); refreshVoice() }
     private val readerText = text(12f, color = SECONDARY)
 
@@ -301,18 +312,7 @@ class QuickBubbleView(
             button("›") { actions.nextProfile() },
             labelWeight = true,
         ))
-        addView(stepper("R$/km mínimo", perKmValue,
-            { actions.updateProfile { it.copy(minPerKm = step(it.minPerKm, -0.10, 0.0, 1.50)) } },
-            { actions.updateProfile { it.copy(minPerKm = step(it.minPerKm, +0.10, 0.0, 1.50)) } }))
-        addView(stepper("R$/hora mínimo", perHourValue,
-            { actions.updateProfile { it.copy(minPerHour = step(it.minPerHour, -5.0, 0.0, 30.0)) } },
-            { actions.updateProfile { it.copy(minPerHour = step(it.minPerHour, +5.0, 0.0, 30.0)) } }))
-        addView(stepper("Busca máxima (km)", pickupValue,
-            { actions.updateProfile { it.copy(maxPickupKm = step(it.maxPickupKm, -0.5, 0.5, 4.0)) } },
-            { actions.updateProfile { it.copy(maxPickupKm = step(it.maxPickupKm, +0.5, 0.5, 4.0)) } }))
-        addView(stepper("Valor mínimo (R$)", minPriceValue,
-            { actions.updateProfile { it.copy(minPrice = step(it.minPrice, -1.0, 0.0, 8.0)) } },
-            { actions.updateProfile { it.copy(minPrice = step(it.minPrice, +1.0, 0.0, 8.0)) } }))
+        addView(filterBox, fullWidth(6))
         addView(voiceButton, fullWidth(8))
         addView(row(
             button("Abrir MApp") { closePanel(); actions.openApp() },
@@ -699,10 +699,7 @@ class QuickBubbleView(
     private fun bindProfile() {
         val p = profile
         profileName.text = if (profileCount > 1) p.name else "${p.name} (único)"
-        perKmValue.text = p.minPerKm?.let { money(it) } ?: "—"
-        perHourValue.text = p.minPerHour?.let { money(it) } ?: "—"
-        pickupValue.text = p.maxPickupKm?.let { String.format(PT_BR, "%.1f km", it) } ?: "—"
-        minPriceValue.text = p.minPrice?.let { money(it) } ?: "—"
+        sliders.forEach { (c, slider) -> slider.bind(c.range(p)) }
     }
 
     private fun bindReader() {
@@ -852,21 +849,6 @@ class QuickBubbleView(
             addView(middle, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
     }
-
-    private fun stepper(label: String, value: TextView, minus: () -> Unit, plus: () -> Unit) =
-        LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(3), 0, dp(3))
-            addView(LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                addView(text(12f, color = SECONDARY).apply { text = label })
-                addView(value)
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(button("−") { minus() })
-            addView(View(context), LinearLayout.LayoutParams(dp(6), 1))
-            addView(button("+") { plus() })
-        }
 
     /** Número pequeno (tamanho fixo em dp, cabe na janela mesmo com fonte grande) com contorno preto. */
     private fun dayLabel(color: Int) = OutlineLabel(context, 11f * density, 3f * density).apply { this.color = color }

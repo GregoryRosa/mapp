@@ -99,6 +99,68 @@ class OfferEvaluatorTest {
         assertEquals(1, e.zoneHits.size)
     }
 
+    // Oferta boa em R$/km (2,50) e R$/h (83): só os outros critérios decidem a cor.
+    private val boa = RawOffer(Platform.UBER, 25.0, tripKm = 9.0, tripMin = 15, pickupKm = 1.0, pickupMin = 3, passengerRating = 4.95)
+
+    /** Todos os critérios com marca amarela e verde. */
+    private val completo = FilterProfile(
+        minPerKm = 1.5, goodPerKm = 2.0,
+        minPerHour = 30.0, goodPerHour = 45.0,
+        minPrice = 8.0, goodPrice = 12.0,
+        maxPickupKm = 4.0, goodPickupKm = 2.0,
+        maxPickupMin = 8, goodPickupMin = 5,
+        minRating = 4.7, goodRating = 4.9,
+    )
+
+    @Test fun tudo_dentro_do_bom_fica_verde() {
+        assertEquals(Signal.GREEN, OfferEvaluator.evaluate(boa, completo, cost).signal)
+        // Na marca exata também é verde (busca "até", valores "a partir de").
+        val naMarca = boa.copy(pickupKm = 2.0, pickupMin = 5, passengerRating = 4.9)
+        assertEquals(Signal.GREEN, OfferEvaluator.evaluate(naMarca, completo, cost).signal)
+        // Valor não lido não impede o verde.
+        val semNota = boa.copy(passengerRating = null, pickupMin = null)
+        assertEquals(Signal.GREEN, OfferEvaluator.evaluate(semNota, completo, cost).signal)
+    }
+
+    @Test fun nota_entre_minima_e_boa_fica_amarela() {
+        val e = OfferEvaluator.evaluate(boa.copy(passengerRating = 4.8), completo, cost)
+        assertEquals(Signal.YELLOW, e.signal)
+        assertTrue(e.reasons.isEmpty())
+        assertEquals(Signal.RED, OfferEvaluator.evaluate(boa.copy(passengerRating = 4.6), completo, cost).signal)
+    }
+
+    @Test fun valor_entre_minimo_e_bom_fica_amarelo() {
+        val p = completo.copy(goodPrice = 30.0)
+        assertEquals(Signal.YELLOW, OfferEvaluator.evaluate(boa, p, cost).signal)
+        assertEquals(Signal.RED, OfferEvaluator.evaluate(boa, p.copy(minPrice = 26.0), cost).signal)
+    }
+
+    @Test fun busca_entre_boa_e_maxima_fica_amarela() {
+        // Km: 3,0 passa do bom (2,0) mas não do máximo (4,0).
+        val km = boa.copy(pickupKm = 3.0)
+        assertEquals(Signal.YELLOW, OfferEvaluator.evaluate(km, completo, cost).signal)
+        assertEquals(Signal.RED, OfferEvaluator.evaluate(boa.copy(pickupKm = 4.5), completo, cost).signal)
+        // Minutos: 6 passa do bom (5) mas não do máximo (8).
+        assertEquals(Signal.YELLOW, OfferEvaluator.evaluate(boa.copy(pickupMin = 6), completo, cost).signal)
+        assertEquals(Signal.RED, OfferEvaluator.evaluate(boa.copy(pickupMin = 9), completo, cost).signal)
+    }
+
+    @Test fun perfil_antigo_sem_marca_verde_da_o_mesmo_de_antes() {
+        // Perfil salvo antes das marcas verdes de valor, nota e busca (good* = null).
+        val antigo = FilterProfile(
+            minPerKm = 1.5, goodPerKm = 2.0, minPerHour = 30.0, goodPerHour = 45.0,
+            minPrice = 8.0, maxPickupKm = 4.0, maxPickupMin = 10, minRating = 4.7,
+        )
+        fun signal(raw: RawOffer) = OfferEvaluator.evaluate(raw, antigo, cost).signal
+        // Antes: verde só dependia de R$/km e R$/h; o resto só deixava vermelho.
+        assertEquals(Signal.GREEN, signal(boa.copy(passengerRating = 4.75)))
+        assertEquals(Signal.GREEN, signal(RawOffer(Platform.UBER, 30.0, tripKm = 10.0, tripMin = 15, pickupKm = 3.9, pickupMin = 9, passengerRating = 5.0)))
+        assertEquals(Signal.YELLOW, signal(RawOffer(Platform.UBER, 17.0, tripKm = 9.0, tripMin = 20, pickupKm = 1.0, pickupMin = 3, passengerRating = 4.8)))
+        assertEquals(Signal.RED, signal(boa.copy(passengerRating = 4.6)))
+        assertEquals(Signal.RED, signal(boa.copy(pickupMin = 11)))
+        assertEquals(Signal.RED, signal(RawOffer(Platform.UBER, 7.5, tripKm = 2.0, tripMin = 5)))
+    }
+
     @Test fun ponto_no_poligono() {
         assertTrue(Geo.contains(square, GeoPoint(0.5, 0.5)))
         assertFalse(Geo.contains(square, GeoPoint(1.5, 0.5)))

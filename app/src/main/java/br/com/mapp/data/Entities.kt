@@ -22,6 +22,11 @@ data class ProfileEntity(
     val maxPickupMin: Int?,
     val minRating: Double?,
     val active: Boolean,
+    // Versão 2: faixa verde de todos os critérios (null = sem faixa amarela, igual à versão 1).
+    val goodPrice: Double? = null,
+    val goodRating: Double? = null,
+    val goodPickupKm: Double? = null,
+    val goodPickupMin: Int? = null,
 )
 
 /** [polygon] serializado como "lat,lon;lat,lon;..." (ver [PolygonCodec]). */
