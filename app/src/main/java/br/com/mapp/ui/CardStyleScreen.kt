@@ -2,6 +2,13 @@
 
 package br.com.mapp.ui
 
+import android.app.Activity
+import android.content.Intent
+import android.media.RingtoneManager
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -33,6 +40,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -56,6 +64,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
+import androidx.core.content.IntentCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.com.mapp.MappApp
 import br.com.mapp.core.card.CardLayout
@@ -66,8 +75,10 @@ import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.RawOffer
 import br.com.mapp.core.model.VehicleCostConfig
+import br.com.mapp.core.sound.GreatSound
 import br.com.mapp.finance.BackTopBar
 import br.com.mapp.overlay.CardHeaderView
+import br.com.mapp.overlay.GreatSoundPlayer
 import br.com.mapp.overlay.OverlayPrefs
 import kotlin.math.roundToInt
 
@@ -86,7 +97,7 @@ private class DragController {
 }
 
 /**
- * "Estilo do cartão" (igual ao Rota PRO): escolhe o que aparece nas duas linhas do cabeçalho do
+ * "Estilo do Card" (igual ao Rota PRO): escolhe o que aparece nas duas linhas do cabeçalho do
  * cartão. Toque num item disponível e depois num espaço; toque num item colocado para tirar;
  * ou segure e arraste (também entre espaços, para trocar de lugar). Salva na hora.
  */
@@ -130,7 +141,7 @@ fun CardStyleScreen(onBack: () -> Unit) {
         }
     }
 
-    Scaffold(topBar = { BackTopBar("Estilo do cartão", onBack) }) { pad ->
+    Scaffold(topBar = { BackTopBar("Estilo do Card", onBack) }) { pad ->
         Box(Modifier.fillMaxSize().padding(pad).onGloballyPositioned { rootOffset = it.positionInRoot() }) {
             Column(Modifier.fillMaxSize()) {
                 // Prévia fixa no topo, com a largura real do cartão.
@@ -164,7 +175,7 @@ fun CardStyleScreen(onBack: () -> Unit) {
                         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text("Nome do app", fontWeight = FontWeight.SemiBold)
-                                Text("Mostra Uber/99/inDrive no cartão.", style = MaterialTheme.typography.bodySmall)
+                                Text("Mostra Uber/99/inDrive no Card.", style = MaterialTheme.typography.bodySmall)
                             }
                             Switch(checked = layout.showPlatform, onCheckedChange = { update(layout.copy(showPlatform = it)) })
                         }
@@ -176,11 +187,13 @@ fun CardStyleScreen(onBack: () -> Unit) {
                             FontStepper("Linha de cima", layout.topFont) { update(layout.withFont(CardLine.TOP, it)) }
                             FontStepper("Números grandes", layout.bottomFont) { update(layout.withFont(CardLine.BOTTOM, it)) }
                             Text(
-                                "Os números de baixo diminuem sozinhos se não couberem no cartão.",
+                                "Os números de baixo diminuem sozinhos se não couberem no Card.",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
                     }
+
+                    GreatSoundCard()
 
                     CardLine.entries.forEach { line ->
                         val items = layout.line(line)
@@ -221,7 +234,7 @@ fun CardStyleScreen(onBack: () -> Unit) {
                             Text("DISPONÍVEIS — TOQUE OU ARRASTE PARA UM ESPAÇO", style = MaterialTheme.typography.labelMedium)
                             val available = layout.available
                             if (available.isEmpty()) {
-                                Text("Todos os itens já estão no cartão.", style = MaterialTheme.typography.bodySmall)
+                                Text("Todos os itens já estão no Card.", style = MaterialTheme.typography.bodySmall)
                             }
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 available.forEach { metric ->
@@ -320,6 +333,73 @@ private val SAMPLES = listOf(
     "Média" to RawOffer(Platform.NINETY_NINE, 21.90, tripKm = 9.5, tripMin = 22, pickupKm = 2.1, pickupMin = 6, passengerRating = 4.85),
     "Longa" to RawOffer(Platform.UBER, 29.20, tripKm = 22.0, tripMin = 45, pickupKm = 5.8, pickupMin = 15, passengerRating = 4.20),
 )
+
+/**
+ * Som de corrida ótima: toca quando tudo no Card fica verde. Sons do MApp ou um som do celular
+ * (seletor do sistema). Escolher já toca o som para ouvir.
+ */
+@Composable
+private fun GreatSoundCard() {
+    val ctx = LocalContext.current
+    val player = remember { GreatSoundPlayer(ctx) }
+    DisposableEffect(Unit) { onDispose { player.stop() } }
+    var sound by remember { mutableStateOf(OverlayPrefs.greatSound(ctx)) }
+    var phoneUri by remember { mutableStateOf(OverlayPrefs.greatSoundUri(ctx)) }
+    val phoneTitle = remember(phoneUri) { GreatSoundPlayer.phoneSoundTitle(ctx, phoneUri) }
+
+    fun choose(s: GreatSound, uri: Uri? = phoneUri) {
+        sound = s
+        OverlayPrefs.setGreatSound(ctx, s)
+        if (s == GreatSound.OFF) player.stop() else player.play(s, uri)
+    }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        if (res.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
+        val uri = res.data?.let { IntentCompat.getParcelableExtra(it, RingtoneManager.EXTRA_RINGTONE_PICKED_URI, Uri::class.java) }
+            ?: return@rememberLauncherForActivityResult
+        phoneUri = uri
+        OverlayPrefs.setGreatSoundUri(ctx, uri)
+        choose(GreatSound.PHONE, uri)
+    }
+    fun pickPhoneSound() {
+        player.stop()
+        val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
+            .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_NOTIFICATION)
+            .putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Som de corrida ótima")
+            .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+            .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+            .putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, phoneUri)
+        runCatching { picker.launch(intent) }
+            .onFailure { Toast.makeText(ctx, "Este celular não abriu a lista de sons", Toast.LENGTH_LONG).show() }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Som de corrida ótima", fontWeight = FontWeight.SemiBold)
+            Text(
+                "Toca quando tudo no Card fica verde, antes da voz (toca mesmo com a voz desligada). Toque num som para ouvir.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                GreatSound.entries.forEach { s ->
+                    FilterChip(
+                        selected = sound == s,
+                        onClick = { if (s == GreatSound.PHONE && phoneUri == null) pickPhoneSound() else choose(s) },
+                        label = { Text(s.label) },
+                    )
+                }
+            }
+            if (sound == GreatSound.PHONE) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("🔔 $phoneTitle", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = ::pickPhoneSound) { Text("Trocar") }
+                }
+            }
+            OutlinedButton(enabled = sound != GreatSound.OFF, onClick = { player.play(sound, phoneUri) }) {
+                Text("▶ Testar som")
+            }
+        }
+    }
+}
 
 /** "Linha de cima   [−] 100% [+]" — passos de 10%. */
 @Composable

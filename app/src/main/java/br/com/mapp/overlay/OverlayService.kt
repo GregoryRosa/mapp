@@ -21,6 +21,7 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import br.com.mapp.MappApp
 import br.com.mapp.core.bus.OfferBus
+import br.com.mapp.core.card.CardValues
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
@@ -64,8 +65,12 @@ class OverlayService : LifecycleService() {
     private var pinCount = 0
     private var location: LocationProvider? = null
     private var voice: VoiceAnnouncer? = null
+    private var greatSound: GreatSoundPlayer? = null
+    /** Oferta que já tocou o som de corrida ótima (toca uma vez por oferta). */
+    private var greatKey: OfferKey? = null
     private var card: OfferCardView? = null
     private var bubble: QuickBubbleView? = null
+    private var notice: NoticeView? = null
     private var profiles: List<FilterProfile> = emptyList()
     private var activeProfile: FilterProfile = FilterProfile()
 
@@ -110,6 +115,7 @@ class OverlayService : LifecycleService() {
         overlayContext = ctx
         windowManager = ctx.getSystemService(WindowManager::class.java)
         voice = VoiceAnnouncer(this)
+        greatSound = GreatSoundPlayer(this)
 
         val pipeline = OfferPipeline(this)
         lifecycleScope.launch { pipeline.run() }
@@ -199,7 +205,7 @@ class OverlayService : LifecycleService() {
             countedKey = null
             matcher.reset()
             val s = ShiftMath.summary(ended, costPerKm, System.currentTimeMillis())
-            toast("Jornada encerrada: ${s.trips} corridas · lucro ${ShiftMath.money(s.profit)}")
+            tripToast("Jornada encerrada: ${s.trips} corridas · lucro ${ShiftMath.money(s.profit)}")
         }
 
         override fun countLastOffer() = countOffer(lastOffer)
@@ -325,7 +331,7 @@ class OverlayService : LifecycleService() {
         refreshCountButton()
         pushShift()
         val label = offerLabel(raw).removeSuffix(" ✓ contada")
-        toast(
+        tripToast(
             when {
                 alreadyFinished -> "Corrida contada: $label"
                 auto -> "Corrida aceita: $label · soma no lucro ao finalizar"
@@ -360,7 +366,7 @@ class OverlayService : LifecycleService() {
         // Busca sem embarque que saiu da tela cedo demais para ter virado viagem: foi cancelada.
         if (match.cancelledPickup) cancelPending(auto = true, platform = match.platform)
         if (match.started && offer == null) {
-            event.passenger?.let { toast("Viagem iniciada ✓ ${it.replaceFirstChar { c -> c.uppercase() }} embarcou") }
+            event.passenger?.let { tripToast("Viagem iniciada ✓ ${it.replaceFirstChar { c -> c.uppercase() }} embarcou") }
         }
         when (event.stage) {
             TripStage.ACCEPTED, TripStage.ON_TRIP -> {
@@ -369,7 +375,7 @@ class OverlayService : LifecycleService() {
                     acceptedSinceFinish = true
                     countOffer(offer, auto = true)
                 } else if (match.newRide && lastOffer?.raw?.key() != countedKey) {
-                    toast(
+                    tripToast(
                         if (event.stage == TripStage.ACCEPTED) "Vi corrida aceita, mas não li a oferta dela: toque +1 se for o caso"
                         else "Vi passageiro a bordo, mas não li a oferta dela: toque +1 se for o caso",
                     )
@@ -380,7 +386,7 @@ class OverlayService : LifecycleService() {
                 if (ShiftTracker.current(this).value?.nextToFinish(event.platform) != null) {
                     finishPending(auto = true, platform = event.platform)
                 } else {
-                    toast("Corrida finalizada, mas não vi o aceite: toque +1 Contar última se for o caso")
+                    tripToast("Corrida finalizada, mas não vi o aceite: toque +1 Contar última se for o caso")
                 }
                 acceptedSinceFinish = false
             }
@@ -399,7 +405,7 @@ class OverlayService : LifecycleService() {
         countedKey = null
         acceptedSinceFinish = false
         refreshCountButton()
-        toast(
+        tripToast(
             if (auto) "Busca anterior cancelada: ${ShiftMath.money(pending.price)} fora da jornada"
             else "Corrida cancelada: ${ShiftMath.money(pending.price)} fora do lucro",
         )
@@ -413,7 +419,12 @@ class OverlayService : LifecycleService() {
         }
         if (!auto) matcher.closedOldest()
         ShiftTracker.finishPending(this, platform)
-        toast("Corrida finalizada ✓ +${ShiftMath.money(pending.price)} no lucro")
+        tripToast("Corrida finalizada ✓ +${ShiftMath.money(pending.price)} no lucro")
+    }
+
+    private fun playGreat(key: OfferKey): Long {
+        greatKey = key
+        return greatSound?.play() ?: 0L
     }
 
     /** Grava no histórico de ofertas se a corrida foi aceita (aba "Aceitas hoje"). */
@@ -442,12 +453,27 @@ class OverlayService : LifecycleService() {
         )
     }
 
-    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    /**
+     * Aviso na tela por [durationMs] (o Toast some em 2 s, rápido demais para ler dirigindo).
+     * Sem janela do MApp (leitor desligado e sem permissão), cai no Toast longo.
+     */
+    private fun toast(msg: String, durationMs: Long = NOTICE_MS) {
+        val h = host
+        if (h == null) {
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+            return
+        }
+        val n = notice ?: NoticeView(h).also { notice = it }
+        n.show(msg, durationMs)
+    }
+
+    /** Avisos da corrida (aceita, embarque, finalizada, cancelada): ficam mais tempo. */
+    private fun tripToast(msg: String) = toast(msg, TRIP_NOTICE_MS)
 
     private fun cycleProfile(direction: Int) {
         val list = profiles
         if (list.size < 2) {
-            Toast.makeText(this, "Crie mais perfis em Perfis de filtro", Toast.LENGTH_SHORT).show()
+            toast("Crie mais perfis em Perfis de filtro")
             return
         }
         val i = list.indexOfFirst { it.id == activeProfile.id }.coerceAtLeast(0)
@@ -475,15 +501,20 @@ class OverlayService : LifecycleService() {
         // Sem o copiloto não há GPS: a jornada fica pausada até o próximo ▶.
         if (ShiftTracker.current(this).value?.paused == false) {
             ShiftTracker.pause(this)
-            toast("Jornada pausada")
+            // As janelas do MApp fecham já: aqui só o Toast do sistema continua na tela.
+            Toast.makeText(this, "Jornada pausada", Toast.LENGTH_LONG).show()
         }
         bubble?.destroy()
         bubble = null
         card?.destroy()
         card = null
+        notice?.destroy()
+        notice = null
         host = null
         voice?.shutdown()
         voice = null
+        greatSound?.stop()
+        greatSound = null
         super.onDestroy()
     }
 
@@ -513,15 +544,22 @@ class OverlayService : LifecycleService() {
         if (key == dismissedKey) return // usuário fechou o cartão desta oferta
 
         val alertZones = offer.zoneHits.filter { it.zone.alertEnabled }.toSet()
+        val great = CardValues.allGreen(offer, activeProfile, OverlayPrefs.cardLayout(this))
         if (key != shownKey) {
             shownKey = key
             announcedZones = alertZones
-            voice?.announce(offer)
-        } else if (!announcedZones.containsAll(alertZones)) {
-            // Zonas chegam na 2ª etapa (depois da geocodificação): avisa só o que é novo.
-            val fresh = alertZones - announcedZones
-            announcedZones = announcedZones + alertZones
-            voice?.announceZones(fresh.toList())
+            // Tudo verde: som de corrida ótima primeiro, a voz fala quando ele acaba.
+            val soundMs = if (great) playGreat(key) else 0L
+            voice?.announce(offer, soundMs)
+        } else {
+            if (!announcedZones.containsAll(alertZones)) {
+                // Zonas chegam na 2ª etapa (depois da geocodificação): avisa só o que é novo.
+                val fresh = alertZones - announcedZones
+                announcedZones = announcedZones + alertZones
+                voice?.announceZones(fresh.toList())
+            }
+            // Oferta completada depois (tempo/km lidos noutro quadro) que ficou toda verde.
+            if (great && greatKey != key) playGreat(key)
         }
 
         val c = card ?: createCard() ?: run {
@@ -555,6 +593,8 @@ class OverlayService : LifecycleService() {
         bubble = null
         card?.destroy()
         card = null
+        notice?.destroy()
+        notice = null
         host = next
         if (next == null) {
             Log.w(TAG, "Sem leitor nem permissão de sobreposição; ícone e cartão não exibidos")
@@ -656,6 +696,10 @@ class OverlayService : LifecycleService() {
         private const val ACTION_STOP = "br.com.mapp.overlay.STOP"
         private const val SHIFT_TICK_MS = 30_000L
         private const val PIN_FIX_MS = 4_000L
+        /** Avisos comuns na tela (o Toast curto era 2 s). */
+        private const val NOTICE_MS = 4_000L
+        /** Avisos de corrida aceita/finalizada/cancelada: tempo para ler dirigindo. */
+        private const val TRIP_NOTICE_MS = 6_000L
 
         private val _running = MutableStateFlow(false)
         /** true enquanto o copiloto (serviço) está ativo — a tela inicial mostra o estado. */

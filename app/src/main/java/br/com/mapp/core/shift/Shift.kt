@@ -41,6 +41,13 @@ data class ShiftTrip(
             tripKm = offer.tripKm,
             finished = finished,
         )
+
+        /** Nome do tipo gravado por versão antiga: "Elétrico" agora é "Electric", como na Uber. */
+        fun categoryName(saved: String?): String? = when (saved) {
+            null, "" -> null
+            "Elétrico" -> "Electric"
+            else -> saved
+        }
     }
 }
 
@@ -196,7 +203,7 @@ object ShiftMath {
         )
     }
 
-    /** % de corridas por tipo (UberX, Comfort, Black, Elétrico...), da mais comum para a menos. */
+    /** % de corridas por tipo (UberX, Comfort, Black, Electric...), da mais comum para a menos. */
     fun categories(trips: List<ShiftTrip>): List<CategoryShare> {
         if (trips.isEmpty()) return emptyList()
         return trips.groupBy { it.category ?: NO_CATEGORY }
@@ -466,7 +473,7 @@ object ShiftCodec {
                     ShiftTrip(
                         atMillis = c[0].toLong(),
                         platform = Platform.valueOf(c[1]),
-                        category = c[2].ifEmpty { null },
+                        category = ShiftTrip.categoryName(c[2]),
                         price = c[3].toDouble(),
                         pickupKm = c[4].toDoubleOrNull(),
                         tripKm = c[5].toDoubleOrNull(),

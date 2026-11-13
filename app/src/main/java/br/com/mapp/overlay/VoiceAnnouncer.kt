@@ -36,9 +36,15 @@ class VoiceAnnouncer(context: Context) : TextToSpeech.OnInitListener {
         ready = true
     }
 
-    fun announce(offer: EvaluatedOffer) {
+    /** [delayMs] = espera antes de falar (som de corrida ótima tocando). */
+    fun announce(offer: EvaluatedOffer, delayMs: Long = 0) {
         if (!ready || !OverlayPrefs.isVoiceEnabled(appContext)) return
-        tts.speak(phrase(offer), TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
+        if (delayMs > 0) {
+            tts.playSilentUtterance(delayMs, TextToSpeech.QUEUE_FLUSH, "$UTTERANCE_ID-pausa")
+            tts.speak(phrase(offer), TextToSpeech.QUEUE_ADD, null, UTTERANCE_ID)
+        } else {
+            tts.speak(phrase(offer), TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
+        }
     }
 
     /** Alerta de zona que só ficou conhecido depois do 1º aviso (entra na fila, não corta a fala). */

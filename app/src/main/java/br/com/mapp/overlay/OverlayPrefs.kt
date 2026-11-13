@@ -2,9 +2,11 @@ package br.com.mapp.overlay
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.net.Uri
 import br.com.mapp.core.card.CardLayout
+import br.com.mapp.core.sound.GreatSound
 
-/** Preferências do overlay (posição do cartão, minimizado, voz, estilo do cartão). */
+/** Preferências do overlay (posição do Card, minimizado, voz, estilo do Card, som de corrida ótima). */
 object OverlayPrefs {
     const val NAME = "mapp_overlay"
     const val KEY_VOICE_ENABLED = "voice_enabled"
@@ -14,6 +16,8 @@ object OverlayPrefs {
     const val KEY_BUBBLE_X = "bubble_x"
     const val KEY_BUBBLE_Y = "bubble_y"
     const val KEY_CARD_LAYOUT = "card_layout"
+    const val KEY_GREAT_SOUND = "great_sound"
+    const val KEY_GREAT_SOUND_URI = "great_sound_uri"
 
     fun of(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -30,5 +34,19 @@ object OverlayPrefs {
 
     fun setCardLayout(context: Context, layout: CardLayout) {
         of(context).edit().putString(KEY_CARD_LAYOUT, layout.encode()).apply()
+    }
+
+    /** Som de corrida ótima (tudo verde no Card); padrão: [GreatSound.DEFAULT]. */
+    fun greatSound(context: Context): GreatSound = GreatSound.fromId(of(context).getString(KEY_GREAT_SOUND, null))
+
+    fun setGreatSound(context: Context, sound: GreatSound) {
+        of(context).edit().putString(KEY_GREAT_SOUND, sound.id).apply()
+    }
+
+    /** Som do celular escolhido para [GreatSound.PHONE] (null = padrão de notificação). */
+    fun greatSoundUri(context: Context): Uri? = of(context).getString(KEY_GREAT_SOUND_URI, null)?.let(Uri::parse)
+
+    fun setGreatSoundUri(context: Context, uri: Uri?) {
+        of(context).edit().putString(KEY_GREAT_SOUND_URI, uri?.toString()).apply()
     }
 }

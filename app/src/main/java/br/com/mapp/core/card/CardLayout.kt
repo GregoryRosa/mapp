@@ -233,6 +233,16 @@ object CardValues {
         }
     }
 
+    /**
+     * Corrida ótima ("tudo verde"): semáforo verde, R$/km e R$/hora lidos, e nenhuma informação do
+     * Card ([layout]) amarela ou vermelha pelo perfil ativo. É quando toca o som de corrida ótima.
+     */
+    fun allGreen(o: EvaluatedOffer, profile: FilterProfile?, layout: CardLayout): Boolean {
+        if (o.signal != Signal.GREEN) return false
+        if (o.metrics.perKm == null || o.metrics.perHour == null) return false
+        return (layout.top + layout.bottom).all { tone(it, o, profile).let { t -> t == null || t == Signal.GREEN } }
+    }
+
     private fun perKm(o: EvaluatedOffer) = o.metrics.perKm
     private fun perMin(o: EvaluatedOffer) = o.metrics.totalMin?.takeIf { it > 0 }?.let { o.raw.price / it }
     private fun netPerHour(o: EvaluatedOffer) =
