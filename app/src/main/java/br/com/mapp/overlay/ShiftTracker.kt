@@ -73,6 +73,20 @@ object ShiftTracker {
         return ended
     }
 
+    /** Custos do veículo salvos: jornadas de hoje já encerradas passam a usar o custo/km novo. */
+    @Synchronized
+    fun applyCostToday(ctx: Context, costPerKm: Double, now: Long = System.currentTimeMillis()) {
+        load(ctx)
+        val list = ShiftMath.withCostToday(_history.value, costPerKm, now)
+        val last = _last.value?.let { ShiftMath.withCostToday(listOf(it), costPerKm, now).single() }
+        if (list == _history.value && last == _last.value) return
+        _history.value = list
+        _last.value = last
+        val edit = prefs?.edit()?.putString(KEY_HISTORY, ShiftCodec.encodeList(list))
+        if (last != null) edit?.putString(KEY_LAST, ShiftCodec.encode(last))
+        edit?.apply()
+    }
+
     fun addKm(ctx: Context, km: Double) = update(ctx) { it?.addKm(km) }
 
     fun addTrip(ctx: Context, trip: ShiftTrip) = update(ctx) { it?.addTrip(trip) }

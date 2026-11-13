@@ -249,6 +249,13 @@ object ShiftMath {
     fun ofToday(current: Shift?, last: Shift?, now: Long, zone: ZoneId = ZoneId.systemDefault()): Shift? =
         current ?: last?.takeIf { sameDay(it.startedAt, now, zone) }
 
+    /**
+     * Custos do veículo mudaram: as jornadas que começaram hoje (já encerradas, com o custo/km
+     * guardado) passam a usar [costPerKm]. Dias anteriores ficam com o custo/km daquele dia.
+     */
+    fun withCostToday(list: List<Shift>, costPerKm: Double, now: Long, zone: ZoneId = ZoneId.systemDefault()): List<Shift> =
+        list.map { if (it.costPerKm != null && sameDay(it.startedAt, now, zone)) it.copy(costPerKm = costPerKm) else it }
+
     fun sameDay(a: Long, b: Long, zone: ZoneId): Boolean =
         Instant.ofEpochMilli(a).atZone(zone).toLocalDate() == Instant.ofEpochMilli(b).atZone(zone).toLocalDate()
 

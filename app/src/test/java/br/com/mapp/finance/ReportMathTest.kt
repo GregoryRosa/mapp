@@ -195,6 +195,8 @@ class ReportMathTest {
         assertEquals("12,3 km", Format.km(12.34))
         assertEquals("R$ 2,15/km", Format.perKm(2.15))
         assertEquals("R$ 45,00/h", Format.perHour(45.0))
+        assertEquals("R$ 0,083/km", Format.costPerKm(1.0 / 12))
+        assertEquals("R$ 0,075/km", Format.costPerKm(0.9 / 12))
         assertEquals("—", Format.perKm(null))
         assertEquals("6,5", Format.input(6.5))
         assertEquals("", Format.input(null))
