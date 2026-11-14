@@ -14,15 +14,17 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
- * Textos da notificação de corrida aceita. Fechada: [title] + [summary] (busca → viagem).
- * Expandida: o mesmo + mapa + [details] (até [RideNotices.MAX_DETAILS] linhas, da mais importante)
- * e [mapNote] embaixo do mapa quando coleta/destino ficaram fora dele.
+ * Textos da notificação de corrida aceita, montados pelo [NoticeLayout]. Fechada: [title] +
+ * [summary] (linha 2). Aberta: o mesmo + mapa ([showMap]) + [details] (linhas da aberta que têm
+ * valor, até [RideNotices.MAX_DETAILS]) e [mapNote] embaixo do mapa quando coleta/destino ficaram fora.
  */
 data class RideNotice(
     val title: String,
     val summary: String,
     val details: List<String>,
     val mapNote: String?,
+    /** Mapa na notificação aberta (menu Card → Notificação). */
+    val showMap: Boolean = true,
 )
 
 /** Retângulo do mapa da notificação, em graus. */
@@ -54,9 +56,9 @@ object RideNotices {
     private val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
     /**
-     * Monta os textos. [category] = tipo lido (UberX, Comfort...), [passenger] = 1º nome lido na tela
-     * de aceite ("caio"), [acceptedAt] = quando o aceite foi visto; [onBoard] = aceite reconhecido só
-     * no embarque (a chegada conta só a viagem).
+     * Monta os textos pelo [layout] (menu Card → Notificação). [category] = tipo lido (UberX,
+     * Comfort...), [passenger] = 1º nome lido na tela de aceite ("caio"), [acceptedAt] = quando o
+     * aceite foi visto; [onBoard] = aceite reconhecido só no embarque (a chegada conta só a viagem).
      */
     fun of(
         offer: EvaluatedOffer,
@@ -66,74 +68,85 @@ object RideNotices {
         zone: ZoneId,
         onBoard: Boolean = false,
         points: RidePoints = RidePoints(null, offer.pickup, offer.dropoff),
+        layout: NoticeLayout = NoticeLayout.DEFAULT,
     ): RideNotice {
+        val values = values(offer, category, passenger, acceptedAt, zone, onBoard)
+        fun render(line: NoticeLine): String {
+            val items = layout.line(line).filter { !values[it].isNullOrBlank() }
+            return buildString {
+                items.forEachIndexed { i, item ->
+                    if (i > 0) append(if (items[i - 1] == NoticeItem.PICKUP && item == NoticeItem.TRIP) " → " else " · ")
+                    append(values.getValue(item))
+                }
+            }
+        }
+
+        val head = listOfNotNull(
+            "Corrida aceita".takeIf { layout.headline },
+            render(NoticeLine.TITLE).ifEmpty { null },
+        ).joinToString(" · ").ifEmpty { "Corrida aceita" }
+        val title = "${dot(offer.signal)} $head"
+        val details = NoticeLine.entries.filter { it.expanded }.map(::render).filter { it.isNotEmpty() }.take(MAX_DETAILS)
+        return RideNotice(
+            title = title,
+            summary = render(NoticeLine.TEXT),
+            details = details,
+            mapNote = if (layout.showMap) mapNote(offer, points) else null,
+            showMap = layout.showMap,
+        )
+    }
+
+    /** Texto de cada informação (null = não lida). "~" no que foi estimado pela velocidade. */
+    fun values(
+        offer: EvaluatedOffer,
+        category: String?,
+        passenger: String?,
+        acceptedAt: Long,
+        zone: ZoneId,
+        onBoard: Boolean = false,
+    ): Map<NoticeItem, String?> {
         val raw = offer.raw
         val m = offer.metrics
         val legs = OfferEvaluator.legs(raw)
         val km = if (legs.kmEstimated) "~" else ""
         val time = if (legs.timeEstimated) "~" else ""
 
-        val title = "${dot(offer.signal)} Corrida aceita · ${kind(raw.platform, category)} · ${ShiftMath.money(raw.price)}"
-
-        val legLines = listOfNotNull(
-            leg("Busca", raw.pickupKm, raw.pickupMin),
-            leg("Viagem", raw.tripKm, raw.tripMin),
-        )
-
-        val total = run {
-            val parts = mutableListOf<String>()
-            m.totalKm?.let { parts += "$km${ShiftMath.km(it)}" }
-            m.totalMin?.let { parts += "$time$it min" }
-            if (parts.isEmpty()) return@run null
-            val remaining = if (onBoard) raw.tripMin ?: m.totalMin else m.totalMin
-            val arrival = remaining?.let {
-                Instant.ofEpochMilli(acceptedAt + it * 60_000L).atZone(zone).format(CLOCK)
-            }
-            "Total " + parts.joinToString(" · ") + (arrival?.let { " · Chegada ~$it" } ?: "")
+        val total = listOfNotNull(
+            m.totalKm?.let { "$km${ShiftMath.km(it)}" },
+            m.totalMin?.let { "$time$it min" },
+        ).joinToString(" · ").ifEmpty { null }?.let { "Total $it" }
+        val remaining = if (onBoard) raw.tripMin ?: m.totalMin else m.totalMin
+        val arrival = remaining?.let {
+            "Chegada ~" + Instant.ofEpochMilli(acceptedAt + it * 60_000L).atZone(zone).format(CLOCK)
         }
-
-        val metrics = listOfNotNull(
-            m.perKm?.let { "$km${ShiftMath.money(it)}/km" },
-            m.perHour?.let { "$time${ShiftMath.money(it)}/h" },
-            m.netProfit?.let { "Lucro $km${ShiftMath.money(it)}" },
-        ).joinToString(" · ").ifEmpty { null }
-
+        val netPerHour = m.netProfit?.let { net -> legs.minutes?.takeIf { it > 0 }?.let { net / it * 60.0 } }
         val name = passenger?.trim()?.takeIf { it.isNotEmpty() }?.replaceFirstChar { it.uppercase() }
-        val rating = raw.passengerRating?.let { "★ ${ShiftMath.num(it, 2)}" }
-        val rider = when {
-            name != null && rating != null -> "Passageiro: $name · $rating"
-            name != null -> "Passageiro: $name"
-            rating != null -> "Passageiro $rating"
-            else -> null
-        }
 
         val hits = offer.zoneHits.filter { it.zone.alertEnabled }.distinct()
-        fun zoneLine(role: PointRole, type: ZoneType, zoneName: String): String {
-            val icon = if (type == ZoneType.DANGER) "⚠" else "●"
-            val where = if (role == PointRole.PICKUP) "Coleta" else "Destino"
-            return "$icon $where: ${type.label} ($zoneName)"
-        }
-        val danger = hits.filter { it.zone.type == ZoneType.DANGER }.map { zoneLine(it.role, it.zone.type, it.zone.name) }
-        val otherZones = hits.filter { it.zone.type != ZoneType.DANGER }.map { zoneLine(it.role, it.zone.type, it.zone.name) }
+            .sortedBy { if (it.zone.type == ZoneType.DANGER) 0 else 1 }
+        val zones = hits.joinToString(" · ") { hit ->
+            val icon = if (hit.zone.type == ZoneType.DANGER) "⚠" else "●"
+            val where = if (hit.role == PointRole.PICKUP) "Coleta" else "Destino"
+            "$icon $where: ${hit.zone.type.label} (${hit.zone.name})"
+        }.ifEmpty { null }
 
-        // Ordem = importância: o que não cabe nas linhas da notificação sai do fim.
-        val details = buildList<String> {
-            metrics?.let { add(it) }
-            total?.let { add(it) }
-            addAll(danger)
-            raw.pickupAddress?.trim()?.takeIf { it.isNotEmpty() }?.let { add("A · $it") }
-            raw.dropoffAddress?.trim()?.takeIf { it.isNotEmpty() }?.let { add("B · $it") }
-            rider?.let { add(it) }
-            addAll(otherZones)
-        }.distinct().take(MAX_DETAILS)
-
-        val summary = when {
-            legLines.isNotEmpty() -> legLines.joinToString(" → ")
-            total != null -> total
-            else -> "Distância e tempo não lidos"
-        }
-
-        return RideNotice(title, summary, details, mapNote(offer, points))
+        return mapOf(
+            NoticeItem.KIND to kind(raw.platform, category),
+            NoticeItem.PRICE to ShiftMath.money(raw.price),
+            NoticeItem.PICKUP to leg("Busca", raw.pickupKm, raw.pickupMin),
+            NoticeItem.TRIP to leg("Viagem", raw.tripKm, raw.tripMin),
+            NoticeItem.TOTAL to total,
+            NoticeItem.ARRIVAL to arrival,
+            NoticeItem.PER_KM to m.perKm?.let { "$km${ShiftMath.money(it)}/km" },
+            NoticeItem.PER_HOUR to m.perHour?.let { "$time${ShiftMath.money(it)}/h" },
+            NoticeItem.NET to m.netProfit?.let { "Lucro $km${ShiftMath.money(it)}" },
+            NoticeItem.NET_PER_HOUR to netPerHour?.let { "Lucro/h ${if (km.isNotEmpty() || time.isNotEmpty()) "~" else ""}${ShiftMath.money(it)}" },
+            NoticeItem.RATING to raw.passengerRating?.let { "★ ${ShiftMath.num(it, 2)}" },
+            NoticeItem.PASSENGER to name?.let { "Passageiro: $it" },
+            NoticeItem.PICKUP_ADDRESS to raw.pickupAddress?.trim()?.takeIf { it.isNotEmpty() }?.let { "A · $it" },
+            NoticeItem.DROPOFF_ADDRESS to raw.dropoffAddress?.trim()?.takeIf { it.isNotEmpty() }?.let { "B · $it" },
+            NoticeItem.ZONES to zones,
+        )
     }
 
     /** Aviso embaixo do mapa quando coleta/destino não aparecem nele (endereço não lido ou não achado). */

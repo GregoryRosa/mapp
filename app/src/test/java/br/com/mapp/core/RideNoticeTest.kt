@@ -8,6 +8,9 @@ import br.com.mapp.core.model.RawOffer
 import br.com.mapp.core.model.VehicleCostConfig
 import br.com.mapp.core.model.Zone
 import br.com.mapp.core.model.ZoneType
+import br.com.mapp.core.notify.NoticeItem
+import br.com.mapp.core.notify.NoticeLayout
+import br.com.mapp.core.notify.NoticeLine
 import br.com.mapp.core.notify.RideNotices
 import br.com.mapp.core.notify.RidePoints
 import org.junit.Assert.assertEquals
@@ -57,9 +60,9 @@ class RideNoticeTest {
                 // 15,40 ÷ 6,8 km; 15,40 ÷ 16 min × 60; 15,40 − 6,8 × 0,70
                 "R$ 2,26/km · R$ 57,75/h · Lucro R$ 10,64",
                 "Total 6,8 km · 16 min · Chegada ~14:32",
+                "Passageiro: Caio · ★ 4,92",
                 "A · Rua das Flores, 123",
                 "B · Av. Paulista, 1000",
-                "Passageiro: Caio · ★ 4,92",
             ),
             n.details,
         )
@@ -72,14 +75,17 @@ class RideNoticeTest {
         assertTrue(n.details.contains("Total 6,8 km · 16 min · Chegada ~14:28"))
     }
 
-    @Test fun zona_perigosa_vem_antes_e_o_que_nao_cabe_sai_do_fim() {
+    @Test fun zona_perigosa_vem_antes_do_passageiro() {
         val centro = Zone(name = "Centro", type = ZoneType.DANGER, polygon = around(dropoff))
-        val offer = OfferEvaluator.evaluate(raw, profile, cost, listOf(centro), pickup, dropoff)
+        val demanda = Zone(name = "Shopping", type = ZoneType.HIGH_DEMAND, polygon = around(pickup))
+        val offer = OfferEvaluator.evaluate(raw, profile, cost, listOf(demanda, centro), pickup, dropoff)
         val n = RideNotices.of(offer, "UberX", "caio", acceptedAt, sp)
         assertTrue(n.title.startsWith("🔴 "))
         assertEquals(RideNotices.MAX_DETAILS, n.details.size)
-        assertEquals("⚠ Destino: Zona perigosa (Centro)", n.details[2])
-        assertFalse(n.details.any { it.startsWith("Passageiro") })
+        assertEquals(
+            "⚠ Destino: Zona perigosa (Centro) · ● Coleta: Alta demanda (Shopping) · Passageiro: Caio · ★ 4,92",
+            n.details[2],
+        )
     }
 
     @Test fun numero_estimado_ganha_til() {
@@ -102,7 +108,39 @@ class RideNoticeTest {
     @Test fun sem_km_nem_tempo() {
         val offer = OfferEvaluator.evaluate(RawOffer(Platform.UBER, 9.0), profile, cost)
         val n = RideNotices.of(offer, null, null, acceptedAt, sp)
-        assertEquals("Distância e tempo não lidos", n.summary)
+        assertEquals("", n.summary)
+        assertEquals(listOf<String>(), n.details.filter { it.startsWith("Total") })
+    }
+
+    @Test fun layout_escolhido_no_menu_card() {
+        val offer = OfferEvaluator.evaluate(raw, profile, cost, pickup = pickup, dropoff = dropoff)
+        val layout = NoticeLayout(
+            mapOf(
+                NoticeLine.TITLE to listOf(NoticeItem.PRICE, NoticeItem.PER_KM),
+                NoticeLine.TEXT to listOf(NoticeItem.TOTAL, NoticeItem.ARRIVAL),
+                NoticeLine.EXTRA2 to listOf(NoticeItem.DROPOFF_ADDRESS),
+                NoticeLine.EXTRA4 to listOf(NoticeItem.NET, NoticeItem.NET_PER_HOUR),
+            ),
+            headline = false,
+            showMap = false,
+        )
+        val n = RideNotices.of(offer, "UberX", null, acceptedAt, sp, points = RidePoints(here, null, null), layout = layout)
+        assertEquals("🟢 R$ 15,40 · R$ 2,26/km", n.title)
+        assertEquals("Total 6,8 km · 16 min · Chegada ~14:32", n.summary)
+        // Linhas vazias não ocupam espaço; 10,64 ÷ 16 min × 60 = 39,90/h.
+        assertEquals(listOf("B · Av. Paulista, 1000", "Lucro R$ 10,64 · Lucro/h R$ 39,90"), n.details)
+        // Sem mapa: nem o aviso do mapa.
+        assertFalse(n.showMap)
+        assertNull(n.mapNote)
+    }
+
+    @Test fun titulo_vazio_vira_corrida_aceita() {
+        val offer = OfferEvaluator.evaluate(raw, profile, cost)
+        val vazio = NoticeLayout(emptyMap(), headline = false)
+        val n = RideNotices.of(offer, null, null, acceptedAt, sp, layout = vazio)
+        assertEquals("🟢 Corrida aceita", n.title)
+        assertEquals("", n.summary)
+        assertTrue(n.details.isEmpty())
     }
 
     @Test fun aviso_do_mapa_quando_coleta_ou_destino_ficam_de_fora() {

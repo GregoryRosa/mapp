@@ -96,7 +96,6 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
 
     val p = remember(refresh) { Perms.check(ctx) }
     val running by OverlayService.running.collectAsState()
-    val reader by ReaderStatus.state.collectAsState()
     // Versão instalada, sempre à vista: muda a cada APK novo.
     val version = remember { ReaderStatus.versionOf(ctx) }
     val updatedFrom = remember { versionChange(ctx, version) }
@@ -140,7 +139,7 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    if (running) "O ícone flutuante fica por cima da Uber/99/inDrive: toque nele para abrir o menu (jornada, +1, 📍, voz e ajustes do botão)."
+                    if (running) "O ícone flutuante fica por cima da Uber/99/inDrive: toque nele para abrir o menu (jornada, +1, 📍, voz e ajustes do botão); segure 3 s para desligar o copiloto."
                     else "Analise cada oferta, controle a jornada e o lucro — tudo num só app.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MappColors.TextDim,
@@ -206,32 +205,19 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                     PermRow("Acessibilidade (leitor)", p.accessibility) {
                         ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                     }
+                    if (!p.accessibility) {
+                        Text(
+                            "Se a Acessibilidade aparecer bloqueada (\"Configuração restrita\"): Configurações → Apps → MApp → " +
+                                "menu ⋮ → \"Permitir configurações restritas\" e ative de novo o leitor MApp.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MappColors.Warn,
+                        )
+                    }
                     PermRow("Sem otimização de bateria", p.battery) {
                         ctx.startActivity(
                             Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}"))
                         )
                     }
-                }
-            }
-
-            GlassCard {
-                Text("Leitor de corridas", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(6.dp))
-                ReaderStatus.lines(reader, running).forEachIndexed { i, line ->
-                    if (i == 0) {
-                        Text(line, style = MaterialTheme.typography.bodyMedium, color = MappColors.Text)
-                    } else {
-                        Text(line, style = MaterialTheme.typography.bodySmall, color = MappColors.TextDim)
-                    }
-                }
-                if (!reader.connected) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Se a Acessibilidade aparecer bloqueada (\"Configuração restrita\"): Configurações → Apps → MApp → " +
-                            "menu ⋮ → \"Permitir configurações restritas\" e ative de novo o leitor MApp.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MappColors.Warn,
-                    )
                 }
             }
 
