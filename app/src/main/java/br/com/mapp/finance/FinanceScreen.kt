@@ -51,7 +51,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import br.com.mapp.overlay.ShiftTracker
 import br.com.mapp.MappApp
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.repo.EntryKind
@@ -73,12 +75,15 @@ fun FinanceScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val now = rememberNow()
     val zone = remember { ZoneId.systemDefault() }
-    val todayDate = ReportMath.dateOf(now, zone)
+    val ctx = LocalContext.current
+    val openShift by remember { ShiftTracker.current(ctx) }.collectAsStateWithLifecycle()
+    // "Hoje" = dia de trabalho: com jornada aberta depois da meia-noite, ainda é o dia em que ela começou.
+    val todayDate = ReportMath.workDate(openShift?.startedAt, now, zone)
     // Dia escolhido no calendário da seção "Hoje" (null = hoje). Guardado como dia epoch.
     var pickedDay by rememberSaveable { mutableStateOf<Long?>(null) }
     val date = pickedDay?.let { LocalDate.ofEpochDay(it) }?.takeIf { it <= todayDate } ?: todayDate
     // Períodos são data classes: recalculados a cada minuto, só mudam na virada do dia/semana/mês.
-    val day = ReportMath.day(date, zone)
+    val day = if (date == todayDate) ReportMath.workDay(openShift?.startedAt, now, zone) else ReportMath.day(date, zone)
     val week = ReportMath.uberWeek(now, zone)
     val month = ReportMath.currentMonth(now, zone)
 

@@ -52,10 +52,13 @@ private const val HISTORY_LIMIT = 200
 @Composable
 fun HistoryScreen(onBack: () -> Unit) {
     val repos = MappApp.repos
+    val context = LocalContext.current
     // 0 = Aceitas hoje (padrão: o que importa na jornada), 1 = Todas as ofertas.
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val now = rememberNow()
-    val today = ReportMath.today(now)
+    val openShift by remember { ShiftTracker.current(context) }.collectAsStateWithLifecycle()
+    // "Aceitas hoje" = dia de trabalho (jornada aberta depois da meia-noite continua no dia em que começou).
+    val today = ReportMath.workDay(openShift?.startedAt, now)
     val todayOffers by remember(today) { repos.offers.between(today.from, today.to) }
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val offers by remember { repos.offers.recent(HISTORY_LIMIT) }

@@ -117,6 +117,19 @@ class ReportMathTest {
         assertEquals(10.0, ReportMath.summarize(entries, today).income, 1e-9)
     }
 
+    @Test fun dia_de_trabalho_segue_a_jornada_aberta_depois_da_meia_noite() {
+        // Jornada aberta às 18h do dia 13; agora 00:30 do dia 14 → o dia ainda é o 13.
+        val started = t(13, 18)
+        val afterMidnight = t(14, 0) + 30 * 60_000L
+        // Período vai de 00:00 do dia 13 até o fim do dia 14 (corridas depois da meia-noite entram).
+        assertEquals(Period(t(13, 0), t(15, 0) - 1), ReportMath.workDay(started, afterMidnight, zone))
+        assertEquals(java.time.LocalDate.of(2026, 11, 13), ReportMath.workDate(started, afterMidnight, zone))
+        // Sem jornada aberta: o dia do calendário.
+        assertEquals(ReportMath.today(afterMidnight, zone), ReportMath.workDay(null, afterMidnight, zone))
+        // Jornada de hoje: o próprio dia.
+        assertEquals(ReportMath.today(t(14, 10), zone), ReportMath.workDay(t(14, 8), t(14, 10), zone))
+    }
+
     @Test fun ganhos_por_dia_da_semana_comecam_na_segunda() {
         val byDay = ReportMath.incomeByWeekday(
             listOf(income(10.0, t(9, 12)), income(5.0, t(15, 12)), expense(99.0, t(9, 12))),

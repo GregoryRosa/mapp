@@ -74,6 +74,20 @@ object ReportMath {
         return Period(start.toInstant().toEpochMilli(), end.toInstant().toEpochMilli() - 1)
     }
 
+    /**
+     * Dia de trabalho: com jornada aberta é o dia em que ela começou — passou da meia-noite com a
+     * jornada rodando, o dia ainda não acabou; sem jornada, hoje. Vale para o ícone "M" (números e
+     * meta), a tela inicial, Ganhos e gastos → Hoje e Aceitas hoje.
+     */
+    fun workDate(openShiftStartedAt: Long?, now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault()): LocalDate =
+        dateOf(openShiftStartedAt?.coerceAtMost(now) ?: now, zone)
+
+    /** Período do dia de trabalho: de 00:00 do dia da jornada aberta até o fim de hoje. */
+    fun workDay(openShiftStartedAt: Long?, now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault()): Period {
+        val start = day(workDate(openShiftStartedAt, now, zone), zone)
+        return Period(start.from, maxOf(start.to, dayOf(now, zone).to))
+    }
+
     /** Dia do calendário em que [millis] cai. */
     fun dayOf(millis: Long, zone: ZoneId = ZoneId.systemDefault()): Period = day(dateOf(millis, zone), zone)
 

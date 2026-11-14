@@ -331,7 +331,7 @@ private fun ShiftCard(copilotRunning: Boolean) {
     val current by remember { ShiftTracker.current(ctx) }.collectAsStateWithLifecycle()
     val now = rememberNow()
     val cur = current
-    val period = ReportMath.dayOf(cur?.startedAt ?: now)
+    val period = ReportMath.workDay(cur?.startedAt, now)
     val t = rememberPeriodTotals(period, now)
     val today = ReportMath.dayOf(now)
     var net by rememberSaveable { mutableStateOf(false) }
