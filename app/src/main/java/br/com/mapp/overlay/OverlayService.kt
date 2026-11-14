@@ -71,7 +71,6 @@ class OverlayService : LifecycleService() {
     private var overlayContext: Context? = null
     /** Onde cartão e ícone abrem janela (Acessibilidade ou sobreposição comum); null = sem permissão. */
     private var host: OverlayHost? = null
-    private var pinCount = 0
     private var location: LocationProvider? = null
     private var voice: VoiceAnnouncer? = null
     private var greatSound: GreatSoundPlayer? = null
@@ -152,42 +151,20 @@ class OverlayService : LifecycleService() {
         startDayMonitor()
         lifecycleScope.launch { OfferBus.tripStages.collect { onTripStage(it) } }
 
-        // Ícone flutuante com ajustes rápidos (e cartão): recriados quando o leitor liga/desliga.
+        // Ícone flutuante "M" com o menu circular (e cartão): recriados quando o leitor liga/desliga.
         lifecycleScope.launch { OfferAccessibilityService.windowContext.collect { useHost(it) } }
         lifecycleScope.launch { ReaderStatus.state.collect { bubble?.updateReader(it) } }
-        lifecycleScope.launch {
-            PinStore.pins(this@OverlayService).collect {
-                pinCount = it.size
-                bubble?.updatePins(it.size)
-            }
-        }
         lifecycleScope.launch {
             MappApp.repos.profiles.all()
                 .combine(MappApp.repos.profiles.active()) { all, active -> all to active }
                 .collect { (all, active) ->
                     profiles = all
                     activeProfile = active
-                    bubble?.updateProfile(active, all.size.coerceAtLeast(1))
                 }
         }
     }
 
     private val bubbleActions = object : QuickBubbleView.Actions {
-        override fun previousProfile() = cycleProfile(-1)
-        override fun nextProfile() = cycleProfile(+1)
-
-        override fun updateProfile(change: (FilterProfile) -> FilterProfile) {
-            lifecycleScope.launch {
-                try {
-                    val repo = MappApp.repos.profiles
-                    val updated = change(repo.active().first())
-                    val id = repo.save(updated)
-                    if (updated.id == 0L && id > 0) repo.setActive(id) // perfil padrão ainda não salvo
-                } catch (e: Exception) {
-                    Log.w(TAG, "Falha ao salvar ajuste rápido", e)
-                }
-            }
-        }
 
         override fun toggleVoice() {
             val ctx = this@OverlayService
@@ -228,23 +205,6 @@ class OverlayService : LifecycleService() {
         }
 
         override fun countLastOffer() = countOffer(lastOffer)
-
-        override fun finishPendingTrip() = finishPending(auto = false)
-
-        override fun cancelPendingTrip() = cancelPending(auto = false)
-
-        override fun undoLastTrip() {
-            val shift = ShiftTracker.current(this@OverlayService).value ?: return
-            if (shift.trips.isEmpty()) { toast("Nenhuma corrida para desfazer"); return }
-            if (!shift.trips.last().finished) matcher.closedNewest()
-            ShiftTracker.undoLastTrip(this@OverlayService)
-            countedOffer?.let { markAccepted(it, null) }
-            countedKey?.let { matcher.forget(it) }
-            countedOffer = null
-            countedKey = null
-            refreshCountButton()
-            toast("Última corrida removida")
-        }
 
         override fun markPin(type: ZoneType) {
             if (pinPending) return
@@ -314,10 +274,7 @@ class OverlayService : LifecycleService() {
     }
 
     private fun pushShift() {
-        val now = System.currentTimeMillis()
-        val shift: Shift? = ShiftTracker.current(this).value
-        val summary = shift?.let { ShiftMath.summary(it, costPerKm, now) }
-        bubble?.updateShift(shift, summary, lastOffer?.let { offerLabel(it.raw) })
+        bubble?.updateShift(ShiftTracker.current(this).value)
     }
 
     // ------------------------------------------------------------------ dia e meta (ícone "M")
@@ -397,7 +354,7 @@ class OverlayService : LifecycleService() {
     private fun celebrateGoal(workDate: java.time.LocalDate, gross: Double, goal: Double?) {
         val mark = DayGoal.celebration(gross, goal, workDate.toString(), OverlayPrefs.goalMark(this)) ?: return
         OverlayPrefs.setGoalMark(this, mark)
-        cashSound?.playCash()
+        cashSound?.playGoal() // som escolhido nos ajustes do botão "M"
         tripToast("🎯 Meta do dia batida! ${ShiftMath.money(gross)} de ${ShiftMath.money(goal ?: gross)}")
     }
 
@@ -583,23 +540,6 @@ class OverlayService : LifecycleService() {
     /** Avisos da corrida (aceita, embarque, finalizada, cancelada): ficam mais tempo. */
     private fun tripToast(msg: String) = toast(msg, TRIP_NOTICE_MS)
 
-    private fun cycleProfile(direction: Int) {
-        val list = profiles
-        if (list.size < 2) {
-            toast("Crie mais perfis em Perfis de filtro")
-            return
-        }
-        val i = list.indexOfFirst { it.id == activeProfile.id }.coerceAtLeast(0)
-        val next = list[(i + direction).mod(list.size)]
-        lifecycleScope.launch {
-            try {
-                MappApp.repos.profiles.setActive(next.id)
-            } catch (e: Exception) {
-                Log.w(TAG, "Falha ao trocar perfil", e)
-            }
-        }
-    }
-
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         if (intent?.action == ACTION_STOP) {
@@ -720,8 +660,6 @@ class OverlayService : LifecycleService() {
         bubble = QuickBubbleView(next, bubbleActions).also {
             it.show()
             it.updateReader(ReaderStatus.state.value)
-            it.updatePins(pinCount)
-            it.updateProfile(activeProfile, profiles.size.coerceAtLeast(1))
         }
         pushShift()
         pushDay()

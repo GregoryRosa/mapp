@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Pins marcados na rua (📍 no painel do "M") esperando virar zona. Ficam no aparelho
+ * Pins marcados na rua (📍 no menu circular do "M") esperando virar zona. Ficam no aparelho
  * (SharedPreferences), compartilhados entre o copiloto e o editor de zonas.
  */
 object PinStore {

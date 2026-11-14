@@ -7,7 +7,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * Marcação rápida feita na rua (botão 📍 no painel do ícone "M"): só um ponto e o tipo.
+ * Marcação rápida feita na rua (botão 📍 no menu circular do ícone "M"): só um ponto e o tipo.
  * Depois, com calma, vira uma [br.com.mapp.core.model.Zone] no editor de zonas.
  * [id] = momento da marcação (ms), único por aparelho.
  */
