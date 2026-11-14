@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Notificação de corrida aceita, expandida: título, busca → viagem, mapa e até 5 linhas de detalhe
+<!-- Notificação de corrida aceita, expandida: título, busca → viagem, mapa + fotos da rua (A em cima,
+     B embaixo; mesma altura do mapa) e até 5 linhas de detalhe
      (overlay/RideNotifier). Altura total cabe no limite do Android para notificação personalizada. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -22,14 +23,52 @@
         android:singleLine="true"
         android:textAppearance="@android:style/TextAppearance.Material.Notification" />
 
-    <ImageView
-        android:id="@+id/ride_map"
+    <LinearLayout
+        android:id="@+id/ride_media"
         android:layout_width="match_parent"
         android:layout_height="112dp"
         android:layout_marginTop="4dp"
-        android:contentDescription="Mapa da corrida: você, coleta (A) e destino (B)"
-        android:scaleType="centerCrop"
-        android:visibility="gone" />
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/ride_map"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:contentDescription="Mapa da corrida: você, coleta (A) e destino (B)"
+            android:scaleType="centerCrop"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/ride_photos"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/ride_photo_a"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:contentDescription="Foto da rua da coleta"
+                android:scaleType="centerCrop" />
+
+            <ImageView
+                android:id="@+id/ride_photo_b"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:layout_marginTop="4dp"
+                android:contentDescription="Foto da rua do destino"
+                android:scaleType="centerCrop"
+                android:visibility="gone" />
+        </LinearLayout>
+    </LinearLayout>
 
     <TextView
         android:id="@+id/ride_map_note"

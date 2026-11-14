@@ -41,12 +41,15 @@ enum class NoticeLine(val id: String, val label: String, val slots: Int, val exp
 /**
  * O que aparece em cada linha da notificação da corrida aceita, sem repetir item (igual ao
  * [br.com.mapp.core.card.CardLayout]). Listas sem buracos: a posição é a ordem na lista.
- * [headline] = "Corrida aceita" no começo do título; [showMap] = mapa na notificação aberta.
+ * [headline] = "Corrida aceita" no começo do título; [showMap] = mapa na notificação aberta;
+ * [showPhotos] = fotos da rua (Street View) da coleta e do destino ao lado do mapa (precisam da
+ * chave do Google colada em Card → Card de corridas).
  */
 data class NoticeLayout(
     val lines: Map<NoticeLine, List<NoticeItem>>,
     val headline: Boolean = true,
     val showMap: Boolean = true,
+    val showPhotos: Boolean = true,
 ) {
     fun line(line: NoticeLine): List<NoticeItem> = lines[line].orEmpty()
 
@@ -91,6 +94,7 @@ data class NoticeLayout(
         NoticeLine.entries.forEach { l -> append(';').append(l.id).append('=').append(line(l).joinToString(",") { it.id }) }
         append(";headline=").append(if (headline) 1 else 0)
         append(";map=").append(if (showMap) 1 else 0)
+        append(";photos=").append(if (showPhotos) 1 else 0)
     }
 
     companion object {
@@ -127,7 +131,12 @@ data class NoticeLayout(
                 used += items
                 items
             }
-            return NoticeLayout(lines, headline = map["headline"] != "0", showMap = map["map"] != "0")
+            return NoticeLayout(
+                lines,
+                headline = map["headline"] != "0",
+                showMap = map["map"] != "0",
+                showPhotos = map["photos"] != "0",
+            )
         }
     }
 }
