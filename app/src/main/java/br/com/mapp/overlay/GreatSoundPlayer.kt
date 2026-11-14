@@ -42,6 +42,12 @@ class GreatSoundPlayer(context: Context) {
         }
     }
 
+    /** Aviso de corrida com parada no caminho (som escolhido na tela do Card). */
+    fun playStop(
+        sound: GreatSound = OverlayPrefs.stopSound(app),
+        phoneUri: Uri? = OverlayPrefs.stopSoundUri(app),
+    ): Long = play(sound, phoneUri)
+
     /** Som de dinheiro da meta do dia batida. */
     fun playCash(): Long {
         stop()

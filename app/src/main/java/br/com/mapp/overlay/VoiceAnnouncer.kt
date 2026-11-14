@@ -9,6 +9,7 @@ import br.com.mapp.core.model.PointRole
 import br.com.mapp.core.model.Signal
 import br.com.mapp.core.model.ZoneHit
 import br.com.mapp.core.model.ZoneType
+import br.com.mapp.core.route.RideRoute
 import java.util.Locale
 
 /** Aviso por voz: "Verde, 2,10 reais o quilômetro" + alertas de zona (R5). */
@@ -74,6 +75,8 @@ class VoiceAnnouncer(context: Context) : TextToSpeech.OnInitListener {
             append(". Corrida de ").append(number(offer.raw.price)).append(" reais")
         }
         append('.')
+        // Parada no caminho ("1 parada" no cartão da Uber).
+        RideRoute.stopsLabel(offer.raw)?.let { append(" Com ").append(it).append('.') }
         appendZones(offer.zoneHits)
     }
 

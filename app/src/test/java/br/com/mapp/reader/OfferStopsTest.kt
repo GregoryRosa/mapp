@@ -9,10 +9,54 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Corridas com paradas no caminho. Amostras INVENTADAS (o formato real da Uber com paradas ainda
- * não foi capturado): quando chegar um print de verdade, vire caso de teste aqui antes de ajustar.
+ * Corridas com paradas no caminho. Formato REAL da Uber (print de 14/11/2026): "1 parada" fica
+ * entre o endereço da coleta e o trecho da viagem, sem o endereço da parada, e o botão é
+ * "Selecionar". As outras amostras são inventadas (outros formatos possíveis).
  */
 class OfferStopsTest {
+
+    /** Texto do print real (Belém), como o OCR entrega: endereço da coleta quebrado em 2 linhas. */
+    private val realOcr = listOf(
+        "UberX", "R$ 15,19", "* 4,95 (283)",
+        "13 min (3.8 km)", "Travessa Honório José dos Santos,", "Jurunas, Belém",
+        "1 parada",
+        "19 minutos (5.4 km)", "Av. Alcindo Cacela, 2144, Nazaré, Belém",
+        "Selecionar",
+    )
+
+    @Test fun uber_print_real_imagem() {
+        val o = UberParser.parse(realOcr, fromOcr = true)!!
+        assertEquals(15.19, o.price, 1e-9)
+        assertEquals(13, o.pickupMin)
+        assertEquals(19, o.tripMin)
+        assertEquals("Travessa Honório José dos Santos, Jurunas, Belém", o.pickupAddress)
+        assertEquals("Av. Alcindo Cacela, 2144, Nazaré, Belém", o.dropoffAddress)
+        assertEquals(1, o.stopCount)
+        assertTrue(o.stopAddresses.isEmpty())
+    }
+
+    @Test fun uber_print_real_texto() {
+        val o = UberParser.parse(
+            listOf(
+                "UberX", "R$ 15,19", "★ 4,95 (283)",
+                "13 min (3.8 km)", "Travessa Honório José dos Santos, Jurunas, Belém",
+                "1 parada",
+                "19 minutos (5.4 km)", "Av. Alcindo Cacela, 2144, Nazaré, Belém",
+                "Selecionar",
+            ),
+        )!!
+        assertEquals("Travessa Honório José dos Santos, Jurunas, Belém", o.pickupAddress)
+        assertEquals("Av. Alcindo Cacela, 2144, Nazaré, Belém", o.dropoffAddress)
+        assertEquals(1, o.stopCount)
+        assertTrue(o.stopAddresses.isEmpty())
+    }
+
+    @Test fun uber_print_real_sem_parada_continua_igual() {
+        val o = UberParser.parse(realOcr.filter { it != "1 parada" }, fromOcr = true)!!
+        assertEquals("Travessa Honório José dos Santos, Jurunas, Belém", o.pickupAddress)
+        assertEquals("Av. Alcindo Cacela, 2144, Nazaré, Belém", o.dropoffAddress)
+        assertEquals(0, o.stopCount)
+    }
 
     @Test fun aviso_de_paradas() {
         assertEquals(1, ParseUtils.stopMarker("Várias paradas"))

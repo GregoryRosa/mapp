@@ -239,6 +239,7 @@ private fun OfferCardTab() {
                 }
 
                 GreatSoundCard()
+                StopSoundCard()
 
                 CardLine.entries.forEach { line ->
                     SlotRow(
@@ -443,15 +444,54 @@ private val SAMPLES = listOf(
 @Composable
 private fun GreatSoundCard() {
     val ctx = LocalContext.current
+    SoundCard(
+        title = "Som de corrida ótima",
+        hint = "Toca quando tudo no Card fica verde, antes da voz (toca mesmo com a voz desligada). Toque num som para ouvir.",
+        initialSound = OverlayPrefs.greatSound(ctx),
+        initialUri = OverlayPrefs.greatSoundUri(ctx),
+        saveSound = { OverlayPrefs.setGreatSound(ctx, it) },
+        saveUri = { OverlayPrefs.setGreatSoundUri(ctx, it) },
+    )
+}
+
+/**
+ * Aviso de corrida com parada no caminho ("1 parada" no Card da Uber): só avisa, quem recusa é você.
+ * "Sem som" desliga o aviso. Com parada, ele toca no lugar do som de corrida ótima.
+ */
+@Composable
+private fun StopSoundCard() {
+    val ctx = LocalContext.current
+    SoundCard(
+        title = "Aviso de corrida com parada",
+        hint = "Toca quando a oferta tem parada no caminho, antes da voz — para você decidir se recusa (o MApp nunca recusa sozinho). " +
+            "Se a corrida também for ótima, toca este aviso no lugar do som de corrida ótima. \"Sem som\" desliga o aviso.",
+        initialSound = OverlayPrefs.stopSound(ctx),
+        initialUri = OverlayPrefs.stopSoundUri(ctx),
+        saveSound = { OverlayPrefs.setStopSound(ctx, it) },
+        saveUri = { OverlayPrefs.setStopSoundUri(ctx, it) },
+    )
+}
+
+/** Escolha de um som (sons do MApp, som do celular ou sem som) com "Testar". Escolher já toca o som. */
+@Composable
+private fun SoundCard(
+    title: String,
+    hint: String,
+    initialSound: GreatSound,
+    initialUri: Uri?,
+    saveSound: (GreatSound) -> Unit,
+    saveUri: (Uri) -> Unit,
+) {
+    val ctx = LocalContext.current
     val player = remember { GreatSoundPlayer(ctx) }
     DisposableEffect(Unit) { onDispose { player.stop() } }
-    var sound by remember { mutableStateOf(OverlayPrefs.greatSound(ctx)) }
-    var phoneUri by remember { mutableStateOf(OverlayPrefs.greatSoundUri(ctx)) }
+    var sound by remember { mutableStateOf(initialSound) }
+    var phoneUri by remember { mutableStateOf(initialUri) }
     val phoneTitle = remember(phoneUri) { GreatSoundPlayer.phoneSoundTitle(ctx, phoneUri) }
 
     fun choose(s: GreatSound, uri: Uri? = phoneUri) {
         sound = s
-        OverlayPrefs.setGreatSound(ctx, s)
+        saveSound(s)
         if (s == GreatSound.OFF) player.stop() else player.play(s, uri)
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
@@ -459,14 +499,14 @@ private fun GreatSoundCard() {
         val uri = res.data?.let { IntentCompat.getParcelableExtra(it, RingtoneManager.EXTRA_RINGTONE_PICKED_URI, Uri::class.java) }
             ?: return@rememberLauncherForActivityResult
         phoneUri = uri
-        OverlayPrefs.setGreatSoundUri(ctx, uri)
+        saveUri(uri)
         choose(GreatSound.PHONE, uri)
     }
     fun pickPhoneSound() {
         player.stop()
         val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
             .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_NOTIFICATION)
-            .putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Som de corrida ótima")
+            .putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, title)
             .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
             .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
             .putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, phoneUri)
@@ -476,11 +516,8 @@ private fun GreatSoundCard() {
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Som de corrida ótima", fontWeight = FontWeight.SemiBold)
-            Text(
-                "Toca quando tudo no Card fica verde, antes da voz (toca mesmo com a voz desligada). Toque num som para ouvir.",
-                style = MaterialTheme.typography.bodySmall,
-            )
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(hint, style = MaterialTheme.typography.bodySmall)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 GreatSound.entries.forEach { s ->
                     FilterChip(
