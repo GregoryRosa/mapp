@@ -137,7 +137,7 @@ object ReaderStatus {
         )
     }
 
-    /** Linhas curtas de estado para a tela inicial e o painel do ícone flutuante. */
+    /** Linhas curtas de estado para a tela inicial. */
     fun lines(s: Snapshot, copilotRunning: Boolean): List<String> = buildList {
         add(if (s.connected) "✅ Leitor conectado" else "⚠️ Leitor DESLIGADO – ative a Acessibilidade")
         add("Última leitura: ${s.lastPlatform ?: "—"} ${ago(s.lastReadAt)}" + (s.lastSource?.let { " ($it)" } ?: ""))

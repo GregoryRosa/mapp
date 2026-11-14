@@ -93,7 +93,7 @@ fun ZoneEditorScreen(onBack: () -> Unit) {
     var showSaveDialog by remember { mutableStateOf(false) }
     var zoneToDelete by remember { mutableStateOf<Zone?>(null) }
 
-    // Pins marcados na rua pelo painel do "M".
+    // Pins marcados na rua pelo 📍 do menu circular do "M".
     val pins by remember { PinStore.pins(ctx) }.collectAsStateWithLifecycle()
     var selectedPin by remember { mutableStateOf<ZonePin?>(null) }
     /** Pin que está virando zona (apagado quando a zona é salva). */

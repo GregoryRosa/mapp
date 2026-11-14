@@ -3,10 +3,11 @@ package br.com.mapp.overlay
 import android.content.Context
 import android.content.SharedPreferences
 import android.net.Uri
+import br.com.mapp.core.bubble.BubbleStyle
 import br.com.mapp.core.card.CardLayout
 import br.com.mapp.core.sound.GreatSound
 
-/** Preferências do overlay (posição do Card, minimizado, voz, estilo do Card, som de corrida ótima). */
+/** Preferências do overlay (posição do Card, minimizado, voz, estilo do Card, som de corrida ótima, aparência do botão "M"). */
 object OverlayPrefs {
     const val NAME = "mapp_overlay"
     const val KEY_VOICE_ENABLED = "voice_enabled"
@@ -19,6 +20,7 @@ object OverlayPrefs {
     const val KEY_GREAT_SOUND = "great_sound"
     const val KEY_GREAT_SOUND_URI = "great_sound_uri"
     const val KEY_GOAL_MARK = "goal_mark"
+    const val KEY_BUBBLE_STYLE = "bubble_style"
 
     fun of(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -56,5 +58,12 @@ object OverlayPrefs {
 
     fun setGoalMark(context: Context, mark: String) {
         of(context).edit().putString(KEY_GOAL_MARK, mark).apply()
+    }
+
+    /** Aparência do botão "M" (cores, giro e som da meta), escolhida no painel ⚙ do próprio botão. */
+    fun bubbleStyle(context: Context): BubbleStyle = BubbleStyle.decode(of(context).getString(KEY_BUBBLE_STYLE, null))
+
+    fun setBubbleStyle(context: Context, style: BubbleStyle) {
+        of(context).edit().putString(KEY_BUBBLE_STYLE, style.encode()).apply()
     }
 }

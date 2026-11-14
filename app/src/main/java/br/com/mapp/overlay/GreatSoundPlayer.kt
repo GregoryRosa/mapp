@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import br.com.mapp.core.sound.CashSound
+import br.com.mapp.core.sound.GoalSound
 import br.com.mapp.core.sound.GreatSound
 import br.com.mapp.core.sound.SoundSynth
 
@@ -45,6 +46,16 @@ class GreatSoundPlayer(context: Context) {
     fun playCash(): Long {
         stop()
         return playPcm(CashSound.render(), CashSound.DURATION_MS.toLong())
+    }
+
+    /** Som da meta do dia batida escolhido nos ajustes do botão "M" (padrão: dinheiro). */
+    fun playGoal(sound: GoalSound = OverlayPrefs.bubbleStyle(app).goalSound): Long {
+        val synth = sound.great
+        return when {
+            sound == GoalSound.CASH -> playCash()
+            synth != null -> { stop(); playSynth(synth) }
+            else -> { stop(); 0L }
+        }
     }
 
     fun stop() {

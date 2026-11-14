@@ -26,15 +26,15 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import br.com.mapp.core.filter.FilterCriterion
+import br.com.mapp.core.bubble.BubbleStyle
+import br.com.mapp.core.bubble.ColorBar
+import br.com.mapp.core.bubble.SpinSpeed
 import br.com.mapp.core.goal.DayGoal
-import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.ZoneType
 import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftMath
-import br.com.mapp.core.shift.ShiftSummary
+import br.com.mapp.core.sound.GoalSound
 import br.com.mapp.reader.ReaderStatus
-import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
@@ -43,7 +43,8 @@ import kotlin.math.sin
 /**
  * Ícone flutuante do copiloto (fica por cima da Uber/99/inDrive enquanto o copiloto está ativo).
  * Toque = abre o menu circular (botões redondos com ícone em volta do "M"); arraste = muda de lugar.
- * A engrenagem do menu abre o painel completo de ajustes rápidos.
+ * A engrenagem do menu abre os **ajustes do próprio botão**: cores do fundo, do "M", do anel de
+ * dentro (status) e do anel de fora (meta), velocidade do giro e som da meta batida.
  * Só mexe nas configurações do próprio MApp — nunca toca no app de corrida.
  */
 class QuickBubbleView(
@@ -51,24 +52,16 @@ class QuickBubbleView(
     private val actions: Actions,
 ) {
     interface Actions {
-        fun previousProfile()
-        fun nextProfile()
-        /** Altera o perfil ativo (ex.: mínimo de R$/km) e salva. */
-        fun updateProfile(change: (FilterProfile) -> FilterProfile)
         fun toggleVoice()
         fun openApp()
         fun stopCopilot()
 
-        // Jornada (▶ no painel do "M")
+        // Jornada (▶/⏸ do menu circular)
         fun startShift()
         fun pauseShift()
         fun endShift()
         /** Conta a última oferta vista como corrida pega. */
         fun countLastOffer()
-        fun undoLastTrip()
-        /** Corrida em andamento terminou / foi cancelada (correção manual do automático). */
-        fun finishPendingTrip()
-        fun cancelPendingTrip()
 
         /** Marca um pin no local atual (zona para desenhar depois no editor). */
         fun markPin(type: ZoneType)
@@ -81,20 +74,20 @@ class QuickBubbleView(
 
     private var bubbleAttached = false
     private var panelAttached = false
-    private var profile: FilterProfile = FilterProfile()
-    private var profileCount = 1
     private var reader: ReaderStatus.Snapshot = ReaderStatus.Snapshot()
     private var shift: Shift? = null
-    private var summary: ShiftSummary? = null
-    private var lastOfferLabel: String? = null
-    private var confirmEnd = false
-    private var pinCount = 0
+
+    /** Aparência salva do botão (painel ⚙). */
+    private var style: BubbleStyle = OverlayPrefs.bubbleStyle(context)
+    /** O que está na tela agora: igual a [style], ou a prévia enquanto o dedo arrasta uma barra. */
+    private var shown: BubbleStyle = style
+    private var confirmReset = false
+    private var soundPlayer: GreatSoundPlayer? = null
 
     // ------------------------------------------------------------------ bolha
 
     private val bubble = LogoBubble(context, ringBg = RING_BG).apply {
-        contentDescription = "MApp – ajustes rápidos"
-        statusColor = NEON_GREEN
+        contentDescription = "MApp – ajustes do botão"
         elevation = dp(6).toFloat()
         isClickable = true
         setOnClickListener { onBubbleTap() }
@@ -155,7 +148,7 @@ class QuickBubbleView(
     private val tripButton = roundButton(NeonIcon.Kind.PLUS_ONE, NEON_CYAN, "Contar última oferta como corrida") {
         actions.countLastOffer()
     }
-    private val settingsButton = roundButton(NeonIcon.Kind.GEAR, NEON_GREEN, "Ajustes rápidos") {
+    private val settingsButton = roundButton(NeonIcon.Kind.GEAR, NEON_GREEN, "Ajustes do botão (cores, giro e som)") {
         closeRadial(); openPanel()
     }
     private val voiceRound = roundButton(NeonIcon.Kind.VOICE_ON, NEON_PURPLE, "Voz") {
@@ -222,110 +215,106 @@ class QuickBubbleView(
         actions.endShift()
     }
 
-    // ------------------------------------------------------------------ painel
+    // ------------------------------------------------------------------ painel: ajustes do próprio botão
 
-    private val profileName = text(15f, bold = true).apply { gravity = Gravity.CENTER }
-    /** Um slider de faixa por critério do perfil (igual à tela Perfis); grava ao soltar o dedo. */
-    private val sliders = FilterCriterion.entries.associateWith { c ->
-        RangeSliderView(context, c) { r -> actions.updateProfile { c.apply(it, r) } }
+    /** Prévias no topo do painel: sem corrida com a meta enchendo; em corrida com a meta batida (girando). */
+    private val previewIdle = LogoBubble(context, ringBg = RING_BG).apply { setGoal(PREVIEW_GOAL, false) }
+    private val previewRide = LogoBubble(context, ringBg = RING_BG).apply { thickRing = true; setGoal(1f, true) }
+
+    /** Barra ligada a um campo do estilo: [read] = posição salva na barra. */
+    private class Bound(val view: StyleBarView, val read: (BubbleStyle) -> Double)
+
+    private val backgroundBar = bar(StyleBarView.Kind.BACKGROUND, { ColorBar.fractionOf(it.background) }) { s, f ->
+        s.copy(background = ColorBar.backgroundAt(f))
     }
-    private val filterBox = LinearLayout(context).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(dp(10), dp(8), dp(10), dp(8))
-        background = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(SECTION_BG) }
-        addView(text(11f, color = SECONDARY).apply { text = "SEMÁFORO DO PERFIL · ARRASTE E SOLTE" })
-        sliders.forEach { (c, slider) ->
-            addView(text(12f, color = WHITE).apply { text = c.title }, fullWidth(8))
-            addView(slider, fullWidth(2))
+    private val logoStartBar = bar(StyleBarView.Kind.COLOR, { ColorBar.fractionOf(it.logoStart) }) { s, f ->
+        s.copy(logoStart = ColorBar.colorAt(f))
+    }
+    private val logoEndBar = bar(StyleBarView.Kind.COLOR, { ColorBar.fractionOf(it.logoEnd) }) { s, f ->
+        s.copy(logoEnd = ColorBar.colorAt(f))
+    }
+    private val idleBar = bar(StyleBarView.Kind.COLOR, { ColorBar.fractionOf(it.idleRing) }) { s, f ->
+        s.copy(idleRing = ColorBar.colorAt(f))
+    }
+    private val rideBar = bar(StyleBarView.Kind.COLOR, { ColorBar.fractionOf(it.rideRing) }) { s, f ->
+        s.copy(rideRing = ColorBar.colorAt(f))
+    }
+    private val goalStartBar = bar(StyleBarView.Kind.COLOR, { ColorBar.fractionOf(it.goalStart) }) { s, f ->
+        s.copy(goalStart = ColorBar.colorAt(f))
+    }
+    private val goalEndBar = bar(StyleBarView.Kind.COLOR, { ColorBar.fractionOf(it.goalEnd) }) { s, f ->
+        s.copy(goalEnd = ColorBar.colorAt(f))
+    }
+    private val spinBar = bar(StyleBarView.Kind.SPEED, { SpinSpeed.fractionOf(it.spinSeconds) }, steps = SpinSpeed.STEPS.size) { s, f ->
+        s.copy(spinSeconds = SpinSpeed.secondsAt(f))
+    }
+    private val bars = listOf(backgroundBar, logoStartBar, logoEndBar, idleBar, rideBar, goalStartBar, goalEndBar, spinBar)
+    private val spinLabel = text(12f, color = WHITE)
+
+    /** Um botão por som; tocar escolhe e já toca para ouvir. */
+    private val soundChips = GoalSound.entries.associateWith { sound ->
+        button(sound.label) {
+            commitStyle(style.copy(goalSound = sound))
+            playGoal(sound)
+        }.apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
+    }
+    private val resetButton = button("Restaurar padrão") { onResetTapped() }
+
+    private val previewRow = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER
+        listOf(previewIdle to "Sem corrida · meta 60%", previewRide to "Em corrida · meta batida").forEachIndexed { i, (view, caption) ->
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+                addView(view, LinearLayout.LayoutParams(dp(BUBBLE_DP), dp(BUBBLE_DP)))
+                addView(text(11f, color = SECONDARY).apply { text = caption; gravity = Gravity.CENTER })
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = dp(6) })
         }
     }
-    private val voiceButton = button("") { actions.toggleVoice(); refreshVoice() }
-    private val readerText = text(12f, color = SECONDARY)
 
-    // ---- Jornada ----
-    private val shiftState = text(14f, bold = true)
-    private val startButton = button("▶  Iniciar jornada", color = GREEN) { actions.startShift() }
-    private val pauseButton = button("⏸ Pausar") { actions.pauseShift() }
-    private val resumeButton = button("▶ Continuar", color = GREEN) { actions.startShift() }
-    private val endButton = button("⏹ Encerrar", color = RED) { onEndTapped() }
-    private val runningRow = row(pauseButton, endButton, labelWeight = false)
-    private val pausedRow = row(resumeButton, button("⏹ Encerrar", color = RED) { onEndTapped() }, labelWeight = false)
-    private val shiftMetrics = text(13f).apply { setLineSpacing(0f, 1.1f) }
-    private val lastOfferText = text(11f, color = SECONDARY)
-    private val tripRow = row(
-        button("+1 Contar última", color = BLUE) { actions.countLastOffer() },
-        button("↶ Desfazer") { actions.undoLastTrip() },
-        labelWeight = false,
-    )
-    private val pendingText = text(13f, bold = true, color = NEON_GREEN)
-    private val pendingRow = row(
-        button("✓ Finalizada", color = GREEN) { actions.finishPendingTrip() },
-        button("✕ Cancelada", color = RED) { actions.cancelPendingTrip() },
-        labelWeight = false,
-    )
-    private val shiftBox = LinearLayout(context).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(dp(10), dp(8), dp(10), dp(8))
-        background = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(SECTION_BG) }
-        addView(text(11f, color = SECONDARY).apply { text = "JORNADA" })
-        addView(shiftState)
-        addView(startButton, fullWidth(6))
-        addView(runningRow, fullWidth(4))
-        addView(pausedRow, fullWidth(4))
-        addView(shiftMetrics, fullWidth(6))
-        addView(pendingText, fullWidth(6))
-        addView(pendingRow, fullWidth(2))
-        addView(tripRow, fullWidth(4))
-        addView(lastOfferText, fullWidth(2))
-    }
-
-    // ---- Pin rápido (marca o local atual; a zona é desenhada depois) ----
-    private val pinInfo = text(11f, color = SECONDARY)
-    private val pinBox = LinearLayout(context).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(dp(10), dp(8), dp(10), dp(8))
-        background = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(SECTION_BG) }
-        addView(text(11f, color = SECONDARY).apply { text = "📍 MARCAR ESTE LOCAL" })
-        addView(LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            listOf(
-                Triple("⚠ Perigo", RED, ZoneType.DANGER),
-                Triple("🔥 Demanda", GREEN, ZoneType.HIGH_DEMAND),
-                Triple("★ Outro", BLUE, ZoneType.CUSTOM),
-            ).forEachIndexed { i, (label, color, type) ->
-                addView(
-                    button(label, color) { actions.markPin(type) }.apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) },
-                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = dp(4) },
-                )
-            }
-        }, fullWidth(4))
-        addView(pinInfo, fullWidth(2))
+    private val soundBox = section("SOM DA META BATIDA").apply {
+        GoalSound.entries.chunked(3).forEach { rowSounds ->
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                rowSounds.forEachIndexed { i, sound ->
+                    addView(
+                        soundChips.getValue(sound),
+                        LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = dp(4) },
+                    )
+                }
+            }, fullWidth(6))
+        }
+        addView(button("▶ Testar som") { playGoal(style.goalSound) }, fullWidth(6))
     }
 
     private val panel = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(12), dp(10), dp(12), dp(10))
 
-        addView(text(12f, color = SECONDARY).apply { text = "MApp ${ReaderStatus.versionOf(context)} · AJUSTES RÁPIDOS" })
-        addView(readerText, fullWidth(4))
-        addView(pinBox, fullWidth(8))
-        addView(shiftBox, fullWidth(8))
-        addView(row(
-            button("‹") { actions.previousProfile() },
-            profileName,
-            button("›") { actions.nextProfile() },
-            labelWeight = true,
-        ))
-        addView(filterBox, fullWidth(6))
-        addView(voiceButton, fullWidth(8))
-        addView(row(
-            button("Abrir MApp") { closePanel(); actions.openApp() },
-            button("Parar copiloto", color = RED) { closePanel(); actions.stopCopilot() },
-            labelWeight = false,
-        ), fullWidth(6))
+        addView(text(12f, color = SECONDARY).apply { text = "MApp ${ReaderStatus.versionOf(context)} · AJUSTES DO BOTÃO" })
+        addView(previewRow, fullWidth(8))
+        addView(section("BOTÃO").apply {
+            labeled("Fundo", backgroundBar)
+            labeled("Letra M · partida", logoStartBar)
+            labeled("Letra M · chegada", logoEndBar)
+        }, fullWidth(8))
+        addView(section("ANEL DE DENTRO · STATUS").apply {
+            labeled("Ligado, sem corrida", idleBar)
+            labeled("Em corrida", rideBar)
+            addView(text(11f, color = SECONDARY).apply { text = "Leitor desligado continua cinza com \"!\"" }, fullWidth(4))
+        }, fullWidth(8))
+        addView(section("ANEL DE FORA · META DO DIA").apply {
+            labeled("Começo", goalStartBar)
+            labeled("Fim", goalEndBar)
+            addView(spinLabel, fullWidth(10))
+            addView(spinBar.view, fullWidth(2))
+        }, fullWidth(8))
+        addView(soundBox, fullWidth(8))
+        addView(row(resetButton, button("Fechar") { closePanel() }, labelWeight = false), fullWidth(8))
     }
 
-    /** Painel rolável: com a jornada aberta ele pode passar da altura da tela. */
+    /** Painel rolável: passa da altura da tela em celular pequeno. */
     private val panelRoot = ScrollView(context).apply {
         background = GradientDrawable().apply {
             cornerRadius = dp(16).toFloat()
@@ -350,17 +339,13 @@ class QuickBubbleView(
         PixelFormat.TRANSLUCENT,
     ).apply {
         gravity = Gravity.TOP or Gravity.START
-        title = "MApp – ajustes rápidos"
+        title = "MApp – ajustes do botão"
     }
 
     init {
         installDrag()
         installHoldToEnd()
-        paintBubble()
-        refreshVoice()
-        bindProfile()
-        bindShift()
-        bindPins()
+        showStyle(style)
     }
 
     // ------------------------------------------------------------------ API
@@ -391,39 +376,24 @@ class QuickBubbleView(
         bindDay()
     }
 
-    fun updateProfile(active: FilterProfile, count: Int) {
-        profile = active
-        profileCount = count
-        bindProfile()
-    }
-
     fun updateReader(snapshot: ReaderStatus.Snapshot) {
         val wasConnected = reader.connected
         reader = snapshot
-        if (panelAttached) bindReader()
         if (wasConnected != snapshot.connected) paintBubble()
     }
 
-    /** Jornada atual (null = nenhuma), resumo e a última oferta que pode ser contada. */
-    fun updateShift(current: Shift?, sum: ShiftSummary?, lastOffer: String?) {
+    /** Jornada atual (null = nenhuma): botão ▶/⏸ do menu e cor/espessura do anel. */
+    fun updateShift(current: Shift?) {
         shift = current
-        summary = sum
-        lastOfferLabel = lastOffer
-        if (current == null) confirmEnd = false
-        if (panelAttached) { bindShift(); relayoutPanel() }
         bindRadial()
         paintBubble()
-    }
-
-    /** Quantos pins esperam virar zona. */
-    fun updatePins(count: Int) {
-        pinCount = count
-        bindPins()
     }
 
     fun destroy() {
         closeRadial()
         closePanel()
+        soundPlayer?.stop()
+        soundPlayer = null
         if (labelsAttached) {
             try { windowManager.removeViewImmediate(labelsRoot) } catch (e: Exception) { Log.w(TAG, "Falha ao remover resumo", e) }
             labelsAttached = false
@@ -612,10 +582,10 @@ class QuickBubbleView(
 
     private fun openPanel() {
         if (panelAttached) return
-        refreshVoice()
-        bindProfile()
-        bindReader()
-        bindShift()
+        confirmReset = false
+        resetButton.text = "Restaurar padrão"
+        bindBars()
+        showStyle(style)
         val dm = context.resources.displayMetrics
         val width = dp(PANEL_WIDTH_DP).coerceAtMost(dm.widthPixels - dp(BUBBLE_DP + 16))
         panelParams.width = width
@@ -634,7 +604,8 @@ class QuickBubbleView(
         if (!panelAttached) return
         try { windowManager.removeViewImmediate(panelRoot) } catch (e: Exception) { Log.w(TAG, "Falha ao fechar painel", e) }
         panelAttached = false
-        confirmEnd = false
+        confirmReset = false
+        showStyle(style) // prévia de um arrasto interrompido não fica no botão
     }
 
     /** Altura = conteúdo, limitada à tela (o resto rola); posição perto do ícone. */
@@ -649,77 +620,80 @@ class QuickBubbleView(
         panelParams.y = bubbleParams.y.coerceIn(0, max(0, dm.heightPixels - panelParams.height - dp(24)))
     }
 
-    private fun relayoutPanel() {
-        measurePanel()
-        try { windowManager.updateViewLayout(panelRoot, panelParams) } catch (e: Exception) { Log.w(TAG, "Falha ao ajustar painel", e) }
+    // ------------------------------------------------------------------ aparência do botão
+
+    /** Cria uma barra do painel: arrastar mostra no botão na hora, soltar grava. */
+    private fun bar(
+        kind: StyleBarView.Kind,
+        read: (BubbleStyle) -> Double,
+        steps: Int = 0,
+        write: (BubbleStyle, Double) -> BubbleStyle,
+    ) = Bound(
+        StyleBarView(
+            context, kind, steps,
+            onChange = { f -> showStyle(write(style, f)) },
+            onCommit = { f -> commitStyle(write(style, f)) },
+        ),
+        read,
+    )
+
+    /** Mostra [s] no botão, nas prévias e no painel (sem gravar). */
+    private fun showStyle(s: BubbleStyle) {
+        shown = s
+        bubble.style = s
+        previewIdle.style = s
+        previewIdle.statusColor = s.idleRing
+        previewIdle.invalidate()
+        previewRide.style = s
+        previewRide.statusColor = s.rideRing
+        previewRide.invalidate()
+        paintBubble()
+        spinLabel.text = "Giro com a meta batida: " + SpinSpeed.label(s.spinSeconds)
+        soundChips.forEach { (sound, chip) ->
+            (chip.background as? GradientDrawable)?.setColor(if (sound == s.goalSound) SELECTED_BG else BUTTON_BG)
+            chip.setTextColor(if (sound == s.goalSound) SELECTED_TEXT else WHITE)
+        }
     }
 
-    // ------------------------------------------------------------------ jornada
+    /** Grava [s] (vale também para o ícone recriado e para o som da meta no copiloto). */
+    private fun commitStyle(s: BubbleStyle) {
+        style = s
+        OverlayPrefs.setBubbleStyle(context, s)
+        showStyle(s)
+    }
 
-    private fun onEndTapped() {
-        if (!confirmEnd) {
-            confirmEnd = true
-            bindShift()
-            panel.postDelayed({ if (confirmEnd) { confirmEnd = false; bindShift() } }, CONFIRM_MS)
+    private fun bindBars() {
+        bars.forEach { it.view.bind(it.read(style)) }
+    }
+
+    private fun onResetTapped() {
+        if (!confirmReset) {
+            confirmReset = true
+            resetButton.text = "Confirmar?"
+            panel.postDelayed({
+                if (confirmReset) { confirmReset = false; resetButton.text = "Restaurar padrão" }
+            }, CONFIRM_MS)
             return
         }
-        confirmEnd = false
-        actions.endShift()
+        confirmReset = false
+        resetButton.text = "Restaurar padrão"
+        commitStyle(BubbleStyle())
+        bindBars()
     }
 
-    private fun bindShift() {
-        val s = shift
-        val sum = summary
-        startButton.visibility = if (s == null) View.VISIBLE else View.GONE
-        runningRow.visibility = if (s != null && !s.paused) View.VISIBLE else View.GONE
-        pausedRow.visibility = if (s != null && s.paused) View.VISIBLE else View.GONE
-        shiftMetrics.visibility = if (s != null && sum != null) View.VISIBLE else View.GONE
-        tripRow.visibility = if (s != null) View.VISIBLE else View.GONE
-        lastOfferText.visibility = if (s != null) View.VISIBLE else View.GONE
-        val pending = s?.pendingTrip
-        pendingText.visibility = if (pending != null) View.VISIBLE else View.GONE
-        pendingRow.visibility = if (pending != null) View.VISIBLE else View.GONE
-        if (pending != null) {
-            pendingText.text = "🚕 Em corrida: ${listOfNotNull(pending.category, ShiftMath.money(pending.price)).joinToString(" ")}"
-        }
-
-        shiftState.text = when {
-            s == null -> "Parada · toque ▶ ao começar a rodar"
-            s.paused -> "⏸ Pausada"
-            else -> "● Rodando"
-        }
-        shiftState.setTextColor(if (s != null && !s.paused) AMBER else WHITE)
-        val endLabel = if (confirmEnd) "Confirmar?" else "⏹ Encerrar"
-        endButton.text = endLabel
-        ((pausedRow as LinearLayout).getChildAt(1) as? TextView)?.text = endLabel
-        if (sum != null) shiftMetrics.text = ShiftMath.lines(sum).joinToString("\n")
-        lastOfferText.text = lastOfferLabel?.let { "Última oferta: $it" } ?: "Nenhuma oferta lida ainda"
-    }
-    private fun bindPins() {
-        pinInfo.text = if (pinCount == 0) "Só o ponto agora; desenhe a zona depois em Zonas"
-        else "$pinCount pin(s) para desenhar em Zonas"
+    private fun playGoal(sound: GoalSound) {
+        val player = soundPlayer ?: GreatSoundPlayer(context).also { soundPlayer = it }
+        player.playGoal(sound)
     }
 
-    private fun bindProfile() {
-        val p = profile
-        profileName.text = if (profileCount > 1) p.name else "${p.name} (único)"
-        sliders.forEach { (c, slider) -> slider.bind(c.range(p)) }
-    }
-
-    private fun bindReader() {
-        val r = reader
-        // O painel só existe com o copiloto ligado.
-        readerText.text = ReaderStatus.lines(r, copilotRunning = true).joinToString("\n")
-        readerText.setTextColor(if (r.connected) SECONDARY else YELLOW)
-    }
-
-    /** Laranja = ligado sem corrida; verde = em corrida; cinza com "!" = Acessibilidade desligada. */
+    /** Status no anel de dentro: cores dos ajustes; cinza com "!" = Acessibilidade desligada. */
     private fun paintBubble() {
         val ok = reader.connected
+        val s = shown
         val color = when {
             !ok -> GRAY_LIGHT
-            shift?.pendingTrip != null -> NEON_GREEN // em corrida
-            else -> NEON_ORANGE                      // ligado, sem corrida
+            shift?.pendingTrip != null -> s.rideRing // em corrida
+            else -> s.idleRing                       // ligado, sem corrida
         }
         bubble.statusColor = color
         bubble.warning = !ok
@@ -728,7 +702,6 @@ class QuickBubbleView(
     }
 
     private fun refreshVoice() {
-        voiceButton.text = if (OverlayPrefs.isVoiceEnabled(context)) "🔊 Voz ligada" else "🔇 Voz desligada"
         if (radialAttached) bindRadial()
     }
 
@@ -896,6 +869,20 @@ class QuickBubbleView(
         ViewGroup.LayoutParams.WRAP_CONTENT,
     ).apply { topMargin = dp(topMarginDp) }
 
+    /** Bloco do painel com título pequeno. */
+    private fun section(title: String) = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(10), dp(8), dp(10), dp(10))
+        background = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(SECTION_BG) }
+        addView(text(11f, color = SECONDARY).apply { text = title })
+    }
+
+    /** Nome + barra, dentro de uma [section]. */
+    private fun LinearLayout.labeled(label: String, bound: Bound) {
+        addView(text(12f, color = WHITE).apply { text = label }, fullWidth(8))
+        addView(bound.view, fullWidth(2))
+    }
+
     companion object {
         private const val TAG = "MApp/Bubble"
         private const val BUBBLE_DP = 52
@@ -910,18 +897,16 @@ class QuickBubbleView(
         private const val RADIAL_SIZE_DP = 2 * (RADIUS_DP + ITEM_DP / 2 + 6)
         private const val ARC_DEG = 180.0
         private const val PIN_ARC_DEG = 100.0
+        private const val PREVIEW_GOAL = 0.6f
 
-        private val PT_BR: Locale = Locale.forLanguageTag("pt-BR")
         private val WHITE = 0xFFFFFFFF.toInt()
         private val SECONDARY = 0xFFBDBDBD.toInt()
-        private val GREEN = 0xFF2E7D32.toInt()
-        private val RED = 0xFFC62828.toInt()
-        private val YELLOW = 0xFFFFD54F.toInt()
         private val PANEL_BG = 0xF2202124.toInt()
         private val SECTION_BG = 0xFF2D2F33.toInt()
-        private val AMBER = 0xFFFFB300.toInt()
-        private val BLUE = 0xFF1565C0.toInt()
         private val BUTTON_BG = 0xFF3C4043.toInt()
+        /** Som escolhido: verde-água do MApp com letra escura. */
+        private val SELECTED_BG = 0xFF5EE6D8.toInt()
+        private val SELECTED_TEXT = 0xFF07141B.toInt()
         private val RING_BG = 0xF0000000.toInt()
         private val DAY_KM = 0xFFF2F2F2.toInt()
         private val DAY_COST = 0xFFFFCC80.toInt()
@@ -936,15 +921,6 @@ class QuickBubbleView(
         private val NEON_BLUE = 0xFF2F8CFF.toInt()
         private val NEON_RED = 0xFFFF1744.toInt()
         private val NEON_ORANGE = 0xFFFF9100.toInt()
-
-        private fun money(v: Double): String = "R$ " + String.format(PT_BR, "%.2f", v)
-
-        /** Soma [delta] (partindo de [start] se estiver vazio), arredonda e não deixa passar de [min]. */
-        fun step(current: Double?, delta: Double, min: Double, start: Double): Double {
-            val base = current ?: start
-            val next = Math.round((base + delta) * 100.0) / 100.0
-            return next.coerceAtLeast(min)
-        }
     }
 }
 
@@ -1133,6 +1109,7 @@ private class OutlineLabel(context: Context, sizePx: Float, outlinePx: Float) : 
  * Ícone flutuante com o logo do MApp: "M" em forma de rota (gradiente verde-água → lilás) com
  * ponto de partida e de chegada, mesmo desenho do app (`ui/MappLogo`). O anel mostra o status:
  * laranja = ligado sem corrida, verde = em corrida, cinza + "!" = leitor desligado.
+ * Cores, gradientes e giro vêm de [style] (ajustes do botão; o padrão é o visual acima).
  *
  * **Meta do dia** ([setGoal]): com meta definida, um segundo anel fica **por fora** do círculo (o
  * círculo encolhe um pouco para ele caber). Ele enche com o gradiente do MApp a partir do topo, no
@@ -1142,6 +1119,15 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
     var statusColor: Int = 0xFF00E64D.toInt()
     var warning = false
     var thickRing = false
+
+    /** Aparência escolhida nos ajustes do botão; trocar refaz os gradientes. */
+    var style: BubbleStyle = BubbleStyle()
+        set(value) {
+            if (field == value) return
+            field = value
+            shaderSide = 0f
+            invalidate()
+        }
 
     /** Fração 0..1 da meta (null = sem meta). */
     private var goal: Float? = null
@@ -1156,8 +1142,6 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
     }
     private val spin = android.graphics.Matrix()
 
-    private val teal = 0xFF5EE6D8.toInt()
-    private val lilac = 0xFFB59CFF.toInt()
     private val gray = 0xFF9E9E9E.toInt()
     private val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
@@ -1227,13 +1211,13 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
             shaderSide = side
             shaderWarning = warning
             bg.shader = android.graphics.RadialGradient(
-                side * 0.35f, side * 0.3f, side * 0.75f, 0xFF16404A.toInt(), ringBg, android.graphics.Shader.TileMode.CLAMP,
+                side * 0.35f, side * 0.3f, side * 0.75f, style.background, ringBg, android.graphics.Shader.TileMode.CLAMP,
             )
             line.shader = android.graphics.LinearGradient(
                 6.5f * u, 7.5f * u, 17.5f * u, 17.5f * u,
-                if (warning) gray else teal, if (warning) gray else lilac, android.graphics.Shader.TileMode.CLAMP,
+                if (warning) gray else style.logoStart, if (warning) gray else style.logoEnd, android.graphics.Shader.TileMode.CLAMP,
             )
-            outer.shader = android.graphics.SweepGradient(c, c, intArrayOf(teal, lilac, 0xFF8F6BFF.toInt(), lilac, teal), null)
+            outer.shader = android.graphics.SweepGradient(c, c, style.goalColors(), null)
         }
 
         canvas.save()
@@ -1258,9 +1242,10 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
                 outer.alpha = 255
                 if (g > 0f) canvas.drawArc(arc, -90f, 360f * g, false, outer)
             } else {
-                // Meta batida: anel inteiro pulsando e girando devagar no sentido horário.
+                // Meta batida: anel inteiro pulsando e girando no sentido horário (giro dos ajustes; 0 = parado).
                 val now = System.currentTimeMillis() - animStart
-                val turn = (now % SPIN_MS) / SPIN_MS.toFloat()
+                val spinMs = style.spinSeconds * 1_000L
+                val turn = if (spinMs > 0) (now % spinMs) / spinMs.toFloat() else 0f
                 val beat = 0.5f + 0.5f * kotlin.math.cos(2 * Math.PI * (now % PULSE_MS) / PULSE_MS).toFloat()
                 spin.setRotate(-90f + 360f * turn, c, c)
                 outer.shader?.setLocalMatrix(spin)
@@ -1273,8 +1258,8 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
     }
 
     private fun drawLogo(canvas: Canvas, u: Float) {
-        val c1 = if (warning) gray else teal
-        val c2 = if (warning) gray else lilac
+        val c1 = if (warning) gray else style.logoStart
+        val c2 = if (warning) gray else style.logoEnd
         line.strokeWidth = 2.4f * u
         path.reset()
         path.moveTo(6.5f * u, 17f * u)
@@ -1302,9 +1287,8 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
     }
 
     private companion object {
-        /** Meta batida: pulso de 1,4 s e uma volta do gradiente a cada 12 s, a ~25 quadros/s. */
+        /** Meta batida: pulso de 1,4 s (a volta do gradiente vem dos ajustes), a ~25 quadros/s. */
         const val PULSE_MS = 1_400L
-        const val SPIN_MS = 12_000L
         const val FRAME_MS = 40L
         /** Anel da meta por fora (em 1/24 do ícone) e o espaço até o círculo. */
         const val OUTER_W = 1.6f

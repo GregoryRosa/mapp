@@ -71,7 +71,6 @@ class OverlayService : LifecycleService() {
     private var overlayContext: Context? = null
     /** Onde cartão e ícone abrem janela (Acessibilidade ou sobreposição comum); null = sem permissão. */
     private var host: OverlayHost? = null
-    private var pinCount = 0
     private var location: LocationProvider? = null
     private var voice: VoiceAnnouncer? = null
     private var greatSound: GreatSoundPlayer? = null
@@ -113,6 +112,8 @@ class OverlayService : LifecycleService() {
     /** Qual oferta foi aceita: pelo nome do passageiro na tela (vale para corrida aceita durante outra). */
     private val matcher = TripMatcher<OfferKey>()
     private val odometer = Odometer()
+    /** Notificação no celular a cada corrida aceita (rota + mapa ao expandir). */
+    private var rides: RideNotifier? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -131,6 +132,7 @@ class OverlayService : LifecycleService() {
         voice = VoiceAnnouncer(this)
         greatSound = GreatSoundPlayer(this)
         cashSound = GreatSoundPlayer(this)
+        rides = RideNotifier(this, lifecycleScope)
 
         val pipeline = OfferPipeline(this)
         lifecycleScope.launch { pipeline.run() }
@@ -149,42 +151,20 @@ class OverlayService : LifecycleService() {
         startDayMonitor()
         lifecycleScope.launch { OfferBus.tripStages.collect { onTripStage(it) } }
 
-        // Ícone flutuante com ajustes rápidos (e cartão): recriados quando o leitor liga/desliga.
+        // Ícone flutuante "M" com o menu circular (e cartão): recriados quando o leitor liga/desliga.
         lifecycleScope.launch { OfferAccessibilityService.windowContext.collect { useHost(it) } }
         lifecycleScope.launch { ReaderStatus.state.collect { bubble?.updateReader(it) } }
-        lifecycleScope.launch {
-            PinStore.pins(this@OverlayService).collect {
-                pinCount = it.size
-                bubble?.updatePins(it.size)
-            }
-        }
         lifecycleScope.launch {
             MappApp.repos.profiles.all()
                 .combine(MappApp.repos.profiles.active()) { all, active -> all to active }
                 .collect { (all, active) ->
                     profiles = all
                     activeProfile = active
-                    bubble?.updateProfile(active, all.size.coerceAtLeast(1))
                 }
         }
     }
 
     private val bubbleActions = object : QuickBubbleView.Actions {
-        override fun previousProfile() = cycleProfile(-1)
-        override fun nextProfile() = cycleProfile(+1)
-
-        override fun updateProfile(change: (FilterProfile) -> FilterProfile) {
-            lifecycleScope.launch {
-                try {
-                    val repo = MappApp.repos.profiles
-                    val updated = change(repo.active().first())
-                    val id = repo.save(updated)
-                    if (updated.id == 0L && id > 0) repo.setActive(id) // perfil padrão ainda não salvo
-                } catch (e: Exception) {
-                    Log.w(TAG, "Falha ao salvar ajuste rápido", e)
-                }
-            }
-        }
 
         override fun toggleVoice() {
             val ctx = this@OverlayService
@@ -225,23 +205,6 @@ class OverlayService : LifecycleService() {
         }
 
         override fun countLastOffer() = countOffer(lastOffer)
-
-        override fun finishPendingTrip() = finishPending(auto = false)
-
-        override fun cancelPendingTrip() = cancelPending(auto = false)
-
-        override fun undoLastTrip() {
-            val shift = ShiftTracker.current(this@OverlayService).value ?: return
-            if (shift.trips.isEmpty()) { toast("Nenhuma corrida para desfazer"); return }
-            if (!shift.trips.last().finished) matcher.closedNewest()
-            ShiftTracker.undoLastTrip(this@OverlayService)
-            countedOffer?.let { markAccepted(it, null) }
-            countedKey?.let { matcher.forget(it) }
-            countedOffer = null
-            countedKey = null
-            refreshCountButton()
-            toast("Última corrida removida")
-        }
 
         override fun markPin(type: ZoneType) {
             if (pinPending) return
@@ -311,10 +274,7 @@ class OverlayService : LifecycleService() {
     }
 
     private fun pushShift() {
-        val now = System.currentTimeMillis()
-        val shift: Shift? = ShiftTracker.current(this).value
-        val summary = shift?.let { ShiftMath.summary(it, costPerKm, now) }
-        bubble?.updateShift(shift, summary, lastOffer?.let { offerLabel(it.raw) })
+        bubble?.updateShift(ShiftTracker.current(this).value)
     }
 
     // ------------------------------------------------------------------ dia e meta (ícone "M")
@@ -394,7 +354,7 @@ class OverlayService : LifecycleService() {
     private fun celebrateGoal(workDate: java.time.LocalDate, gross: Double, goal: Double?) {
         val mark = DayGoal.celebration(gross, goal, workDate.toString(), OverlayPrefs.goalMark(this)) ?: return
         OverlayPrefs.setGoalMark(this, mark)
-        cashSound?.playCash()
+        cashSound?.playGoal() // som escolhido nos ajustes do botão "M"
         tripToast("🎯 Meta do dia batida! ${ShiftMath.money(gross)} de ${ShiftMath.money(goal ?: gross)}")
     }
 
@@ -421,7 +381,8 @@ class OverlayService : LifecycleService() {
         // +1 com a corrida em andamento: o leitor passa a acompanhar o fim dela também.
         if (!auto && !alreadyFinished) matcher.manualCount(key, System.currentTimeMillis()) else matcher.markCounted(key)
         countedOffer = offer
-        markAccepted(offer, true)
+        // +1 tocado com a corrida já terminada: não manda a notificação da rota.
+        markAccepted(offer, true, notify = !alreadyFinished)
         refreshCountButton()
         pushShift()
         val label = offerLabel(raw).removeSuffix(" ✓ contada")
@@ -449,8 +410,8 @@ class OverlayService : LifecycleService() {
         val key = match.count
         val offer = lastOffer?.takeIf { key != null && it.raw.key() == key }
         if (offer != null) {
-            // Histórico: marca a oferta como aceita mesmo sem jornada aberta.
-            markAccepted(offer, true)
+            // Histórico: marca a oferta como aceita mesmo sem jornada aberta (e notifica no celular).
+            markAccepted(offer, true, passenger = event.passenger, onBoard = event.stage == TripStage.ON_TRIP)
             matcher.markCounted(key!!)
         }
         if (ShiftTracker.current(this).value == null) return
@@ -521,11 +482,26 @@ class OverlayService : LifecycleService() {
         return greatSound?.play() ?: 0L
     }
 
-    /** Grava no histórico de ofertas se a corrida foi aceita (aba "Aceitas hoje"). */
-    private fun markAccepted(offer: EvaluatedOffer, accepted: Boolean?) {
+    /**
+     * Grava no histórico de ofertas se a corrida foi aceita (aba "Aceitas hoje") e manda a notificação
+     * da corrida aceita (rota + mapa) — ou a tira, quando a corrida é desmarcada.
+     * [passenger]/[onBoard] = nome e etapa lidos na tela de aceite (null/false no +1).
+     */
+    private fun markAccepted(
+        offer: EvaluatedOffer,
+        accepted: Boolean?,
+        passenger: String? = null,
+        onBoard: Boolean = false,
+        notify: Boolean = true,
+    ) {
         val key = offer.raw.key()
         if (accepted == true && key == markedAcceptedKey) return
         markedAcceptedKey = if (accepted == true) key else null
+        if (accepted == true) {
+            if (notify) rides?.accepted(key, offer, categoryFor(offer.raw), passenger, onBoard, location?.lastKnown, zones)
+        } else {
+            rides?.cancel(key)
+        }
         lifecycleScope.launch {
             try {
                 MappApp.repos.offers.setAccepted(offer, accepted)
@@ -563,23 +539,6 @@ class OverlayService : LifecycleService() {
 
     /** Avisos da corrida (aceita, embarque, finalizada, cancelada): ficam mais tempo. */
     private fun tripToast(msg: String) = toast(msg, TRIP_NOTICE_MS)
-
-    private fun cycleProfile(direction: Int) {
-        val list = profiles
-        if (list.size < 2) {
-            toast("Crie mais perfis em Perfis de filtro")
-            return
-        }
-        val i = list.indexOfFirst { it.id == activeProfile.id }.coerceAtLeast(0)
-        val next = list[(i + direction).mod(list.size)]
-        lifecycleScope.launch {
-            try {
-                MappApp.repos.profiles.setActive(next.id)
-            } catch (e: Exception) {
-                Log.w(TAG, "Falha ao trocar perfil", e)
-            }
-        }
-    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
@@ -637,6 +596,8 @@ class OverlayService : LifecycleService() {
         } else {
             lastOffer = offer
         }
+        // Corrida já aceita que chegou completada (endereço localizado depois): atualiza a notificação.
+        rides?.updated(key, offer, categoryFor(offer.raw))
         if (key == dismissedKey) return // usuário fechou o cartão desta oferta
 
         val alertZones = offer.zoneHits.filter { it.zone.alertEnabled }.toSet()
@@ -699,8 +660,6 @@ class OverlayService : LifecycleService() {
         bubble = QuickBubbleView(next, bubbleActions).also {
             it.show()
             it.updateReader(ReaderStatus.state.value)
-            it.updatePins(pinCount)
-            it.updateProfile(activeProfile, profiles.size.coerceAtLeast(1))
         }
         pushShift()
         pushDay()
