@@ -1136,7 +1136,8 @@ private class OutlineLabel(context: Context, sizePx: Float, outlinePx: Float) : 
  *
  * **Meta do dia** ([setGoal]): um preenchimento verde-água corre por cima do anel de status (a partir do
  * topo, sentido horário) e pulsa enquanto a meta não é batida. Em 100% ele se expande para fora,
- * vira um anel com o gradiente do MApp em volta do círculo e o anel de status volta a aparecer.
+ * vira um anel com o gradiente do MApp em volta do círculo (girando devagar no sentido horário) e o
+ * anel de status volta a aparecer.
  */
 private class LogoBubble(context: Context, private val ringBg: Int) : View(context) {
     var statusColor: Int = 0xFF00E64D.toInt()
@@ -1150,12 +1151,14 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
     private var expand = 0f
     private var expandAnim: ValueAnimator? = null
     private val pulseStart = System.currentTimeMillis()
+    /** Redesenho contínuo: pulso da meta em andamento ou giro do gradiente da meta batida. */
     private val pulse = object : Runnable {
         override fun run() {
             invalidate()
-            if (pulsing()) postDelayed(this, PULSE_FRAME_MS)
+            if (animating()) postDelayed(this, if (reached) SPIN_FRAME_MS else PULSE_FRAME_MS)
         }
     }
+    private val spin = android.graphics.Matrix()
 
     private val teal = 0xFF5EE6D8.toInt()
     private val lilac = 0xFFB59CFF.toInt()
@@ -1209,16 +1212,16 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
             expand = 0f
         }
         removeCallbacks(pulse)
-        if (pulsing()) post(pulse)
+        if (animating()) post(pulse)
         invalidate()
     }
 
-    private fun pulsing(): Boolean = goal != null && !reached && isAttachedToWindow
+    private fun animating(): Boolean = goal != null && isAttachedToWindow
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         removeCallbacks(pulse)
-        if (pulsing()) post(pulse)
+        if (animating()) post(pulse)
     }
 
     override fun onDetachedFromWindow() {
@@ -1290,6 +1293,10 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
             val to = c - outerW / 2
             val r = from + (to - from) * k
             val w = statusW * scale + (outerW - statusW * scale) * k
+            // Gradiente girando bem devagar no sentido horário (ângulo positivo = horário na tela).
+            val turn = ((System.currentTimeMillis() - pulseStart) % SPIN_MS) / SPIN_MS.toFloat()
+            spin.setRotate(360f * turn, c, c)
+            outer.shader?.setLocalMatrix(spin)
             outer.strokeWidth = w
             outer.alpha = 255
             canvas.drawCircle(c, c, r, outer)
@@ -1339,6 +1346,9 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         const val PULSE_MS = 1_400L
         const val PULSE_FRAME_MS = 40L
         const val EXPAND_MS = 700L
+        /** Meta batida: uma volta do gradiente a cada 12 s, redesenhado a ~15 quadros/s. */
+        const val SPIN_MS = 12_000L
+        const val SPIN_FRAME_MS = 66L
         /** Anel da meta batida (em 1/24 do ícone) e o espaço até o círculo. */
         const val OUTER_W = 1.7f
         const val OUTER_GAP = 0.45f
