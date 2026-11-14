@@ -1134,10 +1134,9 @@ private class OutlineLabel(context: Context, sizePx: Float, outlinePx: Float) : 
  * ponto de partida e de chegada, mesmo desenho do app (`ui/MappLogo`). O anel mostra o status:
  * laranja = ligado sem corrida, verde = em corrida, cinza + "!" = leitor desligado.
  *
- * **Meta do dia** ([setGoal]): um preenchimento preto corre por cima do anel de status (a partir do
- * topo, sentido horário) e pulsa enquanto a meta não é batida. Em 100% ele se expande para fora,
- * vira um anel com o gradiente do MApp em volta do círculo (girando devagar no sentido horário) e o
- * anel de status volta a aparecer.
+ * **Meta do dia** ([setGoal]): com meta definida, um segundo anel fica **por fora** do círculo (o
+ * círculo encolhe um pouco para ele caber). Ele enche com o gradiente do MApp a partir do topo, no
+ * sentido horário, parado. Em 100% fecha o círculo e passa a **pulsar e girar** devagar no sentido horário.
  */
 private class LogoBubble(context: Context, private val ringBg: Int) : View(context) {
     var statusColor: Int = 0xFF00E64D.toInt()
@@ -1147,15 +1146,12 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
     /** Fração 0..1 da meta (null = sem meta). */
     private var goal: Float? = null
     private var reached = false
-    /** 0 = preenchimento sobre o anel de status; 1 = anel da meta por fora (meta batida). */
-    private var expand = 0f
-    private var expandAnim: ValueAnimator? = null
-    private val pulseStart = System.currentTimeMillis()
-    /** Redesenho contínuo: pulso da meta em andamento ou giro do gradiente da meta batida. */
-    private val pulse = object : Runnable {
+    private val animStart = System.currentTimeMillis()
+    /** Redesenho contínuo só com a meta batida (pulso + giro); antes disso o anel fica parado. */
+    private val tick = object : Runnable {
         override fun run() {
             invalidate()
-            if (animating()) postDelayed(this, if (reached) SPIN_FRAME_MS else PULSE_FRAME_MS)
+            if (animating()) postDelayed(this, FRAME_MS)
         }
     }
     private val spin = android.graphics.Matrix()
@@ -1165,11 +1161,14 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
     private val gray = 0xFF9E9E9E.toInt()
     private val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val track = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = GOAL_TRACK
+    }
+    private val outer = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
     }
-    private val outer = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
@@ -1185,49 +1184,25 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
     private var shaderSide = 0f
     private var shaderWarning = false
 
-    /**
-     * Meta do dia: [fraction] 0..1 (null = sem meta), [isReached] = 100%. A expansão para fora só é
-     * animada quando a meta é batida com o ícone na tela (ao reabrir o ícone já aparece por fora).
-     */
+    /** Meta do dia: [fraction] 0..1 (null = sem meta), [isReached] = 100%. */
     fun setGoal(fraction: Float?, isReached: Boolean) {
-        val had = goal != null
         goal = fraction
-        val nowReached = fraction != null && isReached
-        if (nowReached && !reached) {
-            reached = true
-            expandAnim?.cancel()
-            if (had && isAttachedToWindow) {
-                expandAnim = ValueAnimator.ofFloat(0f, 1f).apply {
-                    duration = EXPAND_MS
-                    interpolator = android.view.animation.OvershootInterpolator(1.6f)
-                    addUpdateListener { expand = it.animatedValue as Float; invalidate() }
-                    start()
-                }
-            } else {
-                expand = 1f
-            }
-        } else if (!nowReached && reached) {
-            reached = false
-            expandAnim?.cancel()
-            expand = 0f
-        }
-        removeCallbacks(pulse)
-        if (animating()) post(pulse)
+        reached = fraction != null && isReached
+        removeCallbacks(tick)
+        if (animating()) post(tick)
         invalidate()
     }
 
-    private fun animating(): Boolean = goal != null && isAttachedToWindow
+    private fun animating(): Boolean = reached && isAttachedToWindow
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        removeCallbacks(pulse)
-        if (animating()) post(pulse)
+        removeCallbacks(tick)
+        if (animating()) post(tick)
     }
 
     override fun onDetachedFromWindow() {
-        removeCallbacks(pulse)
-        expandAnim?.cancel()
-        if (reached) expand = 1f
+        removeCallbacks(tick)
         super.onDetachedFromWindow()
     }
 
@@ -1241,15 +1216,13 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         canvas.translate(cx - side / 2, cy - side / 2)
         val c = side / 2
 
-        // Com a meta batida o círculo encolhe um pouco para o anel da meta caber por fora.
-        val e = expand
+        // Com meta, o círculo encolhe um pouco para o anel da meta caber por fora.
+        val g = goal
         val outerW = OUTER_W * u
-        val scale = 1f - e.coerceIn(0f, 1.2f) * (outerW + OUTER_GAP * u) / c
+        val scale = if (g == null) 1f else 1f - (outerW + OUTER_GAP * u) / c
         val statusW = u * if (thickRing) 2.2f else 1.5f
 
-        canvas.save()
-        canvas.scale(scale, scale, c, c)
-        // Gradientes refeitos só quando o tamanho ou o aviso mudam (o pulso redesenha ~25×/s).
+        // Gradientes refeitos só quando o tamanho ou o aviso mudam (a meta batida redesenha ~25×/s).
         if (shaderSide != side || shaderWarning != warning) {
             shaderSide = side
             shaderWarning = warning
@@ -1262,51 +1235,38 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
             )
             outer.shader = android.graphics.SweepGradient(c, c, intArrayOf(teal, lilac, 0xFF8F6BFF.toInt(), lilac, teal), null)
         }
+
+        canvas.save()
+        canvas.scale(scale, scale, c, c)
         canvas.drawCircle(c, c, c, bg)
         ring.color = statusColor
         ring.strokeWidth = statusW
         canvas.drawCircle(c, c, c - statusW / 2, ring)
         drawLogo(canvas, u)
-
-        // Meta em andamento: preenchimento preto por cima do anel de status (contraste com laranja/verde), pulsando.
-        val g = goal
-        if (g != null && !reached) {
-            val phase = ((System.currentTimeMillis() - pulseStart) % PULSE_MS) / PULSE_MS.toFloat()
-            val beat = 0.5f + 0.5f * kotlin.math.cos(2 * Math.PI * phase).toFloat()
-            arc.set(statusW / 2, statusW / 2, side - statusW / 2, side - statusW / 2)
-            val sweep = maxOf(360f * g, 1f) // 0%: um ponto no topo mostra que há meta
-            fill.shader = null
-            fill.color = GOAL_FILL
-            fill.alpha = (80 * beat).toInt()
-            fill.strokeWidth = statusW * 2.2f
-            canvas.drawArc(arc, -90f, sweep, false, fill)
-            fill.alpha = (190 + 65 * beat).toInt()
-            fill.strokeWidth = statusW
-            canvas.drawArc(arc, -90f, sweep, false, fill)
-        }
         canvas.restore()
 
-        // Meta batida: o preenchimento sai do anel de status e vira o anel de fora com o gradiente.
-        if (reached) {
-            val k = e.coerceIn(0f, 1f)
-            val from = (c - statusW / 2) * scale
-            val to = c - outerW / 2
-            val r = from + (to - from) * k
-            val w = statusW * scale + (outerW - statusW * scale) * k
-            // Gradiente girando bem devagar no sentido horário (ângulo positivo = horário na tela).
-            val turn = ((System.currentTimeMillis() - pulseStart) % SPIN_MS) / SPIN_MS.toFloat()
-            spin.setRotate(360f * turn, c, c)
-            outer.shader?.setLocalMatrix(spin)
-            outer.strokeWidth = w
-            outer.alpha = 255
-            canvas.drawCircle(c, c, r, outer)
-            if (k < 1f) {
-                // Preto do preenchimento some enquanto o gradiente aparece.
-                fill.shader = null
-                fill.color = GOAL_FILL
-                fill.alpha = (255 * (1f - k)).toInt()
-                fill.strokeWidth = w
-                canvas.drawCircle(c, c, r, fill)
+        if (g != null) {
+            val r = c - outerW / 2
+            arc.set(c - r, c - r, c + r, c + r)
+            if (!reached) {
+                // Enchendo: trilho escuro discreto + gradiente do topo no sentido horário, parado.
+                track.strokeWidth = outerW
+                canvas.drawCircle(c, c, r, track)
+                spin.setRotate(-90f, c, c) // começo do gradiente no topo, junto com o começo do arco
+                outer.shader?.setLocalMatrix(spin)
+                outer.strokeWidth = outerW
+                outer.alpha = 255
+                if (g > 0f) canvas.drawArc(arc, -90f, 360f * g, false, outer)
+            } else {
+                // Meta batida: anel inteiro pulsando e girando devagar no sentido horário.
+                val now = System.currentTimeMillis() - animStart
+                val turn = (now % SPIN_MS) / SPIN_MS.toFloat()
+                val beat = 0.5f + 0.5f * kotlin.math.cos(2 * Math.PI * (now % PULSE_MS) / PULSE_MS).toFloat()
+                spin.setRotate(-90f + 360f * turn, c, c)
+                outer.shader?.setLocalMatrix(spin)
+                outer.strokeWidth = outerW * (0.85f + 0.15f * beat)
+                outer.alpha = (150 + 105 * beat).toInt()
+                canvas.drawCircle(c, c, r, outer)
             }
         }
         canvas.restore()
@@ -1342,17 +1302,14 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
     }
 
     private companion object {
-        /** Pulso da meta: ciclo de 1,4 s desenhado a ~25 quadros/s (leve para a bateria). */
+        /** Meta batida: pulso de 1,4 s e uma volta do gradiente a cada 12 s, a ~25 quadros/s. */
         const val PULSE_MS = 1_400L
-        const val PULSE_FRAME_MS = 40L
-        const val EXPAND_MS = 700L
-        /** Cor do preenchimento da meta em andamento (contraste com o anel laranja/verde). */
-        val GOAL_FILL: Int = 0xFF000000.toInt()
-        /** Meta batida: uma volta do gradiente a cada 12 s, redesenhado a ~15 quadros/s. */
         const val SPIN_MS = 12_000L
-        const val SPIN_FRAME_MS = 66L
-        /** Anel da meta batida (em 1/24 do ícone) e o espaço até o círculo. */
-        const val OUTER_W = 1.7f
-        const val OUTER_GAP = 0.45f
+        const val FRAME_MS = 40L
+        /** Anel da meta por fora (em 1/24 do ícone) e o espaço até o círculo. */
+        const val OUTER_W = 1.6f
+        const val OUTER_GAP = 0.4f
+        /** Trilho da meta ainda não batida (escuro, discreto). */
+        val GOAL_TRACK: Int = 0x66000000
     }
 }
