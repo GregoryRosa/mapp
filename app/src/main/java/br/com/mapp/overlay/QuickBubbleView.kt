@@ -1134,7 +1134,7 @@ private class OutlineLabel(context: Context, sizePx: Float, outlinePx: Float) : 
  * ponto de partida e de chegada, mesmo desenho do app (`ui/MappLogo`). O anel mostra o status:
  * laranja = ligado sem corrida, verde = em corrida, cinza + "!" = leitor desligado.
  *
- * **Meta do dia** ([setGoal]): um preenchimento branco corre por cima do anel de status (a partir do
+ * **Meta do dia** ([setGoal]): um preenchimento verde-água corre por cima do anel de status (a partir do
  * topo, sentido horário) e pulsa enquanto a meta não é batida. Em 100% ele se expande para fora,
  * vira um anel com o gradiente do MApp em volta do círculo e o anel de status volta a aparecer.
  */
@@ -1265,7 +1265,7 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         canvas.drawCircle(c, c, c - statusW / 2, ring)
         drawLogo(canvas, u)
 
-        // Meta em andamento: preenchimento branco por cima do anel de status, pulsando.
+        // Meta em andamento: preenchimento verde-água (cor do MApp) por cima do anel de status, pulsando.
         val g = goal
         if (g != null && !reached) {
             val phase = ((System.currentTimeMillis() - pulseStart) % PULSE_MS) / PULSE_MS.toFloat()
@@ -1273,11 +1273,11 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
             arc.set(statusW / 2, statusW / 2, side - statusW / 2, side - statusW / 2)
             val sweep = maxOf(360f * g, 1f) // 0%: um ponto no topo mostra que há meta
             fill.shader = null
-            fill.color = 0xFFFFFFFF.toInt()
-            fill.alpha = (70 * beat).toInt()
+            fill.color = teal
+            fill.alpha = (80 * beat).toInt()
             fill.strokeWidth = statusW * 2.2f
             canvas.drawArc(arc, -90f, sweep, false, fill)
-            fill.alpha = (150 + 105 * beat).toInt()
+            fill.alpha = (170 + 85 * beat).toInt()
             fill.strokeWidth = statusW
             canvas.drawArc(arc, -90f, sweep, false, fill)
         }
@@ -1294,9 +1294,9 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
             outer.alpha = 255
             canvas.drawCircle(c, c, r, outer)
             if (k < 1f) {
-                // Branco do preenchimento some enquanto o gradiente aparece.
+                // Verde-água do preenchimento some enquanto o gradiente aparece.
                 fill.shader = null
-                fill.color = 0xFFFFFFFF.toInt()
+                fill.color = teal
                 fill.alpha = (255 * (1f - k)).toInt()
                 fill.strokeWidth = w
                 canvas.drawCircle(c, c, r, fill)
