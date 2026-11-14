@@ -14,8 +14,11 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.GeoPoint
@@ -23,16 +26,24 @@ import br.com.mapp.core.model.PointRole
 import br.com.mapp.core.model.Zone
 import br.com.mapp.core.model.ZoneType
 import br.com.mapp.core.route.RideRoute
+import br.com.mapp.core.route.RouteStop
 import br.com.mapp.core.route.StopKind
 import br.com.mapp.maps.MapViews
 import br.com.mapp.maps.toOsm
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import org.osmdroid.views.overlay.Marker
 import kotlin.math.abs
 import kotlin.math.max
 
 /**
  * Cartão flutuante (View tradicional, sem XML/Compose): cabeçalho na cor do semáforo com as
- * informações escolhidas em "Estilo do cartão" ([CardHeaderView]), alertas de zona e mini mapa. Arrastável pela barra de título; não bloqueia toques fora dele.
+ * informações escolhidas em "Estilo do cartão" ([CardHeaderView]), alertas de zona, mini mapa e fotos
+ * da rua (Street View) da coleta, paradas e destino. Arrastável pela barra de título; não bloqueia toques fora dele.
  * Reutilizável: [dismiss] só tira da tela; [destroy] libera o mapa.
  */
 class OfferCardView(
@@ -57,6 +68,7 @@ class OfferCardView(
     private var zones: List<Zone> = emptyList()
     private var mapKey: Any? = null
     private var hereMarker: Marker? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     // ---- Cabeçalho (cor do semáforo + as duas linhas de "Estilo do cartão") ----
     private val minimizeButton = headerButton("–", "Minimizar") { toggleMinimized() }
@@ -70,7 +82,14 @@ class OfferCardView(
 
     /** Muda o estilo na tela do app: o cartão aberto já mostra o novo. */
     private val layoutListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == OverlayPrefs.KEY_CARD_LAYOUT) offer?.let { headerView.bind(it, profile, OverlayPrefs.cardLayout(context)) }
+        when (key) {
+            OverlayPrefs.KEY_CARD_LAYOUT -> offer?.let { headerView.bind(it, profile, OverlayPrefs.cardLayout(context)) }
+            OverlayPrefs.KEY_STREETVIEW_ON, OverlayPrefs.KEY_STREETVIEW_KEY -> if (attached && !minimized) {
+                photoCells.values.forEach { it.reset() }
+                renderPhotos()
+                applyMinimized()
+            }
+        }
     }
 
     // ---- Corpo: alertas e mini mapa (endereços já aparecem na própria Uber) ----
@@ -82,12 +101,26 @@ class OfferCardView(
         // O cartão entra e sai da janela várias vezes; o mapa só é destruído em destroy().
         setDestroyMode(false)
     }
+
+    // ---- Fotos da rua (Street View): A, B… lado a lado embaixo do mapa; toque amplia ----
+    private val photosRow = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        visibility = View.GONE
+    }
+    private val photoCells = LinkedHashMap<String, PhotoCell>()
+    private var zoomedLetter: String? = null
+    private var photosOfferId: Any? = null
+
     private val body = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(12), dp(8), dp(12), dp(12))
         addView(reasonsBox)
         addView(mapView, LinearLayout.LayoutParams(dp(CARD_WIDTH_DP - 24), dp(MAP_HEIGHT_DP)).apply { topMargin = dp(8) })
         addView(mapNote, topMargin(2))
+        addView(
+            photosRow,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
+        )
     }
 
     private val root = LinearLayout(context).apply {
@@ -185,6 +218,7 @@ class OfferCardView(
     fun destroy() {
         dismiss()
         prefs.unregisterOnSharedPreferenceChangeListener(layoutListener)
+        scope.cancel()
         if (!destroyed) mapView.onDetach()
         destroyed = true
     }
@@ -194,6 +228,7 @@ class OfferCardView(
     private fun bind(o: EvaluatedOffer) {
         headerView.bind(o, profile, OverlayPrefs.cardLayout(context))
         bindReasons(o)
+        if (!minimized) renderPhotos()
         applyMinimized()
         if (!minimized) renderMap()
     }
@@ -239,9 +274,148 @@ class OfferCardView(
         hereMarker = MapViews.renderOffer(mapView, zones, current, route)
     }
 
+    /**
+     * Fotos da coleta, paradas e destino ([StreetView.pick]). Só busca com o Card aberto (cada foto
+     * conta no limite do mês); o mesmo ponto não busca de novo.
+     */
+    private fun renderPhotos() {
+        val o = offer ?: return
+        val stops = if (OverlayPrefs.streetViewEnabled(context)) StreetView.pick(RideRoute.of(o)) else emptyList()
+        // Oferta nova começa com as fotos lado a lado (sem a ampliada da anterior).
+        val offerId = o.raw.platform to o.raw.capturedAt
+        if (offerId != photosOfferId) {
+            photosOfferId = offerId
+            zoomedLetter?.let { toggleZoom(it) }
+        }
+        if (stops.map { it.letter } != photoCells.keys.toList()) {
+            photoCells.values.forEach { it.reset() }
+            photoCells.clear()
+            photosRow.removeAllViews()
+            zoomedLetter = null
+            stops.forEach { stop ->
+                val cell = PhotoCell(stop)
+                photosRow.addView(
+                    cell.view,
+                    LinearLayout.LayoutParams(0, dp(PHOTO_HEIGHT_DP), 1f).apply {
+                        if (photoCells.isNotEmpty()) marginStart = dp(6)
+                    },
+                )
+                photoCells[stop.letter] = cell
+            }
+        }
+        stops.forEach { photoCells[it.letter]?.bind(it) }
+        photosRow.visibility = if (stops.isEmpty()) View.GONE else View.VISIBLE
+    }
+
+    /** Toque numa foto: ela ocupa a largura toda (as outras somem); outro toque volta. */
+    private fun toggleZoom(letter: String) {
+        zoomedLetter = if (zoomedLetter == letter) null else letter
+        val zoom = zoomedLetter
+        photoCells.forEach { (l, cell) ->
+            cell.view.visibility = if (zoom == null || zoom == l) View.VISIBLE else View.GONE
+            (cell.view.layoutParams as LinearLayout.LayoutParams).apply {
+                height = dp(if (zoom == l) PHOTO_ZOOM_HEIGHT_DP else PHOTO_HEIGHT_DP)
+                marginStart = if (zoom == l || l == photoCells.keys.first()) 0 else dp(6)
+                cell.view.layoutParams = this
+            }
+        }
+        if (attached) {
+            try {
+                windowManager.updateViewLayout(root, params)
+            } catch (e: Exception) {
+                Log.w(TAG, "Falha ao redimensionar cartão", e)
+            }
+        }
+    }
+
+    /** Uma foto: letra do mapa no canto (mesma cor do marcador), crédito e data embaixo. */
+    private inner class PhotoCell(stop: RouteStop) {
+        private val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        private val status = text(11f, color = SECONDARY).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(6), dp(20), dp(6), dp(4))
+        }
+        private val credit = text(9f, color = 0xDDFFFFFF.toInt()).apply {
+            setShadowLayer(3f, 0f, 0f, 0xFF000000.toInt())
+            setPadding(dp(4), 0, dp(4), dp(2))
+        }
+        private val badge = text(12f, bold = true).apply {
+            text = stop.letter
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(MapViews.colorOf(stop.kind))
+                setStroke(dp(1), 0xFFFFFFFF.toInt())
+            }
+        }
+        val view = FrameLayout(context).apply {
+            background = GradientDrawable().apply {
+                setColor(PHOTO_BG)
+                cornerRadius = 10f * density
+            }
+            clipToOutline = true
+            contentDescription = "Foto da rua: ${MapViews.titleOf(stop)}"
+            addView(image, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(status, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+            addView(credit, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.END))
+            addView(badge, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.TOP or Gravity.START).apply { setMargins(dp(4), dp(4), 0, 0) })
+            setOnClickListener { toggleZoom(stop.letter) }
+        }
+        private var loadedId: String? = null
+        private var job: Job? = null
+
+        fun bind(stop: RouteStop) {
+            val point = stop.point
+            if (point == null) {
+                reset()
+                showMissing(if (stop.address != null) "Localizando endereço…" else "Endereço não lido")
+                return
+            }
+            val id = StreetView.cacheKey(point)
+            if (id == loadedId) return
+            reset()
+            loadedId = id
+            StreetViewPhotos.cached(point)?.let { show(it); return }
+            showMissing("Carregando foto…")
+            job = scope.launch {
+                val result = StreetViewPhotos.load(context, point)
+                if (loadedId != id) return@launch
+                show(result)
+                // Falha passageira (rede, chave): tenta de novo no próximo desenho do Card.
+                if (result is StreetViewPhotos.Result.Missing && result.retry) loadedId = null
+            }
+        }
+
+        fun reset() {
+            job?.cancel()
+            job = null
+            loadedId = null
+        }
+
+        private fun show(result: StreetViewPhotos.Result) {
+            when (result) {
+                is StreetViewPhotos.Result.Photo -> {
+                    image.setImageBitmap(result.bitmap)
+                    status.visibility = View.GONE
+                    credit.text = result.credit
+                    credit.visibility = View.VISIBLE
+                }
+                is StreetViewPhotos.Result.Missing -> showMissing(result.message)
+            }
+        }
+
+        private fun showMissing(message: String) {
+            image.setImageDrawable(null)
+            status.text = message
+            status.visibility = View.VISIBLE
+            credit.visibility = View.GONE
+        }
+    }
+
     private fun toggleMinimized() {
         minimized = !minimized
         prefs.edit().putBoolean(OverlayPrefs.KEY_CARD_MINIMIZED, minimized).apply()
+        if (!minimized) renderPhotos()
         applyMinimized()
         if (!minimized) renderMap()
         if (attached) {
@@ -255,7 +429,7 @@ class OfferCardView(
 
     private fun applyMinimized() {
         // Sem alerta e sem mapa o corpo some: fica só o cabeçalho com os números.
-        val hasContent = listOf(reasonsBox, mapView, mapNote).any { it.visibility == View.VISIBLE }
+        val hasContent = listOf(reasonsBox, mapView, mapNote, photosRow).any { it.visibility == View.VISIBLE }
         body.visibility = if (minimized || !hasContent) View.GONE else View.VISIBLE
         minimizeButton.text = if (minimized) "▢" else "–"
         minimizeButton.contentDescription = if (minimized) "Mostrar mapa" else "Esconder mapa"
@@ -367,6 +541,9 @@ class OfferCardView(
         const val TAG = "MApp/OfferCard"
         const val CARD_WIDTH_DP = 300
         const val MAP_HEIGHT_DP = 180
+        const val PHOTO_HEIGHT_DP = 96
+        const val PHOTO_ZOOM_HEIGHT_DP = 182
+        val PHOTO_BG = 0xFF2C2F33.toInt()
 
         val CARD_BG = 0xF0202124.toInt()
         val PRIMARY = 0xFFFFFFFF.toInt()

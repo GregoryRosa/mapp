@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.net.Uri
 import br.com.mapp.core.bubble.BubbleStyle
 import br.com.mapp.core.card.CardLayout
+import br.com.mapp.core.geo.StreetViewBudget
 import br.com.mapp.core.notify.NoticeLayout
 import br.com.mapp.core.sound.GreatSound
 import br.com.mapp.core.sound.OfferSounds
@@ -26,6 +27,9 @@ object OverlayPrefs {
     const val KEY_GOAL_MARK = "goal_mark"
     const val KEY_BUBBLE_STYLE = "bubble_style"
     const val KEY_NOTICE_LAYOUT = "notice_layout"
+    const val KEY_STREETVIEW_ON = "streetview_on"
+    const val KEY_STREETVIEW_KEY = "streetview_key"
+    const val KEY_STREETVIEW_BUDGET = "streetview_budget"
 
     fun of(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -95,5 +99,30 @@ object OverlayPrefs {
 
     fun setNoticeLayout(context: Context, layout: NoticeLayout) {
         of(context).edit().putString(KEY_NOTICE_LAYOUT, layout.encode()).apply()
+    }
+
+    /** Chave da Street View Static API colada pelo usuário (fica só no celular, fora do APK). */
+    fun streetViewKey(context: Context): String? =
+        of(context).getString(KEY_STREETVIEW_KEY, null)?.trim()?.takeIf { it.isNotEmpty() }
+
+    fun setStreetViewKey(context: Context, key: String?) {
+        of(context).edit().putString(KEY_STREETVIEW_KEY, key?.trim()?.takeIf { it.isNotEmpty() }).apply()
+    }
+
+    /** Fotos da rua no Card (padrão: ligado; só aparecem com a chave colada). */
+    fun isStreetViewOn(context: Context): Boolean = of(context).getBoolean(KEY_STREETVIEW_ON, true)
+
+    fun setStreetViewOn(context: Context, on: Boolean) {
+        of(context).edit().putBoolean(KEY_STREETVIEW_ON, on).apply()
+    }
+
+    fun streetViewEnabled(context: Context): Boolean = isStreetViewOn(context) && streetViewKey(context) != null
+
+    /** Fotos pedidas ao Google no mês. */
+    fun streetViewBudget(context: Context): StreetViewBudget =
+        StreetViewBudget.decode(of(context).getString(KEY_STREETVIEW_BUDGET, null))
+
+    fun setStreetViewBudget(context: Context, budget: StreetViewBudget) {
+        of(context).edit().putString(KEY_STREETVIEW_BUDGET, budget.encode()).apply()
     }
 }
