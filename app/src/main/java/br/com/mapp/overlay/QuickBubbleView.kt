@@ -27,6 +27,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import br.com.mapp.core.filter.FilterCriterion
+import br.com.mapp.core.goal.DayGoal
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.ZoneType
 import br.com.mapp.core.shift.Shift
@@ -114,20 +115,23 @@ class QuickBubbleView(
 
     // ------------------------------------------------------------------ textos do dia (em volta do "M")
 
-    private var day: ShiftSummary? = null
+    /** Números do dia junto ao "M" (mesma conta de Ganhos e gastos → Hoje) e a meta diária. */
+    data class DayInfo(val km: Double, val carCost: Double, val gross: Double, val goal: Double?, val hasData: Boolean)
+
+    private var day: DayInfo? = null
     private var labelsAttached = false
     private val kmLabel = dayLabel(DAY_KM)
     private val costLabel = dayLabel(DAY_COST)
-    private val profitLabel = dayLabel(DAY_PROFIT)
+    private val grossLabel = dayLabel(DAY_GROSS)
 
     /**
-     * Só números, centralizados com o "M": km e custo em cima, lucro embaixo.
+     * Só números, centralizados com o "M": km e custo em cima, valor bruto embaixo.
      * Contorno preto para ler em fundo claro; sem fundo e não recebe toques.
      */
     private val labelsRoot = FrameLayout(context).apply {
         addView(kmLabel, labelParams(top = 0))
         addView(costLabel, labelParams(top = LABEL_LINE_DP))
-        addView(profitLabel, labelParams(top = 2 * LABEL_LINE_DP + BUBBLE_DP))
+        addView(grossLabel, labelParams(top = 2 * LABEL_LINE_DP + BUBBLE_DP))
         visibility = View.GONE
     }
 
@@ -381,9 +385,9 @@ class QuickBubbleView(
         bindDay()
     }
 
-    /** Resumo do dia (jornada atual ou a encerrada hoje); null = esconde os textos. */
-    fun updateDay(sum: ShiftSummary?) {
-        day = sum
+    /** Números e meta do dia; null = esconde os textos e o anel da meta. */
+    fun updateDay(info: DayInfo?) {
+        day = info
         bindDay()
     }
 
@@ -804,12 +808,19 @@ class QuickBubbleView(
 
     private fun bindDay() {
         val d = day
-        labelsRoot.visibility = if (d == null) View.GONE else View.VISIBLE
-        if (d == null) return
-        kmLabel.text = ShiftMath.num(d.totalKm, 1)
-        costLabel.text = ShiftMath.num(d.cost, 2)
-        profitLabel.text = ShiftMath.num(d.profit, 2)
-        profitLabel.color = if (d.profit >= 0) DAY_PROFIT else DAY_LOSS
+        // Anel da meta: enche com o bruto do dia; batida = anel com o gradiente do MApp por fora.
+        val fraction = d?.let { DayGoal.fraction(it.gross, it.goal) }
+        val reached = d != null && DayGoal.reached(d.gross, d.goal)
+        bubble.setGoal(fraction?.toFloat(), reached)
+        bubble.contentDescription = "MApp – ajustes rápidos" +
+            (fraction?.let { " · meta do dia ${(it * 100).toInt()}%" } ?: "")
+        val show = d != null && d.hasData
+        labelsRoot.visibility = if (show) View.VISIBLE else View.GONE
+        if (!show || d == null) return
+        kmLabel.text = ShiftMath.num(d.km, 1)
+        costLabel.text = ShiftMath.num(d.carCost, 2)
+        grossLabel.text = ShiftMath.num(d.gross, 2)
+        grossLabel.color = if (reached) DAY_GOAL else DAY_GROSS
     }
 
     // ------------------------------------------------------------------ views
@@ -851,7 +862,7 @@ class QuickBubbleView(
     }
 
     /** Número pequeno (tamanho fixo em dp, cabe na janela mesmo com fonte grande) com contorno preto. */
-    private fun dayLabel(color: Int) = OutlineLabel(context, 11f * density, 3f * density).apply { this.color = color }
+    private fun dayLabel(color: Int) = OutlineLabel(context, LABEL_SP * density, 3f * density).apply { this.color = color }
 
     private fun labelParams(top: Int) = FrameLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -888,7 +899,8 @@ class QuickBubbleView(
     companion object {
         private const val TAG = "MApp/Bubble"
         private const val BUBBLE_DP = 52
-        private const val LABEL_LINE_DP = 14
+        private const val LABEL_LINE_DP = 17
+        private const val LABEL_SP = 13f
         private const val LABEL_WIDTH_DP = 96
         private const val PANEL_WIDTH_DP = 290
         private const val CONFIRM_MS = 4_000L
@@ -913,8 +925,9 @@ class QuickBubbleView(
         private val RING_BG = 0xF0000000.toInt()
         private val DAY_KM = 0xFFF2F2F2.toInt()
         private val DAY_COST = 0xFFFFCC80.toInt()
-        private val DAY_PROFIT = 0xFF8EE69A.toInt()
-        private val DAY_LOSS = 0xFFFF8A80.toInt()
+        private val DAY_GROSS = 0xFF8EE69A.toInt()
+        /** Lilás da marca: valor bruto com a meta do dia batida. */
+        private val DAY_GOAL = 0xFFC9B5FF.toInt()
         private val GRAY_LIGHT = 0xFF9E9E9E.toInt()
         private val NEON_GREEN = 0xFF00E64D.toInt()
         private val NEON_YELLOW = 0xFFFFD600.toInt()
@@ -1120,17 +1133,40 @@ private class OutlineLabel(context: Context, sizePx: Float, outlinePx: Float) : 
  * Ícone flutuante com o logo do MApp: "M" em forma de rota (gradiente verde-água → lilás) com
  * ponto de partida e de chegada, mesmo desenho do app (`ui/MappLogo`). O anel mostra o status:
  * laranja = ligado sem corrida, verde = em corrida, cinza + "!" = leitor desligado.
+ *
+ * **Meta do dia** ([setGoal]): um preenchimento branco corre por cima do anel de status (a partir do
+ * topo, sentido horário) e pulsa enquanto a meta não é batida. Em 100% ele se expande para fora,
+ * vira um anel com o gradiente do MApp em volta do círculo e o anel de status volta a aparecer.
  */
 private class LogoBubble(context: Context, private val ringBg: Int) : View(context) {
     var statusColor: Int = 0xFF00E64D.toInt()
     var warning = false
     var thickRing = false
 
+    /** Fração 0..1 da meta (null = sem meta). */
+    private var goal: Float? = null
+    private var reached = false
+    /** 0 = preenchimento sobre o anel de status; 1 = anel da meta por fora (meta batida). */
+    private var expand = 0f
+    private var expandAnim: ValueAnimator? = null
+    private val pulseStart = System.currentTimeMillis()
+    private val pulse = object : Runnable {
+        override fun run() {
+            invalidate()
+            if (pulsing()) postDelayed(this, PULSE_FRAME_MS)
+        }
+    }
+
     private val teal = 0xFF5EE6D8.toInt()
     private val lilac = 0xFFB59CFF.toInt()
     private val gray = 0xFF9E9E9E.toInt()
     private val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val outer = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
@@ -1142,6 +1178,55 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         textAlign = Paint.Align.CENTER
     }
     private val path = android.graphics.Path()
+    private val arc = RectF()
+    private var shaderSide = 0f
+    private var shaderWarning = false
+
+    /**
+     * Meta do dia: [fraction] 0..1 (null = sem meta), [isReached] = 100%. A expansão para fora só é
+     * animada quando a meta é batida com o ícone na tela (ao reabrir o ícone já aparece por fora).
+     */
+    fun setGoal(fraction: Float?, isReached: Boolean) {
+        val had = goal != null
+        goal = fraction
+        val nowReached = fraction != null && isReached
+        if (nowReached && !reached) {
+            reached = true
+            expandAnim?.cancel()
+            if (had && isAttachedToWindow) {
+                expandAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+                    duration = EXPAND_MS
+                    interpolator = android.view.animation.OvershootInterpolator(1.6f)
+                    addUpdateListener { expand = it.animatedValue as Float; invalidate() }
+                    start()
+                }
+            } else {
+                expand = 1f
+            }
+        } else if (!nowReached && reached) {
+            reached = false
+            expandAnim?.cancel()
+            expand = 0f
+        }
+        removeCallbacks(pulse)
+        if (pulsing()) post(pulse)
+        invalidate()
+    }
+
+    private fun pulsing(): Boolean = goal != null && !reached && isAttachedToWindow
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        removeCallbacks(pulse)
+        if (pulsing()) post(pulse)
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(pulse)
+        expandAnim?.cancel()
+        if (reached) expand = 1f
+        super.onDetachedFromWindow()
+    }
 
     override fun onDraw(canvas: Canvas) {
         val side = minOf(width, height).toFloat()
@@ -1151,21 +1236,79 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         val cy = height / 2f
         canvas.save()
         canvas.translate(cx - side / 2, cy - side / 2)
+        val c = side / 2
 
-        bg.shader = android.graphics.RadialGradient(
-            side * 0.35f, side * 0.3f, side * 0.75f, 0xFF16404A.toInt(), ringBg, android.graphics.Shader.TileMode.CLAMP,
-        )
-        canvas.drawCircle(side / 2, side / 2, side / 2, bg)
+        // Com a meta batida o círculo encolhe um pouco para o anel da meta caber por fora.
+        val e = expand
+        val outerW = OUTER_W * u
+        val scale = 1f - e.coerceIn(0f, 1.2f) * (outerW + OUTER_GAP * u) / c
+        val statusW = u * if (thickRing) 2.2f else 1.5f
+
+        canvas.save()
+        canvas.scale(scale, scale, c, c)
+        // Gradientes refeitos só quando o tamanho ou o aviso mudam (o pulso redesenha ~25×/s).
+        if (shaderSide != side || shaderWarning != warning) {
+            shaderSide = side
+            shaderWarning = warning
+            bg.shader = android.graphics.RadialGradient(
+                side * 0.35f, side * 0.3f, side * 0.75f, 0xFF16404A.toInt(), ringBg, android.graphics.Shader.TileMode.CLAMP,
+            )
+            line.shader = android.graphics.LinearGradient(
+                6.5f * u, 7.5f * u, 17.5f * u, 17.5f * u,
+                if (warning) gray else teal, if (warning) gray else lilac, android.graphics.Shader.TileMode.CLAMP,
+            )
+            outer.shader = android.graphics.SweepGradient(c, c, intArrayOf(teal, lilac, 0xFF8F6BFF.toInt(), lilac, teal), null)
+        }
+        canvas.drawCircle(c, c, c, bg)
         ring.color = statusColor
-        ring.strokeWidth = u * if (thickRing) 2.2f else 1.5f
-        canvas.drawCircle(side / 2, side / 2, side / 2 - ring.strokeWidth / 2, ring)
+        ring.strokeWidth = statusW
+        canvas.drawCircle(c, c, c - statusW / 2, ring)
+        drawLogo(canvas, u)
 
+        // Meta em andamento: preenchimento branco por cima do anel de status, pulsando.
+        val g = goal
+        if (g != null && !reached) {
+            val phase = ((System.currentTimeMillis() - pulseStart) % PULSE_MS) / PULSE_MS.toFloat()
+            val beat = 0.5f + 0.5f * kotlin.math.cos(2 * Math.PI * phase).toFloat()
+            arc.set(statusW / 2, statusW / 2, side - statusW / 2, side - statusW / 2)
+            val sweep = maxOf(360f * g, 1f) // 0%: um ponto no topo mostra que há meta
+            fill.shader = null
+            fill.color = 0xFFFFFFFF.toInt()
+            fill.alpha = (70 * beat).toInt()
+            fill.strokeWidth = statusW * 2.2f
+            canvas.drawArc(arc, -90f, sweep, false, fill)
+            fill.alpha = (150 + 105 * beat).toInt()
+            fill.strokeWidth = statusW
+            canvas.drawArc(arc, -90f, sweep, false, fill)
+        }
+        canvas.restore()
+
+        // Meta batida: o preenchimento sai do anel de status e vira o anel de fora com o gradiente.
+        if (reached) {
+            val k = e.coerceIn(0f, 1f)
+            val from = (c - statusW / 2) * scale
+            val to = c - outerW / 2
+            val r = from + (to - from) * k
+            val w = statusW * scale + (outerW - statusW * scale) * k
+            outer.strokeWidth = w
+            outer.alpha = 255
+            canvas.drawCircle(c, c, r, outer)
+            if (k < 1f) {
+                // Branco do preenchimento some enquanto o gradiente aparece.
+                fill.shader = null
+                fill.color = 0xFFFFFFFF.toInt()
+                fill.alpha = (255 * (1f - k)).toInt()
+                fill.strokeWidth = w
+                canvas.drawCircle(c, c, r, fill)
+            }
+        }
+        canvas.restore()
+    }
+
+    private fun drawLogo(canvas: Canvas, u: Float) {
         val c1 = if (warning) gray else teal
         val c2 = if (warning) gray else lilac
         line.strokeWidth = 2.4f * u
-        line.shader = android.graphics.LinearGradient(
-            6.5f * u, 7.5f * u, 17.5f * u, 17.5f * u, c1, c2, android.graphics.Shader.TileMode.CLAMP,
-        )
         path.reset()
         path.moveTo(6.5f * u, 17f * u)
         path.lineTo(6.5f * u, 7.5f * u)
@@ -1189,6 +1332,15 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
             badge.textSize = 6f * u
             canvas.drawText("!", 19.5f * u, 6.6f * u, badge)
         }
-        canvas.restore()
+    }
+
+    private companion object {
+        /** Pulso da meta: ciclo de 1,4 s desenhado a ~25 quadros/s (leve para a bateria). */
+        const val PULSE_MS = 1_400L
+        const val PULSE_FRAME_MS = 40L
+        const val EXPAND_MS = 700L
+        /** Anel da meta batida (em 1/24 do ícone) e o espaço até o círculo. */
+        const val OUTER_W = 1.7f
+        const val OUTER_GAP = 0.45f
     }
 }

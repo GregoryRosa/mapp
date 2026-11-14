@@ -22,6 +22,7 @@ import androidx.lifecycle.lifecycleScope
 import br.com.mapp.MappApp
 import br.com.mapp.core.bus.OfferBus
 import br.com.mapp.core.card.CardValues
+import br.com.mapp.core.goal.DayGoal
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
@@ -32,15 +33,21 @@ import br.com.mapp.core.shift.TripMatcher
 import br.com.mapp.core.model.Zone
 import br.com.mapp.core.model.ZoneHit
 import br.com.mapp.core.model.ZoneType
+import br.com.mapp.core.repo.FinanceEntry
+import br.com.mapp.core.repo.OfferRecord
 import br.com.mapp.core.shift.Odometer
+import br.com.mapp.core.shift.PeriodMath
+import br.com.mapp.core.shift.PeriodTotals
 import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.core.shift.ShiftTrip
+import br.com.mapp.finance.ReportMath
 import br.com.mapp.maps.LocationProvider
 import br.com.mapp.maps.PinStore
 import br.com.mapp.reader.OfferAccessibilityService
 import br.com.mapp.reader.ReaderStatus
 import br.com.mapp.ui.MainActivity
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.delay
@@ -49,6 +56,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
@@ -66,6 +75,11 @@ class OverlayService : LifecycleService() {
     private var location: LocationProvider? = null
     private var voice: VoiceAnnouncer? = null
     private var greatSound: GreatSoundPlayer? = null
+    /** Som de dinheiro da meta (player próprio: uma oferta chegando não corta o som). */
+    private var cashSound: GreatSoundPlayer? = null
+    /** Números do dia (mesma conta de Ganhos e gastos → Hoje) e meta diária, para o ícone "M". */
+    private var dayTotals: PeriodTotals? = null
+    private var dailyGoal: Double? = null
     /** Oferta que já tocou o som de corrida ótima (toca uma vez por oferta). */
     private var greatKey: OfferKey? = null
     private var card: OfferCardView? = null
@@ -116,6 +130,7 @@ class OverlayService : LifecycleService() {
         windowManager = ctx.getSystemService(WindowManager::class.java)
         voice = VoiceAnnouncer(this)
         greatSound = GreatSoundPlayer(this)
+        cashSound = GreatSoundPlayer(this)
 
         val pipeline = OfferPipeline(this)
         lifecycleScope.launch { pipeline.run() }
@@ -131,6 +146,7 @@ class OverlayService : LifecycleService() {
             OfferBus.raw.collect { raw -> raw.category?.let { lastCategory = raw.key() to it } }
         }
         startShiftMonitor(loc)
+        startDayMonitor()
         lifecycleScope.launch { OfferBus.tripStages.collect { onTripStage(it) } }
 
         // Ícone flutuante com ajustes rápidos (e cartão): recriados quando o leitor liga/desliga.
@@ -299,9 +315,77 @@ class OverlayService : LifecycleService() {
         val shift: Shift? = ShiftTracker.current(this).value
         val summary = shift?.let { ShiftMath.summary(it, costPerKm, now) }
         bubble?.updateShift(shift, summary, lastOffer?.let { offerLabel(it.raw) })
-        // Textos discretos junto ao "M": custo (em cima), lucro e km (embaixo) do dia.
-        val today = ShiftMath.ofToday(shift, ShiftTracker.last(this).value, now)
-        bubble?.updateDay(if (today === shift) summary else today?.let { ShiftMath.summary(it, costPerKm, now) })
+    }
+
+    // ------------------------------------------------------------------ dia e meta (ícone "M")
+
+    /**
+     * Números junto ao "M" (km e custo em cima, valor bruto embaixo) e anel da meta diária: mesma
+     * conta da tela Ganhos e gastos → Hoje (`PeriodMath.totals`), recalculada quando muda a jornada,
+     * o histórico de ofertas, os lançamentos, a meta ou o custo/km — e de novo à meia-noite.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun startDayMonitor() {
+        val repos = MappApp.repos
+        val ctx = this
+        lifecycleScope.launch {
+            todayPeriods().flatMapLatest { p ->
+                val day = combine(
+                    ShiftTracker.current(ctx),
+                    ShiftTracker.history(ctx),
+                    repos.offers.between(p.from, p.to),
+                    repos.finance.entries(p.from, p.to),
+                    repos.finance.goals(),
+                ) { current, history, offers, entries, goals -> DayInputs(current, history, offers, entries, goals.daily) }
+                combine(day, repos.vehicle.config()) { d, cost ->
+                    PeriodMath.totals(p.from, p.to, d.current, d.history, d.offers, d.entries, cost.costPerKm, System.currentTimeMillis()) to d.goal
+                }
+            }.collect { (totals, goal) ->
+                dayTotals = totals
+                dailyGoal = goal
+                pushDay()
+                celebrateGoal(totals.gross, goal)
+            }
+        }
+    }
+
+    private data class DayInputs(
+        val current: Shift?,
+        val history: List<Shift>,
+        val offers: List<OfferRecord>,
+        val entries: List<FinanceEntry>,
+        val goal: Double?,
+    )
+
+    /** O dia de hoje; emite de novo logo depois da meia-noite. */
+    private fun todayPeriods() = flow {
+        while (true) {
+            val p = ReportMath.today()
+            emit(p)
+            delay((p.to + 1 - System.currentTimeMillis()).coerceAtLeast(0L) + DAY_ROLL_MS)
+        }
+    }
+
+    private fun pushDay() {
+        val t = dayTotals ?: return
+        bubble?.updateDay(
+            QuickBubbleView.DayInfo(
+                km = t.km,
+                carCost = t.carCost,
+                gross = t.gross,
+                goal = dailyGoal,
+                hasData = t.shifts > 0 || t.gross > 0 || t.km > 0,
+            ),
+        )
+    }
+
+    /** Meta do dia batida: som de dinheiro + aviso, uma vez por dia e por valor de meta. */
+    private fun celebrateGoal(gross: Double, goal: Double?) {
+        val day = java.time.LocalDate.now().toString()
+        val mark = DayGoal.celebration(gross, goal, day, OverlayPrefs.goalMark(this)) ?: return
+        OverlayPrefs.setGoalMark(this, mark)
+        cashSound?.playCash()
+        tripToast("🎯 Meta do dia batida! ${ShiftMath.money(gross)} de ${ShiftMath.money(goal ?: gross)}")
     }
 
     private fun offerLabel(raw: RawOffer): String {
@@ -515,6 +599,8 @@ class OverlayService : LifecycleService() {
         voice = null
         greatSound?.stop()
         greatSound = null
+        cashSound?.stop()
+        cashSound = null
         super.onDestroy()
     }
 
@@ -607,6 +693,7 @@ class OverlayService : LifecycleService() {
             it.updateProfile(activeProfile, profiles.size.coerceAtLeast(1))
         }
         pushShift()
+        pushDay()
         // Oferta na tela durante a troca: o cartão volta na janela nova.
         val offer = OfferBus.evaluated.value ?: return
         if (offer.raw.key() == dismissedKey) return
@@ -695,6 +782,8 @@ class OverlayService : LifecycleService() {
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP = "br.com.mapp.overlay.STOP"
         private const val SHIFT_TICK_MS = 30_000L
+        /** Folga depois da meia-noite para o dia novo começar. */
+        private const val DAY_ROLL_MS = 2_000L
         private const val PIN_FIX_MS = 4_000L
         /** Avisos comuns na tela (o Toast curto era 2 s). */
         private const val NOTICE_MS = 4_000L

@@ -18,6 +18,7 @@ object OverlayPrefs {
     const val KEY_CARD_LAYOUT = "card_layout"
     const val KEY_GREAT_SOUND = "great_sound"
     const val KEY_GREAT_SOUND_URI = "great_sound_uri"
+    const val KEY_GOAL_MARK = "goal_mark"
 
     fun of(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -48,5 +49,12 @@ object OverlayPrefs {
 
     fun setGreatSoundUri(context: Context, uri: Uri?) {
         of(context).edit().putString(KEY_GREAT_SOUND_URI, uri?.toString()).apply()
+    }
+
+    /** Última meta do dia comemorada com o som de dinheiro (`DayGoal.mark`). */
+    fun goalMark(context: Context): String? = of(context).getString(KEY_GOAL_MARK, null)
+
+    fun setGoalMark(context: Context, mark: String) {
+        of(context).edit().putString(KEY_GOAL_MARK, mark).apply()
     }
 }
