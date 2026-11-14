@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.net.Uri
 import br.com.mapp.core.bubble.BubbleStyle
 import br.com.mapp.core.card.CardLayout
+import br.com.mapp.core.notify.NoticeLayout
 import br.com.mapp.core.sound.GreatSound
 
 /** Preferências do overlay (posição do Card, minimizado, voz, estilo do Card, som de corrida ótima, aparência do botão "M"). */
@@ -21,6 +22,7 @@ object OverlayPrefs {
     const val KEY_GREAT_SOUND_URI = "great_sound_uri"
     const val KEY_GOAL_MARK = "goal_mark"
     const val KEY_BUBBLE_STYLE = "bubble_style"
+    const val KEY_NOTICE_LAYOUT = "notice_layout"
 
     fun of(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -65,5 +67,12 @@ object OverlayPrefs {
 
     fun setBubbleStyle(context: Context, style: BubbleStyle) {
         of(context).edit().putString(KEY_BUBBLE_STYLE, style.encode()).apply()
+    }
+
+    /** O que aparece na notificação da corrida aceita (menu Card → Notificação). */
+    fun noticeLayout(context: Context): NoticeLayout = NoticeLayout.decode(of(context).getString(KEY_NOTICE_LAYOUT, null))
+
+    fun setNoticeLayout(context: Context, layout: NoticeLayout) {
+        of(context).edit().putString(KEY_NOTICE_LAYOUT, layout.encode()).apply()
     }
 }

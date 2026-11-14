@@ -113,7 +113,8 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
         points = next
         mapJob?.cancel()
         map = null
-        val frame = RideNotices.frame(next.all)
+        // Mapa desligado no menu Card → Notificação: nem baixa os tiles.
+        val frame = if (OverlayPrefs.noticeLayout(context).showMap) RideNotices.frame(next.all) else null
         if (frame == null) {
             mapState = MapState.NONE
             return
@@ -153,24 +154,28 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
     private fun post() {
         val o = offer ?: return
         if (!canNotify()) return
-        val text = RideNotices.of(o, category, passenger, acceptedAt, ZoneId.systemDefault(), onBoard, points)
+        val layout = OverlayPrefs.noticeLayout(context)
+        val text = RideNotices.of(o, category, passenger, acceptedAt, ZoneId.systemDefault(), onBoard, points, layout)
         if (posted == text to mapState) return
         posted = text to mapState
 
-        val note = when (mapState) {
+        val note = if (!text.showMap) null else when (mapState) {
             MapState.LOADING -> "Carregando mapa…"
             MapState.FAILED -> "Mapa indisponível agora (sem internet?)"
             else -> null
         } ?: text.mapNote
+        val summaryVisibility = if (text.summary.isEmpty()) View.GONE else View.VISIBLE
 
         val small = RemoteViews(context.packageName, R.layout.notification_ride_small).apply {
             setTextViewText(R.id.ride_title, text.title)
             setTextViewText(R.id.ride_summary, text.summary)
+            setViewVisibility(R.id.ride_summary, summaryVisibility)
         }
         val big = RemoteViews(context.packageName, R.layout.notification_ride_big).apply {
             setTextViewText(R.id.ride_title, text.title)
             setTextViewText(R.id.ride_summary, text.summary)
-            val bmp = map
+            setViewVisibility(R.id.ride_summary, summaryVisibility)
+            val bmp = map?.takeIf { text.showMap }
             if (bmp != null) {
                 setImageViewBitmap(R.id.ride_map, bmp)
                 setViewVisibility(R.id.ride_map, View.VISIBLE)

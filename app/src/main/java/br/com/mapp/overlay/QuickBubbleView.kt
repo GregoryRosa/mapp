@@ -42,7 +42,8 @@ import kotlin.math.sin
 
 /**
  * Ícone flutuante do copiloto (fica por cima da Uber/99/inDrive enquanto o copiloto está ativo).
- * Toque = abre o menu circular (botões redondos com ícone em volta do "M"); arraste = muda de lugar.
+ * Toque = abre o menu circular (botões redondos com ícone em volta do "M"); arraste = muda de lugar;
+ * segurar 3 s parado (no "M" ou no ✕ do menu) = desliga o copiloto (anel vermelho enche).
  * A engrenagem do menu abre os **ajustes do próprio botão**: cores do fundo, do "M", do anel de
  * dentro (status) e do anel de fora (meta), velocidade do giro e som da meta batida.
  * Só mexe nas configurações do próprio MApp — nunca toca no app de corrida.
@@ -87,7 +88,7 @@ class QuickBubbleView(
     // ------------------------------------------------------------------ bolha
 
     private val bubble = LogoBubble(context, ringBg = RING_BG).apply {
-        contentDescription = "MApp – ajustes do botão"
+        contentDescription = "MApp – toque abre o menu, segure 3 segundos para desligar"
         elevation = dp(6).toFloat()
         isClickable = true
         setOnClickListener { onBubbleTap() }
@@ -157,14 +158,11 @@ class QuickBubbleView(
     private val homeButton = roundButton(NeonIcon.Kind.HOME, NEON_BLUE, "Abrir MApp") {
         closeRadial(); actions.openApp()
     }
-    private val powerButton = roundButton(NeonIcon.Kind.POWER, NEON_RED, "Parar copiloto") {
-        closeRadial(); actions.stopCopilot()
-    }
     private val pinButton = roundButton(NeonIcon.Kind.PIN, NEON_ORANGE, "Marcar este local (zona para desenhar depois)") {
         showPinChoices()
     }
     /** Ordem de cima para baixo no arco; o 📍 fica no meio (mais fácil de alcançar). */
-    private val radialItems = listOf(settingsButton, shiftButton, tripButton, pinButton, voiceRound, homeButton, powerButton)
+    private val radialItems = listOf(settingsButton, shiftButton, tripButton, pinButton, voiceRound, homeButton)
 
     /** 2º passo do 📍: escolher o tipo. Um toque marca e fecha. */
     private val pinChoices = listOf(
@@ -175,7 +173,10 @@ class QuickBubbleView(
         roundButton(kind, color, "Marcar: ${type.label}") { closeRadial(); actions.markPin(type) }
     }
     private var radialOnRight = true
-    private val closeButton = roundButton(NeonIcon.Kind.CLOSE, WHITE, "Fechar menu", sizeDp = BUBBLE_DP) { closeRadial() }
+    /** ✕ no lugar do "M": toque fecha o menu; segurar 3 s desliga o copiloto (igual ao "M"). */
+    private val closeButton = roundButton(
+        NeonIcon.Kind.CLOSE, WHITE, "Fechar menu (segure 3 segundos para desligar o copiloto)", sizeDp = BUBBLE_DP,
+    ) { closeRadial() }
 
     @SuppressLint("ClickableViewAccessibility")
     private val radialRoot = FrameLayout(context).apply {
@@ -203,16 +204,18 @@ class QuickBubbleView(
         title = "MApp – menu"
     }
 
-    // ---- ▶/⏸ segurado (estado; funções mais abaixo)
-    private val holdRing = HoldRing(NEON_RED, 4f * density)
-    private var holdAnim: ValueAnimator? = null
-    private var holdDone = false
-    private var holdLeft = false
-    private val endShiftRunnable = Runnable {
-        holdDone = true
-        stopHoldVisual()
-        shiftButton.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+    // ---- Segurar 3 s: ▶/⏸ encerra a jornada; "M" (ou ✕ do menu) desliga o copiloto
+    private val shiftHold = HoldToConfirm(shiftButton, NEON_RED, 4f * density, HOLD_MS, graceMs = 0L) {
         actions.endShift()
+    }
+    /** O anel do "M" só aparece depois de um instante: toque normal não pisca vermelho. */
+    private val bubbleHold = HoldToConfirm(bubble, NEON_RED, 4f * density, HOLD_MS, graceMs = HOLD_GRACE_MS) {
+        closePanel()
+        actions.stopCopilot()
+    }
+    private val closeHold = HoldToConfirm(closeButton, NEON_RED, 4f * density, HOLD_MS, graceMs = HOLD_GRACE_MS) {
+        closeRadial()
+        actions.stopCopilot()
     }
 
     // ------------------------------------------------------------------ painel: ajustes do próprio botão
@@ -344,7 +347,8 @@ class QuickBubbleView(
 
     init {
         installDrag()
-        installHoldToEnd()
+        installHold(shiftButton, shiftHold) { shift != null } // sem jornada não há o que encerrar
+        installHold(closeButton, closeHold) { true }
         showStyle(style)
     }
 
@@ -504,7 +508,8 @@ class QuickBubbleView(
     }
 
     private fun closeRadial() {
-        cancelHold()
+        shiftHold.cancel()
+        closeHold.cancel()
         if (!radialAttached) return
         try { windowManager.removeViewImmediate(radialRoot) } catch (e: Exception) { Log.w(TAG, "Falha ao fechar menu", e) }
         radialAttached = false
@@ -525,57 +530,38 @@ class QuickBubbleView(
         voiceRound.contentDescription = if (voiceOn) "Voz ligada" else "Voz desligada"
     }
 
-    // ------------------------------------------------------------------ ▶/⏸: toque = play/pausa, segurar 3 s = encerrar
+    // ------------------------------------------------------------------ segurar 3 s (▶/⏸ = encerrar jornada, ✕ = desligar)
 
+    /**
+     * Toque = [View.performClick] (play/pausa, fechar menu); segurar [HOLD_MS] = ação do [hold]
+     * (anel vermelho enche). Sair do botão com o dedo cancela. [enabled] = false: só o toque vale.
+     */
     @SuppressLint("ClickableViewAccessibility")
-    private fun installHoldToEnd() {
-        shiftButton.foreground = holdRing
-        shiftButton.setOnTouchListener { v, e ->
+    private fun installHold(button: View, hold: HoldToConfirm, enabled: () -> Boolean) {
+        var left = false
+        button.setOnTouchListener { v, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    holdDone = false
-                    holdLeft = false
+                    left = false
                     v.isPressed = true
-                    if (shift != null) startHold() // sem jornada não há o que encerrar
+                    if (enabled()) hold.start() else hold.reset()
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val out = e.x < 0 || e.y < 0 || e.x > v.width || e.y > v.height
-                    if (out && !holdLeft) { holdLeft = true; v.isPressed = false; cancelHold() }
+                    if (out && !left) { left = true; v.isPressed = false; hold.cancel() }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
                     v.isPressed = false
-                    cancelHold()
-                    if (!holdDone && !holdLeft) v.performClick() // toque simples: play/pausa
+                    hold.cancel()
+                    if (!hold.done && !left) v.performClick()
                     true
                 }
-                MotionEvent.ACTION_CANCEL -> { v.isPressed = false; cancelHold(); true }
+                MotionEvent.ACTION_CANCEL -> { v.isPressed = false; hold.cancel(); true }
                 else -> false
             }
         }
-    }
-
-    /** Anel vermelho enche em volta do botão; completo = jornada encerrada. */
-    private fun startHold() {
-        cancelHold()
-        holdAnim = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = HOLD_TO_END_MS
-            addUpdateListener { holdRing.progress = it.animatedValue as Float }
-            start()
-        }
-        shiftButton.postDelayed(endShiftRunnable, HOLD_TO_END_MS)
-    }
-
-    private fun cancelHold() {
-        shiftButton.removeCallbacks(endShiftRunnable)
-        stopHoldVisual()
-    }
-
-    private fun stopHoldVisual() {
-        holdAnim?.cancel()
-        holdAnim = null
-        holdRing.progress = 0f
     }
 
     // ------------------------------------------------------------------ painel
@@ -721,12 +707,17 @@ class QuickBubbleView(
                     downX = e.rawX; downY = e.rawY
                     startX = bubbleParams.x; startY = bubbleParams.y
                     dragging = false
+                    bubbleHold.start() // segurar parado 3 s = desligar o copiloto
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = e.rawX - downX
                     val dy = e.rawY - downY
-                    if (!dragging && (abs(dx) > slop || abs(dy) > slop)) { dragging = true; closePanel(); closeRadial() }
+                    if (!dragging && (abs(dx) > slop || abs(dy) > slop)) {
+                        dragging = true
+                        bubbleHold.cancel()
+                        closePanel(); closeRadial()
+                    }
                     if (dragging && bubbleAttached) {
                         bubbleParams.x = startX + dx.toInt()
                         bubbleParams.y = startY + dy.toInt()
@@ -735,7 +726,12 @@ class QuickBubbleView(
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (dragging) snapToEdge() else if (e.actionMasked == MotionEvent.ACTION_UP) v.performClick()
+                    bubbleHold.cancel()
+                    when {
+                        dragging -> snapToEdge()
+                        bubbleHold.done -> Unit // desligou: não abre o menu
+                        e.actionMasked == MotionEvent.ACTION_UP -> v.performClick()
+                    }
                     dragging = false
                     true
                 }
@@ -785,7 +781,7 @@ class QuickBubbleView(
         val fraction = d?.let { DayGoal.fraction(it.gross, it.goal) }
         val reached = d != null && DayGoal.reached(d.gross, d.goal)
         bubble.setGoal(fraction?.toFloat(), reached)
-        bubble.contentDescription = "MApp – ajustes rápidos" +
+        bubble.contentDescription = "MApp – toque abre o menu, segure 3 segundos para desligar" +
             (fraction?.let { " · meta do dia ${(it * 100).toInt()}%" } ?: "")
         val show = d != null && d.hasData
         labelsRoot.visibility = if (show) View.VISIBLE else View.GONE
@@ -891,7 +887,10 @@ class QuickBubbleView(
         private const val LABEL_WIDTH_DP = 96
         private const val PANEL_WIDTH_DP = 290
         private const val CONFIRM_MS = 4_000L
-        private const val HOLD_TO_END_MS = 3_000L
+        /** Segurar para encerrar a jornada (▶/⏸) ou desligar o copiloto ("M" / ✕). */
+        private const val HOLD_MS = 3_000L
+        /** No "M" e no ✕ o anel vermelho só aparece depois disso (toque comum não pisca). */
+        private const val HOLD_GRACE_MS = 300L
         private const val ITEM_DP = 56
         private const val RADIUS_DP = 118
         private const val RADIAL_SIZE_DP = 2 * (RADIUS_DP + ITEM_DP / 2 + 6)
@@ -1043,6 +1042,68 @@ private class NeonIcon(private val kind: Kind, color: Int) : Drawable() {
     override fun setColorFilter(colorFilter: ColorFilter?) { stroke.colorFilter = colorFilter; fill.colorFilter = colorFilter }
     @Deprecated("Deprecated in Java")
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+}
+
+/**
+ * Segurar para confirmar: depois de [graceMs] o anel vermelho ([HoldRing], no foreground do botão)
+ * começa a encher; em [durationMs] vibra e chama [onDone]. [cancel] apaga o anel; [done] = já confirmou.
+ */
+private class HoldToConfirm(
+    private val view: View,
+    color: Int,
+    width: Float,
+    private val durationMs: Long,
+    private val graceMs: Long,
+    private val onDone: () -> Unit,
+) {
+    private val ring = HoldRing(color, width)
+    private var anim: ValueAnimator? = null
+    var done = false
+        private set
+
+    private val showRing = Runnable {
+        anim?.cancel()
+        anim = ValueAnimator.ofFloat(graceMs.toFloat() / durationMs, 1f).apply {
+            duration = (durationMs - graceMs).coerceAtLeast(1L)
+            addUpdateListener { ring.progress = it.animatedValue as Float }
+            start()
+        }
+    }
+    private val finish = Runnable {
+        done = true
+        stopRing()
+        view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        onDone()
+    }
+
+    init {
+        view.foreground = ring
+    }
+
+    fun start() {
+        cancel()
+        done = false
+        if (graceMs > 0) view.postDelayed(showRing, graceMs) else showRing.run()
+        view.postDelayed(finish, durationMs)
+    }
+
+    fun cancel() {
+        view.removeCallbacks(showRing)
+        view.removeCallbacks(finish)
+        stopRing()
+    }
+
+    /** Toque sem segurar (botão sem ação de segurar agora). */
+    fun reset() {
+        cancel()
+        done = false
+    }
+
+    private fun stopRing() {
+        anim?.cancel()
+        anim = null
+        ring.progress = 0f
+    }
 }
 
 /** Arco de progresso desenhado por cima do anel do botão (segurar para encerrar). */
