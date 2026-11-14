@@ -7,6 +7,7 @@ import br.com.mapp.core.bubble.BubbleStyle
 import br.com.mapp.core.card.CardLayout
 import br.com.mapp.core.notify.NoticeLayout
 import br.com.mapp.core.sound.GreatSound
+import br.com.mapp.core.sound.OfferSounds
 
 /** Preferências do overlay (posição do Card, minimizado, voz, estilo do Card, som de corrida ótima, aparência do botão "M"). */
 object OverlayPrefs {
@@ -20,6 +21,8 @@ object OverlayPrefs {
     const val KEY_CARD_LAYOUT = "card_layout"
     const val KEY_GREAT_SOUND = "great_sound"
     const val KEY_GREAT_SOUND_URI = "great_sound_uri"
+    const val KEY_STOP_SOUND = "stop_sound"
+    const val KEY_STOP_SOUND_URI = "stop_sound_uri"
     const val KEY_GOAL_MARK = "goal_mark"
     const val KEY_BUBBLE_STYLE = "bubble_style"
     const val KEY_NOTICE_LAYOUT = "notice_layout"
@@ -53,6 +56,24 @@ object OverlayPrefs {
 
     fun setGreatSoundUri(context: Context, uri: Uri?) {
         of(context).edit().putString(KEY_GREAT_SOUND_URI, uri?.toString()).apply()
+    }
+
+    /**
+     * Aviso de corrida com parada no caminho ("1 parada" no cartão); padrão: [OfferSounds.STOP_DEFAULT].
+     * [GreatSound.OFF] = aviso desligado.
+     */
+    fun stopSound(context: Context): GreatSound =
+        of(context).getString(KEY_STOP_SOUND, null)?.let { GreatSound.fromId(it) } ?: OfferSounds.STOP_DEFAULT
+
+    fun setStopSound(context: Context, sound: GreatSound) {
+        of(context).edit().putString(KEY_STOP_SOUND, sound.id).apply()
+    }
+
+    /** Som do celular escolhido para o aviso de parada (null = padrão de notificação). */
+    fun stopSoundUri(context: Context): Uri? = of(context).getString(KEY_STOP_SOUND_URI, null)?.let(Uri::parse)
+
+    fun setStopSoundUri(context: Context, uri: Uri?) {
+        of(context).edit().putString(KEY_STOP_SOUND_URI, uri?.toString()).apply()
     }
 
     /** Última meta do dia comemorada com o som de dinheiro (`DayGoal.mark`). */

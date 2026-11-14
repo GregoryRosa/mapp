@@ -22,6 +22,9 @@ import androidx.lifecycle.lifecycleScope
 import br.com.mapp.MappApp
 import br.com.mapp.core.bus.OfferBus
 import br.com.mapp.core.card.CardValues
+import br.com.mapp.core.route.RideRoute
+import br.com.mapp.core.sound.OfferSound
+import br.com.mapp.core.sound.OfferSounds
 import br.com.mapp.core.goal.DayGoal
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.EvaluatedOffer
@@ -81,6 +84,8 @@ class OverlayService : LifecycleService() {
     private var dailyGoal: Double? = null
     /** Oferta que já tocou o som de corrida ótima (toca uma vez por oferta). */
     private var greatKey: OfferKey? = null
+    /** Oferta que já tocou o aviso de parada (uma vez por oferta). */
+    private var stopAlertKey: OfferKey? = null
     private var card: OfferCardView? = null
     private var bubble: QuickBubbleView? = null
     private var notice: NoticeView? = null
@@ -482,6 +487,12 @@ class OverlayService : LifecycleService() {
         return greatSound?.play() ?: 0L
     }
 
+    /** Aviso de corrida com parada no caminho (som escolhido na tela do Card). Nunca recusa nada. */
+    private fun playStopAlert(key: OfferKey): Long {
+        stopAlertKey = key
+        return greatSound?.playStop() ?: 0L
+    }
+
     /**
      * Grava no histórico de ofertas se a corrida foi aceita (aba "Aceitas hoje") e manda a notificação
      * da corrida aceita (rota + mapa) — ou a tira, quando a corrida é desmarcada.
@@ -602,11 +613,17 @@ class OverlayService : LifecycleService() {
 
         val alertZones = offer.zoneHits.filter { it.zone.alertEnabled }.toSet()
         val great = CardValues.allGreen(offer, activeProfile, OverlayPrefs.cardLayout(this))
+        val hasStops = RideRoute.stopCount(offer.raw) > 0
+        val stopSound = OverlayPrefs.stopSound(this)
         if (key != shownKey) {
             shownKey = key
             announcedZones = alertZones
-            // Tudo verde: som de corrida ótima primeiro, a voz fala quando ele acaba.
-            val soundMs = if (great) playGreat(key) else 0L
+            // Um som antes da voz: aviso de parada (se ligado) ou, tudo verde, som de corrida ótima.
+            val soundMs = when (OfferSounds.pick(hasStops, great, stopSound)) {
+                OfferSound.STOP -> playStopAlert(key)
+                OfferSound.GREAT -> playGreat(key)
+                null -> 0L
+            }
             voice?.announce(offer, soundMs)
         } else {
             if (!announcedZones.containsAll(alertZones)) {
@@ -615,8 +632,12 @@ class OverlayService : LifecycleService() {
                 announcedZones = announcedZones + alertZones
                 voice?.announceZones(fresh.toList())
             }
-            // Oferta completada depois (tempo/km lidos noutro quadro) que ficou toda verde.
-            if (great && greatKey != key) playGreat(key)
+            // Oferta completada depois (outro quadro leu a parada, o tempo ou o km).
+            when (OfferSounds.pick(hasStops, great, stopSound)) {
+                OfferSound.STOP -> if (stopAlertKey != key) playStopAlert(key)
+                OfferSound.GREAT -> if (greatKey != key) playGreat(key)
+                null -> Unit
+            }
         }
 
         val c = card ?: createCard() ?: run {

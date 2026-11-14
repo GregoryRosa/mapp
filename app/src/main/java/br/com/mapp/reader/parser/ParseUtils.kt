@@ -153,7 +153,8 @@ object ParseUtils {
     }
 
     // Botão que só existe no cartão de oferta (minúsculas, sem acento).
-    val ACCEPT_KEYWORDS: List<String> = listOf("aceitar", "accept", "corresponder", "aceite")
+    // "Selecionar": botão do cartão da Uber em algumas ofertas (print de 14/11/2026, oferta com parada).
+    val ACCEPT_KEYWORDS: List<String> = listOf("aceitar", "accept", "corresponder", "aceite", "selecionar")
 
     fun isAcceptLine(line: String, keywords: List<String> = ACCEPT_KEYWORDS): Boolean {
         val f = fold(line).trim()
