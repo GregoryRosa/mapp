@@ -23,12 +23,15 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
@@ -633,7 +636,7 @@ private fun NoticeTab() {
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                NotificationPreview(notice, chosen.stopPoints.size, expanded) { expanded = !expanded }
+                NotificationPreview(notice, chosen.stopPoints.size, expanded, photos = layout.showPhotos) { expanded = !expanded }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = !expanded, onClick = { expanded = false }, label = { Text("Fechada") })
                     FilterChip(selected = expanded, onClick = { expanded = true }, label = { Text("Aberta") })
@@ -661,6 +664,15 @@ private fun NoticeTab() {
                         SwitchRow("Mapa na notificação aberta", "Você, coleta (A), destino (B) e zonas.", layout.showMap) {
                             update(layout.copy(showMap = it))
                         }
+                        SwitchRow(
+                            "Fotos da rua (A e B)",
+                            if (OverlayPrefs.streetViewKey(ctx) != null) {
+                                "Street View da coleta e do destino ao lado do mapa — as mesmas do Card, sem gastar de novo."
+                            } else {
+                                "Precisa da chave do Google: cole em Card de corridas → Fotos da rua."
+                            },
+                            layout.showPhotos,
+                        ) { update(layout.copy(showPhotos = it)) }
                     }
                 }
 
@@ -765,7 +777,7 @@ private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onChang
 
 /** Como a notificação fica no celular (fechada ou aberta), com um mapa desenhado de exemplo. */
 @Composable
-private fun NotificationPreview(n: RideNotice, stops: Int, expanded: Boolean, onToggle: () -> Unit) {
+private fun NotificationPreview(n: RideNotice, stops: Int, expanded: Boolean, photos: Boolean, onToggle: () -> Unit) {
     val dim = Color(0xFFB0B8BC)
     Surface(
         shape = RoundedCornerShape(20.dp),
@@ -794,9 +806,17 @@ private fun NotificationPreview(n: RideNotice, stops: Int, expanded: Boolean, on
                 )
             }
             if (expanded) {
-                if (n.showMap) {
+                if (n.showMap || photos) {
                     Spacer(Modifier.height(4.dp))
-                    MapSketch(stops, Modifier.fillMaxWidth().height(112.dp).clip(RoundedCornerShape(8.dp)))
+                    Row(Modifier.fillMaxWidth().height(112.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        if (n.showMap) MapSketch(stops, Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(8.dp)))
+                        if (photos) {
+                            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                PhotoSketch("A", Color(0xFF2E7D32), Modifier.weight(1f))
+                                PhotoSketch(('A' + stops + 1).toString(), Color(0xFFC62828), Modifier.weight(1f))
+                            }
+                        }
+                    }
                 }
                 n.details.forEach {
                     Text(
@@ -809,6 +829,23 @@ private fun NotificationPreview(n: RideNotice, stops: Int, expanded: Boolean, on
                 }
             }
         }
+    }
+}
+
+/** Lugar da foto da rua na prévia (a de verdade vem do Street View), com a letra do mapa. */
+@Composable
+private fun PhotoSketch(letter: String, color: Color, modifier: Modifier) {
+    Box(modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Color(0xFF3A4046))) {
+        Box(
+            Modifier.padding(4.dp).size(20.dp).clip(CircleShape).background(color),
+            contentAlignment = Alignment.Center,
+        ) { Text(letter, color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall) }
+        Text(
+            "Foto da rua",
+            Modifier.align(Alignment.Center),
+            color = Color(0xFFB0B8BC),
+            style = MaterialTheme.typography.labelSmall,
+        )
     }
 }
 

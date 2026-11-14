@@ -6,6 +6,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.Typeface
 import android.os.Build
 import android.util.Log
 import android.view.View
@@ -15,6 +20,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import br.com.mapp.R
+import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.model.Zone
@@ -22,7 +28,9 @@ import br.com.mapp.core.notify.RideNotice
 import br.com.mapp.core.notify.RideNotices
 import br.com.mapp.core.notify.RidePoints
 import br.com.mapp.core.route.RideRoute
+import br.com.mapp.core.route.RouteStop
 import br.com.mapp.maps.MapSnapshots
+import br.com.mapp.maps.MapViews
 import br.com.mapp.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -33,8 +41,9 @@ import kotlin.math.sqrt
 
 /**
  * Notificação no celular a cada corrida aceita. Fechada: tipo, valor e busca → viagem. Expandida:
- * mapa (você, coleta A, destino B, zonas) + R$/km, R$/h, lucro, total, chegada, endereços e
- * passageiro. Sai na hora só com o texto; o mapa entra quando os tiles chegam (mesma notificação).
+ * mapa (você, coleta A, destino B, zonas) + fotos da rua de A e B ao lado (Street View, as mesmas
+ * do Card — vêm do cache, sem pedir de novo) + R$/km, R$/h, lucro, total, chegada, endereços e
+ * passageiro. Sai na hora só com o texto; mapa e fotos entram quando chegam (mesma notificação).
  * Uma por vez: a corrida aceita seguinte substitui. Some sozinha depois da duração prevista.
  */
 class RideNotifier(context: Context, private val scope: CoroutineScope) {
@@ -57,8 +66,15 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
     private var map: Bitmap? = null
     private var mapState = MapState.NONE
     private var mapJob: Job? = null
+
+    /** Fotos da rua: coleta e destino (letras do mapa) e o quadro pronto de cada uma. */
+    private var photoTargets: List<RouteStop> = emptyList()
+    private val photoTiles = HashMap<String, Bitmap>()
+    private var photoJob: Job? = null
+    private var photoVersion = 0
+
     /** Último texto/estado notificado: republicação igual não notifica de novo. */
-    private var posted: Pair<RideNotice, MapState>? = null
+    private var posted: Triple<RideNotice, MapState, Int>? = null
 
     /** Corrida aceita: notifica já com o texto e começa a desenhar o mapa. */
     fun accepted(
@@ -79,6 +95,7 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
         this.here = here
         this.zones = zones
         posted = null
+        refreshPhotos(force = true)
         refreshMap(force = true)
         post()
     }
@@ -91,6 +108,7 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
         if (key != this.key) return
         this.offer = offer
         category?.let { this.category = it }
+        refreshPhotos(force = false)
         refreshMap(force = false)
         post()
     }
@@ -100,6 +118,10 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
         if (key != this.key) return
         mapJob?.cancel()
         mapJob = null
+        photoJob?.cancel()
+        photoJob = null
+        photoTargets = emptyList()
+        photoTiles.clear()
         this.key = null
         offer = null
         map = null
@@ -122,7 +144,9 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
         }
         mapState = MapState.LOADING
         val dm = context.resources.displayMetrics
-        val width = (min(dm.widthPixels, dm.heightPixels) - CONTENT_MARGIN_DP * dm.density).toInt().coerceAtLeast(MIN_WIDTH_PX)
+        val full = contentWidthPx()
+        // Com as fotos ao lado, o mapa fica com metade da largura (desenhado já nesse tamanho).
+        val width = if (photoTargets.isEmpty()) full else ((full - PHOTO_GAP_DP * dm.density) / 2).toInt()
         val height = (MAP_HEIGHT_DP * dm.density).toInt()
         val forKey = key
         // A, B, C…: coleta, paradas no caminho e destino, com as letras mantidas mesmo sem ponto.
@@ -134,6 +158,124 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
             mapState = if (map != null) MapState.READY else MapState.FAILED
             post()
         }
+    }
+
+    private fun contentWidthPx(): Int {
+        val dm = context.resources.displayMetrics
+        return (min(dm.widthPixels, dm.heightPixels) - CONTENT_MARGIN_DP * dm.density).toInt().coerceAtLeast(MIN_WIDTH_PX)
+    }
+
+    /**
+     * Fotos da rua da coleta e do destino (as mesmas do Card: [StreetViewPhotos] guarda na memória,
+     * então normalmente não pede nada ao Google de novo). Ligadas em Card → Notificação e com a chave colada.
+     */
+    private fun refreshPhotos(force: Boolean) {
+        val o = offer ?: return
+        val on = OverlayPrefs.noticeLayout(context).showPhotos && OverlayPrefs.streetViewEnabled(context)
+        val picked = if (on) StreetView.pick(RideRoute.of(o)) else emptyList()
+        val targets = listOfNotNull(picked.firstOrNull(), picked.lastOrNull()).distinct()
+        if (!force && targets == photoTargets) return
+        photoTargets = targets
+        photoJob?.cancel()
+        photoTiles.clear()
+        photoVersion++
+        if (targets.isEmpty()) return
+        val (w, h) = photoTileSize()
+        targets.forEach { stop ->
+            val msg = when {
+                stop.point != null -> "Carregando foto…"
+                stop.address != null -> "Localizando endereço…"
+                else -> "Endereço não lido"
+            }
+            photoTiles[stop.letter] = placeholderTile(stop, msg, w, h)
+        }
+        val forKey = key
+        photoJob = scope.launch {
+            targets.forEach { stop ->
+                val point = stop.point ?: return@forEach
+                val result = StreetViewPhotos.load(context, point)
+                if (forKey != key) return@launch
+                photoTiles[stop.letter] = when (result) {
+                    is StreetViewPhotos.Result.Photo -> photoTile(stop, result, w, h)
+                    is StreetViewPhotos.Result.Missing -> placeholderTile(stop, result.message, w, h)
+                }
+                photoVersion++
+                post()
+            }
+        }
+    }
+
+    /**
+     * Tamanho de cada quadro em pixels: metade da largura (ao lado do mapa) ou a largura toda (mapa
+     * desligado), metade da altura do mapa. No máximo 2 px por dp: a notificação vai por IPC.
+     */
+    private fun photoTileSize(): Pair<Int, Int> {
+        val dm = context.resources.displayMetrics
+        val withMap = OverlayPrefs.noticeLayout(context).showMap
+        val widthDp = contentWidthPx() / dm.density / (if (withMap) 2 else 1) - PHOTO_GAP_DP
+        val heightDp = (MAP_HEIGHT_DP - PHOTO_GAP_DP) / 2f
+        val scale = min(dm.density, 2f)
+        return (widthDp * scale).toInt().coerceAtLeast(1) to (heightDp * scale).toInt().coerceAtLeast(1)
+    }
+
+    /** Foto cortada no tamanho do quadro (centro, onde fica a fachada) + letra e crédito desenhados. */
+    private fun photoTile(stop: RouteStop, photo: StreetViewPhotos.Result.Photo, w: Int, h: Int): Bitmap {
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565)
+        val canvas = Canvas(out)
+        val src = photo.bitmap
+        val scale = maxOf(w.toFloat() / src.width, h.toFloat() / src.height)
+        val cw = (w / scale).toInt().coerceIn(1, src.width)
+        val ch = (h / scale).toInt().coerceIn(1, src.height)
+        val left = (src.width - cw) / 2
+        val top = (src.height - ch) / 2
+        canvas.drawBitmap(src, Rect(left, top, left + cw, top + ch), Rect(0, 0, w, h), Paint(Paint.FILTER_BITMAP_FLAG))
+        drawBadge(canvas, stop, h)
+        val credit = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xDDFFFFFF.toInt()
+            textSize = h * 0.13f
+            textAlign = Paint.Align.RIGHT
+            setShadowLayer(3f, 0f, 0f, Color.BLACK)
+        }
+        canvas.drawText(photo.credit, w - h * 0.06f, h - h * 0.07f, credit)
+        return out
+    }
+
+    /** Quadro sem foto (carregando, sem foto aqui, sem internet…) com a letra do ponto. */
+    private fun placeholderTile(stop: RouteStop, message: String, w: Int, h: Int): Bitmap {
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565)
+        val canvas = Canvas(out)
+        canvas.drawColor(PHOTO_BG)
+        drawBadge(canvas, stop, h)
+        val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFBDBDBD.toInt()
+            textSize = h * 0.17f
+            textAlign = Paint.Align.CENTER
+        }
+        // Texto à direita da letra, centralizado no espaço que sobra.
+        val start = h * 0.5f
+        canvas.drawText(message, start + (w - start) / 2f, h / 2f + text.textSize / 3f, text)
+        return out
+    }
+
+    private fun drawBadge(canvas: Canvas, stop: RouteStop, h: Int) {
+        val r = h * 0.17f
+        val cx = h * 0.06f + r
+        val cy = h * 0.06f + r
+        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = MapViews.colorOf(stop.kind) }
+        val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.STROKE
+            strokeWidth = r * 0.12f
+        }
+        canvas.drawCircle(cx, cy, r, fill)
+        canvas.drawCircle(cx, cy, r, ring)
+        val letter = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = r * 1.2f
+            typeface = Typeface.DEFAULT_BOLD
+            textAlign = Paint.Align.CENTER
+        }
+        canvas.drawText(stop.letter, cx, cy + letter.textSize / 3f, letter)
     }
 
     /**
@@ -159,8 +301,9 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
         if (!canNotify()) return
         val layout = OverlayPrefs.noticeLayout(context)
         val text = RideNotices.of(o, category, passenger, acceptedAt, ZoneId.systemDefault(), onBoard, points, layout)
-        if (posted == text to mapState) return
-        posted = text to mapState
+        val state = Triple(text, mapState, photoVersion)
+        if (posted == state) return
+        posted = state
 
         val note = if (!text.showMap) null else when (mapState) {
             MapState.LOADING -> "Carregando mapa…"
@@ -179,12 +322,17 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
             setTextViewText(R.id.ride_summary, text.summary)
             setViewVisibility(R.id.ride_summary, summaryVisibility)
             val bmp = map?.takeIf { text.showMap }
-            if (bmp != null) {
-                setImageViewBitmap(R.id.ride_map, bmp)
-                setViewVisibility(R.id.ride_map, View.VISIBLE)
-            } else {
-                setViewVisibility(R.id.ride_map, View.GONE)
-            }
+            val tiles = photoTargets.mapNotNull { photoTiles[it.letter] }
+            // Com fotos, o espaço do mapa fica reservado enquanto ele carrega (as fotos não pulam de lugar).
+            val mapSlot = bmp != null || (tiles.isNotEmpty() && text.showMap && mapState == MapState.LOADING)
+            if (bmp != null) setImageViewBitmap(R.id.ride_map, bmp)
+            setViewVisibility(R.id.ride_map, if (mapSlot) View.VISIBLE else View.GONE)
+            setViewVisibility(R.id.ride_photos, if (tiles.isEmpty()) View.GONE else View.VISIBLE)
+            tiles.getOrNull(0)?.let { setImageViewBitmap(R.id.ride_photo_a, it) }
+            val second = tiles.getOrNull(1)
+            if (second != null) setImageViewBitmap(R.id.ride_photo_b, second)
+            setViewVisibility(R.id.ride_photo_b, if (second != null) View.VISIBLE else View.GONE)
+            setViewVisibility(R.id.ride_media, if (mapSlot || tiles.isNotEmpty()) View.VISIBLE else View.GONE)
             if (note != null) {
                 setTextViewText(R.id.ride_map_note, note)
                 setViewVisibility(R.id.ride_map_note, View.VISIBLE)
@@ -257,6 +405,9 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
         const val NOTIFICATION_ID = 1002
         const val REQUEST_OPEN = 10
         const val MAP_HEIGHT_DP = 112
+        /** Espaço entre o mapa e as fotos e entre as duas fotos. */
+        const val PHOTO_GAP_DP = 4
+        val PHOTO_BG = 0xFF2C2F33.toInt()
         /** Margens da notificação dos dois lados (o ImageView corta o que sobrar, centralizado). */
         const val CONTENT_MARGIN_DP = 48
         const val MIN_WIDTH_PX = 320

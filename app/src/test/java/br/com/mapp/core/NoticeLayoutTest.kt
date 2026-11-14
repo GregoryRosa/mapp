@@ -16,6 +16,7 @@ class NoticeLayoutTest {
         assertEquals(listOf(NoticeItem.PICKUP, NoticeItem.TRIP), d.line(NoticeLine.TEXT))
         assertTrue(d.headline)
         assertTrue(d.showMap)
+        assertTrue(d.showPhotos)
         assertEquals(listOf(NoticeItem.NET_PER_HOUR), d.available)
     }
 
@@ -50,7 +51,7 @@ class NoticeLayoutTest {
     }
 
     @Test fun codec_ida_e_volta() {
-        val l = d.place(NoticeItem.NET_PER_HOUR, NoticeLine.EXTRA5, 1).copy(headline = false, showMap = false)
+        val l = d.place(NoticeItem.NET_PER_HOUR, NoticeLine.EXTRA5, 1).copy(headline = false, showMap = false, showPhotos = false)
         assertEquals(l, NoticeLayout.decode(l.encode()))
         assertEquals(d, NoticeLayout.decode(d.encode()))
     }
@@ -63,5 +64,7 @@ class NoticeLayoutTest {
         assertEquals(listOf(NoticeItem.TRIP), l.line(NoticeLine.TEXT)) // valor já usado no título
         assertTrue(l.headline)
         assertFalse(l.showMap)
+        assertTrue(l.showPhotos) // texto salvo antes das fotos: ligado
+        assertFalse(NoticeLayout.decode("v1;title=price;photos=0").showPhotos)
     }
 }
