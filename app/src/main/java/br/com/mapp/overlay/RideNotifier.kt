@@ -21,6 +21,7 @@ import br.com.mapp.core.model.Zone
 import br.com.mapp.core.notify.RideNotice
 import br.com.mapp.core.notify.RideNotices
 import br.com.mapp.core.notify.RidePoints
+import br.com.mapp.core.route.RideRoute
 import br.com.mapp.maps.MapSnapshots
 import br.com.mapp.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
@@ -108,8 +109,8 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
 
     private fun refreshMap(force: Boolean) {
         val o = offer ?: return
-        val next = RideNotices.points(here, o.pickup, o.dropoff)
-        if (!force && next.pickup == points.pickup && next.dropoff == points.dropoff) return
+        val next = RideNotices.points(here, o.pickup, o.dropoff, o.stops)
+        if (!force && next.pickup == points.pickup && next.dropoff == points.dropoff && next.stops == points.stops) return
         points = next
         mapJob?.cancel()
         map = null
@@ -124,8 +125,10 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
         val width = (min(dm.widthPixels, dm.heightPixels) - CONTENT_MARGIN_DP * dm.density).toInt().coerceAtLeast(MIN_WIDTH_PX)
         val height = (MAP_HEIGHT_DP * dm.density).toInt()
         val forKey = key
+        // A, B, C…: coleta, paradas no caminho e destino, com as letras mantidas mesmo sem ponto.
+        val route = RideRoute.of(o.raw, next.pickup, next.stops, next.dropoff)
         mapJob = scope.launch {
-            val drawn = MapSnapshots.render(context, frame, width, height, next, zones, TILE_TIMEOUT_MS)
+            val drawn = MapSnapshots.render(context, frame, width, height, next.here, route, zones, TILE_TIMEOUT_MS)
             if (forKey != key) return@launch
             map = drawn?.let { compact(it) }
             mapState = if (map != null) MapState.READY else MapState.FAILED

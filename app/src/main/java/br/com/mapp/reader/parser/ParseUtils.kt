@@ -347,6 +347,45 @@ object ParseUtils {
 
     fun hasStreetPrefix(text: String): Boolean = STREET_PREFIX.containsMatchIn(normalize(text))
 
+    // ---------------------------------------------------------------- paradas no caminho (CALIBRAR)
+
+    // Aviso de paradas no cartão (já sem acento, minúsculo): "Várias paradas", "Múltiplas paradas",
+    // "2 paradas", "+1 parada", "Viagem com 2 paradas", "Com parada", "Paradas adicionais",
+    // "Multiple stops". "Parada" sozinha com outra palavra NÃO conta: é bairro ("Parada Inglesa").
+    private val STOP_MARKER = Regex(
+        """^(?:viagem\s+)?(?:com\s+)?(?:\+?\s*(\d{1,2})\s*paradas?|(?:varias|multiplas)\s+paradas?|""" +
+            """paradas?\s+(?:adiciona|planejad|extra|no caminho)\w*|multiple\s+stops|\+?\s*(\d{1,2})\s*stops?)(?:\W.*)?$""",
+    )
+    private val STOP_MARKER_WITH = Regex("""^(?:viagem\s+)?com\s+paradas?(?:\W.*)?$""")
+    // "Parada: Rua X", "Parada 1 - Rua X", "1ª parada: Rua X".
+    private val STOP_LABEL = Regex("""^(?:\d{1,2}\s*[ªaº°]?\s*)?parada(?:\s*\d{1,2})?\s*[:\-–]\s*""", RegexOption.IGNORE_CASE)
+    // Só o rótulo, numa linha (OCR): "Parada", "Parada 2", "2ª parada".
+    private val STOP_LABEL_ONLY = Regex("""^(?:\d{1,2}\s*[ªaº°]?\s*)?parada(?:\s*\d{1,2})?:?$""")
+
+    /**
+     * A linha avisa que a corrida tem paradas no caminho? Devolve o nº de paradas (sem número no
+     * aviso: 1) ou null. Linhas longas (frases da tela) não contam.
+     */
+    fun stopMarker(text: String): Int? {
+        val f = fold(normalize(text))
+        if (f.length > 40) return null
+        if (STOP_MARKER_WITH.matches(f)) return 1
+        val m = STOP_MARKER.find(f) ?: return null
+        val n = m.groupValues[1].ifEmpty { m.groupValues[2] }.toIntOrNull()
+        return (n ?: 1).coerceIn(1, 9)
+    }
+
+    /** Linha que é só o rótulo de uma parada ("Parada", "Parada 2"), sem o endereço. */
+    fun isStopLabelOnly(text: String): Boolean = STOP_LABEL_ONLY.matches(fold(normalize(text)))
+
+    /** Endereço de uma parada rotulada na mesma linha ("Parada: Rua X, 10") ou null. */
+    fun labeledStop(text: String, blocked: Collection<String> = emptyList()): String? {
+        val t = normalize(text)
+        val m = STOP_LABEL.find(t) ?: return null
+        val rest = t.substring(m.range.last + 1).trim()
+        return rest.takeIf { looksLikeAddress(it, blocked) || isAddressPart(it, blocked) }
+    }
+
     /**
      * Heurística: parece endereço? Precisa ter letras, não ter preço/distância/tempo/nota e
      * começar com tipo de logradouro ("Rua", "Av.", ...) ou ter vírgula / " - " (rua, número - bairro).
@@ -355,6 +394,7 @@ object ParseUtils {
     fun looksLikeAddress(text: String, blocked: Collection<String> = emptyList()): Boolean {
         val t = normalize(text)
         if (t.length !in 5..160) return false
+        if (stopMarker(t) != null || isStopLabelOnly(t)) return false
         if (t.count { it.isLetter() } < 3) return false
         if (hasMoney(t) || findDistances(t).isNotEmpty() || findDurations(t).isNotEmpty()) return false
         if (parseRating(t) != null) return false
@@ -377,6 +417,7 @@ object ParseUtils {
     fun isAddressPart(text: String, blocked: Collection<String> = emptyList()): Boolean {
         val t = normalize(text)
         if (t.length !in 3..80 || t.count { it.isLetter() } < 3) return false
+        if (stopMarker(t) != null || isStopLabelOnly(t)) return false
         if (!ADDRESS_CHARS.matches(t)) return false
         if (hasMoney(t) || findDistances(t).isNotEmpty() || findDurations(t).isNotEmpty()) return false
         if (parseRating(t) != null) return false

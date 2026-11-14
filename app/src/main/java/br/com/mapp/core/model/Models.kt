@@ -28,6 +28,13 @@ data class RawOffer(
     val category: String? = null,
     val rawText: String = "",
     val capturedAt: Long = System.currentTimeMillis(),
+    /** Paradas no caminho entre a coleta e o destino final, em ordem (endereços lidos no cartão). */
+    val stopAddresses: List<String> = emptyList(),
+    /**
+     * Nº de paradas no caminho anunciado no cartão ("1 parada", "Várias paradas" = 1). 0 = direto.
+     * Pode ser maior que [stopAddresses] (cartão avisa a parada sem mostrar o endereço).
+     */
+    val stopCount: Int = 0,
 )
 
 /**
@@ -197,4 +204,6 @@ data class EvaluatedOffer(
     val pickup: GeoPoint? = null,
     val dropoff: GeoPoint? = null,
     val zoneHits: List<ZoneHit> = emptyList(),
+    /** Paradas no caminho geocodificadas, na ordem de [RawOffer.stopAddresses] (null = não localizada). */
+    val stops: List<GeoPoint?> = emptyList(),
 )

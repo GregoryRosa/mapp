@@ -221,8 +221,8 @@ class OfferTracker(
     }
 
     /**
-     * Oferta na tela completada por um quadro da mesma oferta: números pelo voto; endereço/tipo que
-     * faltavam vêm do quadro (endereço só se o preço bate — leitura confiável).
+     * Oferta na tela completada por um quadro da mesma oferta: números pelo voto; endereço/tipo/paradas
+     * que faltavam vêm do quadro (endereço e paradas só se o preço bate — leitura confiável).
      */
     private fun merge(current: RawOffer, frame: RawOffer): RawOffer {
         val samePrice = frame.price == current.price
@@ -234,6 +234,9 @@ class OfferTracker(
             pickupAddress = current.pickupAddress ?: frame.pickupAddress.takeIf { samePrice },
             dropoffAddress = current.dropoffAddress ?: frame.dropoffAddress.takeIf { samePrice },
             category = current.category ?: frame.category,
+            // Paradas: o quadro que leu mais endereços de parada completa; o aviso ("2 paradas") fica com o maior.
+            stopAddresses = if (samePrice && frame.stopAddresses.size > current.stopAddresses.size) frame.stopAddresses else current.stopAddresses,
+            stopCount = if (samePrice) maxOf(current.stopCount, frame.stopCount) else current.stopCount,
         )
     }
 

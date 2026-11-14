@@ -11,6 +11,8 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.model.Zone
+import br.com.mapp.core.route.RouteStop
+import br.com.mapp.core.route.StopKind
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.views.CustomZoomButtonsController
@@ -37,6 +39,8 @@ object MapViews {
     val COLOR_CURRENT: Int = 0xFF1E88E5.toInt()
     val COLOR_PICKUP: Int = 0xFF2E7D32.toInt()
     val COLOR_DROPOFF: Int = 0xFFC62828.toInt()
+    /** Paradas no caminho (B, C… entre a coleta e o destino). */
+    val COLOR_STOP: Int = 0xFFEF6C00.toInt()
     val COLOR_DRAFT: Int = 0xFFFF6F00.toInt()
 
     /**
@@ -126,28 +130,40 @@ object MapViews {
     fun addCurrentPosition(map: MapView, point: GeoPoint): Marker =
         addMarker(map, point, label = null, color = COLOR_CURRENT, title = "Você está aqui", sizeDp = 18f)
 
-    fun addPickup(map: MapView, point: GeoPoint): Marker =
-        addMarker(map, point, label = "A", color = COLOR_PICKUP, title = "Coleta")
+    /** Cor do marcador de cada ponto da corrida: coleta verde, paradas laranja, destino vermelho. */
+    fun colorOf(kind: StopKind): Int = when (kind) {
+        StopKind.PICKUP -> COLOR_PICKUP
+        StopKind.STOP -> COLOR_STOP
+        StopKind.DROPOFF -> COLOR_DROPOFF
+    }
 
-    fun addDropoff(map: MapView, point: GeoPoint): Marker =
-        addMarker(map, point, label = "B", color = COLOR_DROPOFF, title = "Destino")
+    fun titleOf(stop: RouteStop): String = when (stop.kind) {
+        StopKind.PICKUP -> "Coleta"
+        StopKind.STOP -> "Parada ${stop.letter}"
+        StopKind.DROPOFF -> "Destino"
+    }
 
-    /** Desenha zonas + posição atual + A + B e enquadra os pontos. Usado pelo mini mapa. Devolve o marcador da posição. */
+    /** Marcador de um ponto da corrida com a letra dele (A coleta, B/C… paradas, última = destino). */
+    fun addStop(map: MapView, stop: RouteStop): Marker? =
+        stop.point?.let { addMarker(map, it, label = stop.letter, color = colorOf(stop.kind), title = titleOf(stop)) }
+
+    /**
+     * Desenha zonas + posição atual + os pontos da corrida com as letras (A, B, C…) e enquadra tudo.
+     * Usado pelo mini mapa do Card. Devolve o marcador da posição.
+     */
     fun renderOffer(
         map: MapView,
         zones: List<Zone>,
         current: GeoPoint?,
-        pickup: GeoPoint?,
-        dropoff: GeoPoint?,
+        route: List<RouteStop>,
         marginDp: Int = 28,
     ): Marker? {
         clear(map)
         addZones(map, zones)
         val here = current?.let { addCurrentPosition(map, it) }
-        pickup?.let { addPickup(map, it) }
-        dropoff?.let { addDropoff(map, it) }
+        route.forEach { addStop(map, it) }
         map.invalidate()
-        frame(map, listOfNotNull(current, pickup, dropoff), marginDp)
+        frame(map, listOfNotNull(current) + route.mapNotNull { it.point }, marginDp)
         return here
     }
 

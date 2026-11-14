@@ -60,6 +60,10 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -543,11 +547,12 @@ private fun NoticeTab() {
     val offer = remember(sample, profile, cost) {
         val zones = if (chosen.dangerAtDropoff) listOf(NOTICE_ZONE) else emptyList()
         OfferEvaluator.evaluate(chosen.raw, profile, cost, zones, NOTICE_PICKUP, NOTICE_DROPOFF)
+            .copy(stops = chosen.stopPoints)
     }
     val notice = remember(offer, layout) {
         RideNotices.of(
             offer, chosen.raw.category, chosen.passenger, acceptedAt, ZoneId.systemDefault(),
-            points = RidePoints(NOTICE_HERE, NOTICE_PICKUP, NOTICE_DROPOFF),
+            points = RidePoints(NOTICE_HERE, NOTICE_PICKUP, NOTICE_DROPOFF, chosen.stopPoints),
             layout = layout,
         )
     }
@@ -584,7 +589,7 @@ private fun NoticeTab() {
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                NotificationPreview(notice, expanded) { expanded = !expanded }
+                NotificationPreview(notice, chosen.stopPoints.size, expanded) { expanded = !expanded }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = !expanded, onClick = { expanded = false }, label = { Text("Fechada") })
                     FilterChip(selected = expanded, onClick = { expanded = true }, label = { Text("Aberta") })
@@ -669,7 +674,7 @@ private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onChang
 
 /** Como a notificação fica no celular (fechada ou aberta), com um mapa desenhado de exemplo. */
 @Composable
-private fun NotificationPreview(n: RideNotice, expanded: Boolean, onToggle: () -> Unit) {
+private fun NotificationPreview(n: RideNotice, stops: Int, expanded: Boolean, onToggle: () -> Unit) {
     val dim = Color(0xFFB0B8BC)
     Surface(
         shape = RoundedCornerShape(20.dp),
@@ -700,7 +705,7 @@ private fun NotificationPreview(n: RideNotice, expanded: Boolean, onToggle: () -
             if (expanded) {
                 if (n.showMap) {
                     Spacer(Modifier.height(4.dp))
-                    MapSketch(Modifier.fillMaxWidth().height(112.dp).clip(RoundedCornerShape(8.dp)))
+                    MapSketch(stops, Modifier.fillMaxWidth().height(112.dp).clip(RoundedCornerShape(8.dp)))
                 }
                 n.details.forEach {
                     Text(
@@ -716,9 +721,12 @@ private fun NotificationPreview(n: RideNotice, expanded: Boolean, onToggle: () -
     }
 }
 
-/** Mapa de exemplo da prévia (o de verdade é o do OpenStreetMap). */
+/**
+ * Mapa de exemplo da prévia (o de verdade é o do OpenStreetMap): você → A tracejado, A → paradas →
+ * destino com seta de sentido em cada trecho, letras A, B, C… como na notificação.
+ */
 @Composable
-private fun MapSketch(modifier: Modifier) {
+private fun MapSketch(stops: Int, modifier: Modifier) {
     Canvas(modifier.background(Color(0xFFF2EFE9))) {
         val w = size.width
         val h = size.height
@@ -726,26 +734,81 @@ private fun MapSketch(modifier: Modifier) {
         val streetW = 6.dp.toPx()
         listOf(0.2f, 0.55f, 0.85f).forEach { y -> drawLine(street, Offset(0f, h * y), Offset(w, h * (y + 0.08f)), streetW) }
         listOf(0.28f, 0.62f).forEach { x -> drawLine(street, Offset(w * x, 0f), Offset(w * (x - 0.04f), h), streetW) }
-        val here = Offset(w * 0.16f, h * 0.72f)
-        val a = Offset(w * 0.36f, h * 0.34f)
-        val b = Offset(w * 0.8f, h * 0.62f)
+        val here = Offset(w * 0.12f, h * 0.74f)
+        val a = Offset(w * 0.3f, h * 0.3f)
+        val end = Offset(w * 0.86f, h * 0.66f)
+        // Paradas espalhadas entre A e o destino, um pouco acima da reta.
+        val middle = (1..stops).map { i ->
+            val f = i / (stops + 1f)
+            Offset(a.x + (end.x - a.x) * f, a.y + (end.y - a.y) * f - h * 0.22f)
+        }
+        val route = listOf(a) + middle + end
         val blue = Color(0xFF1E88E5)
+        val dark = Color(0xFF37474F)
+        val lineW = 3.dp.toPx()
+
+        fun arrow(from: Offset, to: Offset, color: Color) {
+            val d = to - from
+            val len = d.getDistance()
+            val size = 9.dp.toPx()
+            if (len < 26.dp.toPx() + size * 2) return
+            val u = d / len
+            val n = Offset(-u.y, u.x)
+            val tip = from + d / 2f + u * (size / 2)
+            val base = tip - u * size
+            val path = Path().apply {
+                moveTo(tip.x, tip.y)
+                lineTo(base.x + n.x * size * 0.6f, base.y + n.y * size * 0.6f)
+                lineTo(base.x - n.x * size * 0.6f, base.y - n.y * size * 0.6f)
+                close()
+            }
+            drawPath(path, Color.White, style = Stroke(width = 2.dp.toPx(), join = StrokeJoin.Round))
+            drawPath(path, color)
+        }
+
         drawLine(
-            blue, here, a, strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round,
+            blue, here, a, strokeWidth = lineW, cap = StrokeCap.Round,
             pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 5.dp.toPx())),
         )
-        drawLine(Color(0xFF37474F), a, b, strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
+        arrow(here, a, blue)
+        route.zipWithNext { p, q ->
+            drawLine(dark, p, q, strokeWidth = lineW, cap = StrokeCap.Round)
+            arrow(p, q, dark)
+        }
+
         val ring = 2.5.dp.toPx()
-        listOf(Triple(here, blue, 8.dp.toPx()), Triple(a, Color(0xFF2E7D32), 11.dp.toPx()), Triple(b, Color(0xFFC62828), 11.dp.toPx()))
-            .forEach { (c, color, r) ->
-                drawCircle(Color.White, r, c)
-                drawCircle(color, r - ring, c)
+        val letter = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            textAlign = android.graphics.Paint.Align.CENTER
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            textSize = 12.dp.toPx()
+        }
+        drawCircle(Color.White, 8.dp.toPx(), here)
+        drawCircle(blue, 8.dp.toPx() - ring, here)
+        route.forEachIndexed { i, c ->
+            val color = when (i) {
+                0 -> Color(0xFF2E7D32)
+                route.lastIndex -> Color(0xFFC62828)
+                else -> Color(0xFFEF6C00)
             }
+            val r = 11.dp.toPx()
+            drawCircle(Color.White, r, c)
+            drawCircle(color, r - ring, c)
+            drawContext.canvas.nativeCanvas.drawText(
+                ('A' + i).toString(), c.x, c.y - (letter.ascent() + letter.descent()) / 2f, letter,
+            )
+        }
     }
 }
 
-/** Corrida de exemplo da prévia da notificação. */
-private class NoticeSample(val label: String, val raw: RawOffer, val passenger: String?, val dangerAtDropoff: Boolean)
+/** Corrida de exemplo da prévia da notificação ([stopPoints] = paradas no caminho já localizadas). */
+private class NoticeSample(
+    val label: String,
+    val raw: RawOffer,
+    val passenger: String?,
+    val dangerAtDropoff: Boolean,
+    val stopPoints: List<GeoPoint> = emptyList(),
+)
 
 private val NOTICE_HERE = GeoPoint(-23.5540, -46.6620)
 private val NOTICE_PICKUP = GeoPoint(-23.5614, -46.6559)
@@ -786,5 +849,16 @@ private val NOTICE_SAMPLES = listOf(
         ),
         passenger = null,
         dangerAtDropoff = true,
+    ),
+    NoticeSample(
+        "Com parada",
+        RawOffer(
+            Platform.UBER, 32.10, tripKm = 16.2, tripMin = 35, pickupKm = 1.8, pickupMin = 5, passengerRating = 4.90,
+            pickupAddress = "Rua Augusta, 1500", dropoffAddress = "Av. Paulista, 900", category = "UberX",
+            stopAddresses = listOf("Rua Oscar Freire, 200"), stopCount = 1,
+        ),
+        passenger = "bia",
+        dangerAtDropoff = false,
+        stopPoints = listOf(GeoPoint(-23.5640, -46.6700)),
     ),
 )
