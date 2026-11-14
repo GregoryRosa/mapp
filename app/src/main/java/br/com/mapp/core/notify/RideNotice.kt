@@ -8,6 +8,8 @@ import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.PointRole
 import br.com.mapp.core.model.Signal
 import br.com.mapp.core.model.ZoneType
+import br.com.mapp.core.route.RideRoute
+import br.com.mapp.core.route.StopKind
 import br.com.mapp.core.shift.ShiftMath
 import java.time.Instant
 import java.time.ZoneId
@@ -33,9 +35,17 @@ data class MapFrame(val north: Double, val south: Double, val east: Double, val 
     val centerLon: Double get() = (east + west) / 2
 }
 
-/** Pontos do mapa da notificação: sua posição, coleta (A) e destino (B). */
-data class RidePoints(val here: GeoPoint?, val pickup: GeoPoint?, val dropoff: GeoPoint?) {
-    val all: List<GeoPoint> get() = listOfNotNull(here, pickup, dropoff)
+/**
+ * Pontos do mapa da notificação: sua posição, coleta, paradas no caminho (na ordem; null = não
+ * localizada) e destino final. As letras (A, B, C…) vêm de [br.com.mapp.core.route.RideRoute].
+ */
+data class RidePoints(
+    val here: GeoPoint?,
+    val pickup: GeoPoint?,
+    val dropoff: GeoPoint?,
+    val stops: List<GeoPoint?> = emptyList(),
+) {
+    val all: List<GeoPoint> get() = listOfNotNull(here, pickup) + stops.filterNotNull() + listOfNotNull(dropoff)
     val isEmpty: Boolean get() = all.isEmpty()
 }
 
@@ -67,7 +77,7 @@ object RideNotices {
         acceptedAt: Long,
         zone: ZoneId,
         onBoard: Boolean = false,
-        points: RidePoints = RidePoints(null, offer.pickup, offer.dropoff),
+        points: RidePoints = RidePoints(null, offer.pickup, offer.dropoff, offer.stops),
         layout: NoticeLayout = NoticeLayout.DEFAULT,
     ): RideNotice {
         val values = values(offer, category, passenger, acceptedAt, zone, onBoard)
@@ -122,6 +132,13 @@ object RideNotices {
         val netPerHour = m.netProfit?.let { net -> legs.minutes?.takeIf { it > 0 }?.let { net / it * 60.0 } }
         val name = passenger?.trim()?.takeIf { it.isNotEmpty() }?.replaceFirstChar { it.uppercase() }
 
+        val route = RideRoute.of(offer)
+        val stopsLabel = RideRoute.stopsLabel(raw)
+        val trip = leg("Viagem", raw.tripKm, raw.tripMin)
+        val stops = route.filter { it.kind == StopKind.STOP }
+            .joinToString(" · ") { "${it.letter} · ${it.address ?: "parada"}" }.ifEmpty { null }
+        val destination = route.last()
+
         val hits = offer.zoneHits.filter { it.zone.alertEnabled }.distinct()
             .sortedBy { if (it.zone.type == ZoneType.DANGER) 0 else 1 }
         val zones = hits.joinToString(" · ") { hit ->
@@ -134,7 +151,11 @@ object RideNotices {
             NoticeItem.KIND to kind(raw.platform, category),
             NoticeItem.PRICE to ShiftMath.money(raw.price),
             NoticeItem.PICKUP to leg("Busca", raw.pickupKm, raw.pickupMin),
-            NoticeItem.TRIP to leg("Viagem", raw.tripKm, raw.tripMin),
+            NoticeItem.TRIP to when {
+                stopsLabel == null -> trip
+                trip == null -> "Viagem com $stopsLabel"
+                else -> "$trip · $stopsLabel"
+            },
             NoticeItem.TOTAL to total,
             NoticeItem.ARRIVAL to arrival,
             NoticeItem.PER_KM to m.perKm?.let { "$km${ShiftMath.money(it)}/km" },
@@ -143,27 +164,39 @@ object RideNotices {
             NoticeItem.NET_PER_HOUR to netPerHour?.let { "Lucro/h ${if (km.isNotEmpty() || time.isNotEmpty()) "~" else ""}${ShiftMath.money(it)}" },
             NoticeItem.RATING to raw.passengerRating?.let { "★ ${ShiftMath.num(it, 2)}" },
             NoticeItem.PASSENGER to name?.let { "Passageiro: $it" },
-            NoticeItem.PICKUP_ADDRESS to raw.pickupAddress?.trim()?.takeIf { it.isNotEmpty() }?.let { "A · $it" },
-            NoticeItem.DROPOFF_ADDRESS to raw.dropoffAddress?.trim()?.takeIf { it.isNotEmpty() }?.let { "B · $it" },
+            NoticeItem.PICKUP_ADDRESS to route.first().address?.let { "${route.first().letter} · $it" },
+            NoticeItem.STOPS to stops,
+            NoticeItem.DROPOFF_ADDRESS to destination.address?.let { "${destination.letter} · $it" },
             NoticeItem.ZONES to zones,
         )
     }
 
-    /** Aviso embaixo do mapa quando coleta/destino não aparecem nele (endereço não lido ou não achado). */
+    /**
+     * Aviso embaixo do mapa quando coleta, parada ou destino não aparecem nele (endereço não lido ou
+     * não achado). Ex.: "Destino não aparece no mapa: endereço não localizado".
+     */
     fun mapNote(offer: EvaluatedOffer, points: RidePoints): String? {
         if (points.isEmpty) return "Sem mapa: endereços da corrida não lidos"
-        val raw = offer.raw
-        val missing = buildList<Pair<String, String?>> {
-            if (points.pickup == null) add("Coleta" to raw.pickupAddress)
-            if (points.dropoff == null) add("Destino" to raw.dropoffAddress)
-        }
+        val route = RideRoute.of(offer.raw, points.pickup, points.stops, points.dropoff)
+        val missing = route.filter { it.point == null }
         if (missing.isEmpty()) return null
-        val read = missing.any { !it.second.isNullOrBlank() }
-        val who = if (missing.size == 2) "Coleta e destino" else missing[0].first
-        val verb = if (missing.size == 2) "não aparecem" else "não aparece"
+        val names = missing.map {
+            when (it.kind) {
+                StopKind.PICKUP -> "coleta"
+                StopKind.STOP -> "parada ${it.letter}"
+                StopKind.DROPOFF -> "destino"
+            }
+        }
+        val who = when (names.size) {
+            1 -> names[0]
+            else -> names.dropLast(1).joinToString(", ") + " e " + names.last()
+        }.replaceFirstChar { it.uppercase() }
+        val many = missing.size > 1
+        val read = missing.any { it.address != null }
+        val verb = if (many) "não aparecem" else "não aparece"
         val why = when {
-            !read -> if (missing.size == 2) "endereços não lidos" else "endereço não lido"
-            missing.size == 2 -> "endereços não localizados"
+            !read -> if (many) "endereços não lidos" else "endereço não lido"
+            many -> "endereços não localizados"
             else -> "endereço não localizado"
         }
         return "$who $verb no mapa: $why"
@@ -173,10 +206,10 @@ object RideNotices {
      * Pontos do mapa. A posição atual fica de fora quando está a mais de [MAX_HERE_KM] da coleta (ou
      * do destino): é leitura velha do GPS e deixaria o mapa do tamanho do estado.
      */
-    fun points(here: GeoPoint?, pickup: GeoPoint?, dropoff: GeoPoint?): RidePoints {
-        val anchor = pickup ?: dropoff
+    fun points(here: GeoPoint?, pickup: GeoPoint?, dropoff: GeoPoint?, stops: List<GeoPoint?> = emptyList()): RidePoints {
+        val anchor = pickup ?: stops.firstNotNullOfOrNull { it } ?: dropoff
         val keepHere = here != null && (anchor == null || Geo.haversineKm(here, anchor) <= MAX_HERE_KM)
-        return RidePoints(if (keepHere) here else null, pickup, dropoff)
+        return RidePoints(if (keepHere) here else null, pickup, dropoff, stops)
     }
 
     /** Retângulo que mostra todos os pontos com folga ([MARGIN]) e lado mínimo ([MIN_SPAN_DEG]). */

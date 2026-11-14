@@ -169,8 +169,17 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
 
         val legs = extractLegs(lines, dedupe = !fromOcr)
         val (pickup, trip) = classify(legs)
-        val (pickupAddress, dropoffAddress) =
-            (if (fromOcr) wrappedAddresses(lines, pickup, trip) else null) ?: pickAddresses(lines, legs, pickup, trip)
+
+        // Paradas no caminho: aviso no cartão ("Várias paradas", "2 paradas") e/ou "Parada: Rua X". CALIBRAR.
+        val labeledStops = lines.mapNotNull { ParseUtils.labeledStop(it, nonAddressTexts) }
+        val marker = lines.firstNotNullOfOrNull(ParseUtils::stopMarker) ?: markerAbove(all, dedupe = !fromOcr)
+        val multiStop = marker != null || labeledStops.isNotEmpty()
+
+        val addresses = (if (fromOcr) wrappedAddresses(lines, pickup, trip, multiStop) else null)
+            ?: pickAddresses(lines, legs, pickup, trip, multiStop)
+        val pickupAddress = addresses.pickup
+        val dropoffAddress = addresses.dropoff
+        val stopAddresses = (addresses.stops + labeledStops).distinct()
 
         // Só preço não basta (ex.: "Ganhos de hoje R$ 120,00" ou "R$ 0,00" + "1-3 min" na tela inicial):
         // precisa de um par completo (tempo + km) ou de um endereço.
@@ -192,6 +201,8 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
             passengerRating = lines.firstNotNullOfOrNull { ParseUtils.parseRating(it) },
             category = detectCategory(all, extractLegs(all, dedupe = !fromOcr).filter { !it.partial }.minOfOrNull { it.line }),
             rawText = all.joinToString("\n"), // texto completo da tela: útil para calibrar
+            stopAddresses = stopAddresses,
+            stopCount = maxOf(marker ?: 0, stopAddresses.size),
         )
     }
 
@@ -423,14 +434,30 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
 
     // ------------------------------------------------------------------ endereços
 
+    /** Endereços lidos: coleta, destino final e paradas no caminho (em ordem). */
+    private data class Addresses(val pickup: String?, val dropoff: String?, val stops: List<String> = emptyList())
+
+    /**
+     * Aviso de paradas logo acima do bloco da oferta (até 6 linhas antes do 1º trecho completo): o
+     * recorte do bloco começa no preço e um selo no topo do cartão ficaria de fora.
+     */
+    private fun markerAbove(all: List<String>, dedupe: Boolean): Int? {
+        val first = extractLegs(all, dedupe).filter { !it.partial }.minOfOrNull { it.line } ?: return null
+        return all.subList((first - MARKER_LOOKBACK).coerceAtLeast(0), first).firstNotNullOfOrNull(ParseUtils::stopMarker)
+    }
+
     /**
      * OCR: no layout "trecho → endereço → trecho → endereço" (cartão da Uber) cada endereço são as
-     * linhas de texto logo abaixo do seu trecho, juntas. Devolve null se o layout não for esse.
+     * linhas de texto logo abaixo do seu trecho, juntas. Com paradas ([multiStop]) o que vem depois da
+     * viagem é separado em blocos (ver [addressBlocks]): o último é o destino, os outros são paradas.
+     * Devolve null se o layout não for esse.
      */
-    private fun wrappedAddresses(lines: List<String>, pickup: Leg?, trip: Leg?): Pair<String?, String?>? {
+    private fun wrappedAddresses(lines: List<String>, pickup: Leg?, trip: Leg?, multiStop: Boolean): Addresses? {
         if (pickup == null || trip == null || pickup.lineEnd >= trip.line) return null
         val first = joinAddressLines(lines, pickup.lineEnd + 1, trip.line) ?: return null
-        return first to joinAddressLines(lines, trip.lineEnd + 1, lines.size)
+        if (!multiStop) return Addresses(first, joinAddressLines(lines, trip.lineEnd + 1, lines.size))
+        val blocks = addressBlocks(lines, trip.lineEnd + 1, lines.size)
+        return Addresses(first, blocks.lastOrNull(), blocks.dropLast(1))
     }
 
     private fun joinAddressLines(lines: List<String>, from: Int, until: Int): String? {
@@ -447,8 +474,46 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
         return ParseUtils.extractAddress(joined, nonAddressTexts)?.address ?: joined
     }
 
-    private fun pickAddresses(lines: List<String>, legs: List<Leg>, pickup: Leg?, trip: Leg?): Pair<String?, String?> {
+    /**
+     * OCR com paradas: linha que começa com tipo de logradouro ("Rua", "Av.") ou que vem depois de um
+     * rótulo/aviso de parada abre um endereço novo; as linhas seguintes que são pedaço de endereço
+     * (bairro, cidade) completam o mesmo. Parada rotulada na própria linha fica de fora (já lida).
+     */
+    private fun addressBlocks(lines: List<String>, from: Int, until: Int): List<String> {
+        val blocks = ArrayList<MutableList<String>>()
+        var open = false // o bloco atual ainda aceita continuação
+        var i = from
+        while (i < until && !isAcceptButton(lines[i])) {
+            val line = lines[i]
+            when {
+                ParseUtils.stopMarker(line) != null || ParseUtils.isStopLabelOnly(line) ||
+                    ParseUtils.labeledStop(line, nonAddressTexts) != null -> open = false
+                ParseUtils.hasStreetPrefix(line) && ParseUtils.isAddressPart(line, nonAddressTexts) -> {
+                    blocks += mutableListOf(line)
+                    open = true
+                }
+                ParseUtils.isAddressPart(line, nonAddressTexts) -> {
+                    if (open && blocks.last().size < MAX_ADDRESS_LINES) {
+                        blocks.last() += line
+                    } else {
+                        blocks += mutableListOf(line)
+                        open = true
+                    }
+                }
+                else -> open = false
+            }
+            i++
+        }
+        return blocks.map { parts ->
+            val joined = parts.joinToString(" ")
+            ParseUtils.extractAddress(joined, nonAddressTexts)?.address ?: joined
+        }
+    }
+
+    private fun pickAddresses(lines: List<String>, legs: List<Leg>, pickup: Leg?, trip: Leg?, multiStop: Boolean): Addresses {
         val found = lines.mapIndexedNotNull { i, line ->
+            // "Parada: Rua X" é parada, não coleta/destino.
+            if (ParseUtils.labeledStop(line, nonAddressTexts) != null) return@mapIndexedNotNull null
             ParseUtils.extractAddress(line, nonAddressTexts)?.let { i to it }
         }
         var pickupAddress = found.firstOrNull { it.second.role == PointRole.PICKUP }?.second?.address
@@ -460,19 +525,24 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
         val after = if (firstLegLine == null) unlabeled else unlabeled.filter { it.first > firstLegLine }
         val pool = (after.ifEmpty { unlabeled }).map { it.first to it.second.address }.toMutableList()
 
+        // Com paradas e 3+ endereços sem rótulo: 1º = coleta, último = destino, os do meio = paradas.
+        if (multiStop && pickupAddress == null && dropoffAddress == null && pool.size >= 3) {
+            return Addresses(pool.first().second, pool.last().second, pool.subList(1, pool.size - 1).map { it.second })
+        }
         // Um único endereço logo após o par da viagem (e a busca antes dela) = destino.
         if (pickupAddress == null && dropoffAddress == null && pool.size == 1 &&
             pickup != null && trip != null && pickup.line < trip.line && pool[0].first > trip.lineEnd
         ) {
-            return null to pool[0].second
+            return Addresses(null, pool[0].second)
         }
         if (pickupAddress == null) pickupAddress = pool.removeFirstOrNull()?.second
         if (dropoffAddress == null) dropoffAddress = pool.removeFirstOrNull()?.second
-        return pickupAddress to dropoffAddress
+        return Addresses(pickupAddress, dropoffAddress)
     }
 
     private companion object {
         const val MAX_ADDRESS_LINES = 3
+        const val MARKER_LOOKBACK = 6
         const val MAX_DERIVED_PICKUP_KM = 30.0
         const val MAX_CATEGORY_CHARS = 24
     }

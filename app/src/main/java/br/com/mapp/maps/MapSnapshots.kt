@@ -16,7 +16,8 @@ import android.util.Log
 import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.model.Zone
 import br.com.mapp.core.notify.MapFrame
-import br.com.mapp.core.notify.RidePoints
+import br.com.mapp.core.route.RouteStop
+import br.com.mapp.core.route.StopKind
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -33,7 +34,8 @@ import org.osmdroid.util.GeoPoint as OsmGeoPoint
 
 /**
  * Mapa desenhado num Bitmap, sem MapView na tela (para a notificação da corrida aceita): tiles OSM
- * do retângulo + zonas + linhas busca/viagem + marcadores (você, A = coleta, B = destino).
+ * do retângulo + zonas + linhas busca/viagem com setas de sentido + marcadores (você e A = coleta,
+ * B, C… = paradas no caminho, última letra = destino).
  * Usa o mesmo cache de tiles do mini mapa; só baixa o que falta.
  */
 object MapSnapshots {
@@ -54,7 +56,8 @@ object MapSnapshots {
         frame: MapFrame,
         widthPx: Int,
         heightPx: Int,
-        points: RidePoints,
+        here: GeoPoint?,
+        route: List<RouteStop>,
         zones: List<Zone>,
         timeoutMs: Long,
     ): Bitmap? = withContext(Dispatchers.Main) {
@@ -105,7 +108,7 @@ object MapSnapshots {
             val canvas = Canvas(bmp)
             canvas.drawColor(LAND)
             tiles.drawTiles(canvas, projection, projection.zoomLevel, viewPort)
-            drawRoute(canvas, projection, density, points, zones)
+            drawRoute(canvas, projection, density, here, route, zones)
             drawAttribution(canvas, density, widthPx, heightPx)
             bmp
         } catch (e: CancellationException) {
@@ -121,7 +124,14 @@ object MapSnapshots {
         }
     }
 
-    private fun drawRoute(canvas: Canvas, projection: Projection, density: Float, points: RidePoints, zones: List<Zone>) {
+    private fun drawRoute(
+        canvas: Canvas,
+        projection: Projection,
+        density: Float,
+        herePoint: GeoPoint?,
+        route: List<RouteStop>,
+        zones: List<Zone>,
+    ) {
         fun px(p: GeoPoint): PointF {
             val pt = projection.toPixels(OsmGeoPoint(p.lat, p.lon), null)
             return PointF(pt.x.toFloat(), pt.y.toFloat())
@@ -147,30 +157,69 @@ object MapSnapshots {
             canvas.drawPath(path, outline)
         }
 
-        val here = points.here?.let(::px)
-        val pickup = points.pickup?.let(::px)
-        val dropoff = points.dropoff?.let(::px)
+        val here = herePoint?.let(::px)
+        // Pontos da corrida que estão no mapa, na ordem do trajeto (parada sem ponto fica de fora,
+        // mas as letras das outras não mudam).
+        val stops = route.mapNotNull { stop -> stop.point?.let { stop to px(it) } }
 
-        // Linhas retas só para mostrar a ordem (não é o trajeto das ruas): busca tracejada, viagem cheia.
+        // Linhas retas só para mostrar a ordem (não é o trajeto das ruas): busca tracejada (você → A),
+        // viagem cheia (A → paradas → destino), com seta no meio de cada trecho apontando o sentido.
         val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
             strokeWidth = 3f * density
         }
+        val pickup = stops.firstOrNull()?.takeIf { it.first.kind == StopKind.PICKUP }?.second
         if (here != null && pickup != null) {
             line.color = MapViews.COLOR_CURRENT
             line.pathEffect = DashPathEffect(floatArrayOf(6f * density, 5f * density), 0f)
             canvas.drawLine(here.x, here.y, pickup.x, pickup.y, line)
+            arrow(canvas, here, pickup, MapViews.COLOR_CURRENT, density)
         }
-        if (pickup != null && dropoff != null) {
-            line.color = ROUTE
-            line.pathEffect = null
-            canvas.drawLine(pickup.x, pickup.y, dropoff.x, dropoff.y, line)
+        line.color = ROUTE
+        line.pathEffect = null
+        stops.zipWithNext { (_, a), (_, b) ->
+            canvas.drawLine(a.x, a.y, b.x, b.y, line)
+            arrow(canvas, a, b, ROUTE, density)
         }
 
         here?.let { dot(canvas, it, MapViews.COLOR_CURRENT, 9f * density, null, density) }
-        pickup?.let { dot(canvas, it, MapViews.COLOR_PICKUP, 13f * density, "A", density) }
-        dropoff?.let { dot(canvas, it, MapViews.COLOR_DROPOFF, 13f * density, "B", density) }
+        stops.forEach { (stop, at) -> dot(canvas, at, MapViews.colorOf(stop.kind), 13f * density, stop.letter, density) }
+    }
+
+    /**
+     * Seta cheia (com borda branca) no meio do trecho [from] → [to], apontando para [to]. Trecho curto
+     * demais (marcadores quase encostados) fica sem seta.
+     */
+    private fun arrow(canvas: Canvas, from: PointF, to: PointF, color: Int, density: Float) {
+        val dx = to.x - from.x
+        val dy = to.y - from.y
+        val length = kotlin.math.hypot(dx, dy)
+        val size = 9f * density
+        if (length < 13f * density * 2 + size * 2) return
+        val ux = dx / length
+        val uy = dy / length
+        val tipX = from.x + dx / 2 + ux * size / 2
+        val tipY = from.y + dy / 2 + uy * size / 2
+        val baseX = tipX - ux * size
+        val baseY = tipY - uy * size
+        val half = size * 0.6f
+        val path = Path().apply {
+            moveTo(tipX, tipY)
+            lineTo(baseX - uy * half, baseY + ux * half)
+            lineTo(baseX + uy * half, baseY - ux * half)
+            close()
+        }
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeJoin = Paint.Join.ROUND
+            strokeWidth = 2f * density
+            this.color = Color.WHITE
+        }
+        canvas.drawPath(path, paint)
+        paint.style = Paint.Style.FILL
+        paint.color = color or 0xFF000000.toInt()
+        canvas.drawPath(path, paint)
     }
 
     /** Marcador redondo com borda branca e letra (igual ao do mini mapa). */

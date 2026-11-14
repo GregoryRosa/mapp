@@ -15,6 +15,7 @@ enum class NoticeItem(val id: String, val label: String) {
     RATING("rating", "Nota"),
     PASSENGER("passenger", "Passageiro"),
     PICKUP_ADDRESS("pickup_addr", "Endereço da coleta"),
+    STOPS("stops", "Paradas no caminho"),
     DROPOFF_ADDRESS("dropoff_addr", "Endereço do destino"),
     ZONES("zones", "Zonas");
 
@@ -93,7 +94,7 @@ data class NoticeLayout(
     }
 
     companion object {
-        /** Igual à notificação de antes desta tela. */
+        /** Notificação de antes desta tela, com as paradas no caminho junto do destino. */
         val DEFAULT = NoticeLayout(
             mapOf(
                 NoticeLine.TITLE to listOf(NoticeItem.KIND, NoticeItem.PRICE),
@@ -102,7 +103,7 @@ data class NoticeLayout(
                 NoticeLine.EXTRA2 to listOf(NoticeItem.TOTAL, NoticeItem.ARRIVAL),
                 NoticeLine.EXTRA3 to listOf(NoticeItem.ZONES, NoticeItem.PASSENGER, NoticeItem.RATING),
                 NoticeLine.EXTRA4 to listOf(NoticeItem.PICKUP_ADDRESS),
-                NoticeLine.EXTRA5 to listOf(NoticeItem.DROPOFF_ADDRESS),
+                NoticeLine.EXTRA5 to listOf(NoticeItem.STOPS, NoticeItem.DROPOFF_ADDRESS),
             ),
         )
 

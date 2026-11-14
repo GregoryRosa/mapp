@@ -18,6 +18,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -108,17 +109,19 @@ class OfferPipeline(
         show(result)
 
         try {
-            // Etapa 2: coleta/destino no mapa e zonas.
-            if (!raw.pickupAddress.isNullOrBlank() || !raw.dropoffAddress.isNullOrBlank()) {
+            // Etapa 2: coleta, paradas e destino no mapa, e zonas.
+            if (!raw.pickupAddress.isNullOrBlank() || !raw.dropoffAddress.isNullOrBlank() || raw.stopAddresses.isNotEmpty()) {
                 val located = coroutineScope {
                     val here: GeoPoint? = location.lastKnown
                         ?: withTimeoutOrNull(POSITION_TIMEOUT_MS) { location.current(POSITION_TIMEOUT_MS) }
                     val pickup = async { geocode(raw.pickupAddress, here) }
                     val dropoff = async { geocode(raw.dropoffAddress, here) }
-                    pickup.await() to dropoff.await()
+                    val stops = raw.stopAddresses.map { async { geocode(it, here) } }
+                    Triple(pickup.await(), dropoff.await(), stops.awaitAll())
                 }
-                if (located.first != null || located.second != null) {
+                if (located.first != null || located.second != null || located.third.any { it != null }) {
                     result = OfferEvaluator.evaluate(raw, profile, cost, zones, located.first, located.second)
+                        .copy(stops = located.third)
                     show(result)
                 }
             }

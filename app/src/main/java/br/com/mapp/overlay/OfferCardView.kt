@@ -22,6 +22,8 @@ import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.model.PointRole
 import br.com.mapp.core.model.Zone
 import br.com.mapp.core.model.ZoneType
+import br.com.mapp.core.route.RideRoute
+import br.com.mapp.core.route.StopKind
 import br.com.mapp.maps.MapViews
 import br.com.mapp.maps.toOsm
 import org.osmdroid.views.overlay.Marker
@@ -207,6 +209,11 @@ class OfferCardView(
                 else -> reasonsBox.addView(reasonLine("• $reason", WARNING_TEXT))
             }
         }
+        // Paradas no caminho: as letras são as do mini mapa (A coleta, B… paradas, última = destino).
+        RideRoute.stopsLabel(o.raw)?.let { label ->
+            val letters = RideRoute.of(o).filter { it.kind == StopKind.STOP }.joinToString(", ") { it.letter }
+            reasonsBox.addView(reasonLine("● Com $label no caminho ($letters)", CUSTOM_TEXT))
+        }
         // Zonas personalizadas não entram nos motivos do avaliador: mostra como informação.
         o.zoneHits.filter { it.zone.type == ZoneType.CUSTOM }.forEach { hit ->
             val onde = if (hit.role == PointRole.PICKUP) "Coleta" else "Destino"
@@ -217,19 +224,19 @@ class OfferCardView(
 
     private fun renderMap() {
         val o = offer ?: return
-        val hasPoints = o.pickup != null || o.dropoff != null || current != null
+        val route = RideRoute.of(o)
+        val hasPoints = route.any { it.point != null } || current != null
         mapView.visibility = if (hasPoints) View.VISIBLE else View.GONE
         // O semáforo aparece antes da geocodificação; os pontos chegam logo depois (ou nunca, sem rede).
-        val missing = (!o.raw.pickupAddress.isNullOrBlank() && o.pickup == null) ||
-            (!o.raw.dropoffAddress.isNullOrBlank() && o.dropoff == null)
+        val missing = route.any { it.address != null && it.point == null }
         mapNote.visibility = if (missing) View.VISIBLE else View.GONE
         applyMinimized()
         if (!hasPoints) return
         // Mesmos pontos e zonas: o mapa já está certo (redesenhar recarrega tiles e trava o cartão).
-        val key = Triple(o.pickup, o.dropoff, zones)
+        val key = Pair(route, zones)
         if (key == mapKey && (hereMarker != null) == (current != null)) return
         mapKey = key
-        hereMarker = MapViews.renderOffer(mapView, zones, current, o.pickup, o.dropoff)
+        hereMarker = MapViews.renderOffer(mapView, zones, current, route)
     }
 
     private fun toggleMinimized() {
