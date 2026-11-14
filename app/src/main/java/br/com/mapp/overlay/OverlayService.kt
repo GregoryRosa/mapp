@@ -113,6 +113,8 @@ class OverlayService : LifecycleService() {
     /** Qual oferta foi aceita: pelo nome do passageiro na tela (vale para corrida aceita durante outra). */
     private val matcher = TripMatcher<OfferKey>()
     private val odometer = Odometer()
+    /** Notificação no celular a cada corrida aceita (rota + mapa ao expandir). */
+    private var rides: RideNotifier? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -131,6 +133,7 @@ class OverlayService : LifecycleService() {
         voice = VoiceAnnouncer(this)
         greatSound = GreatSoundPlayer(this)
         cashSound = GreatSoundPlayer(this)
+        rides = RideNotifier(this, lifecycleScope)
 
         val pipeline = OfferPipeline(this)
         lifecycleScope.launch { pipeline.run() }
@@ -421,7 +424,8 @@ class OverlayService : LifecycleService() {
         // +1 com a corrida em andamento: o leitor passa a acompanhar o fim dela também.
         if (!auto && !alreadyFinished) matcher.manualCount(key, System.currentTimeMillis()) else matcher.markCounted(key)
         countedOffer = offer
-        markAccepted(offer, true)
+        // +1 tocado com a corrida já terminada: não manda a notificação da rota.
+        markAccepted(offer, true, notify = !alreadyFinished)
         refreshCountButton()
         pushShift()
         val label = offerLabel(raw).removeSuffix(" ✓ contada")
@@ -449,8 +453,8 @@ class OverlayService : LifecycleService() {
         val key = match.count
         val offer = lastOffer?.takeIf { key != null && it.raw.key() == key }
         if (offer != null) {
-            // Histórico: marca a oferta como aceita mesmo sem jornada aberta.
-            markAccepted(offer, true)
+            // Histórico: marca a oferta como aceita mesmo sem jornada aberta (e notifica no celular).
+            markAccepted(offer, true, passenger = event.passenger, onBoard = event.stage == TripStage.ON_TRIP)
             matcher.markCounted(key!!)
         }
         if (ShiftTracker.current(this).value == null) return
@@ -521,11 +525,26 @@ class OverlayService : LifecycleService() {
         return greatSound?.play() ?: 0L
     }
 
-    /** Grava no histórico de ofertas se a corrida foi aceita (aba "Aceitas hoje"). */
-    private fun markAccepted(offer: EvaluatedOffer, accepted: Boolean?) {
+    /**
+     * Grava no histórico de ofertas se a corrida foi aceita (aba "Aceitas hoje") e manda a notificação
+     * da corrida aceita (rota + mapa) — ou a tira, quando a corrida é desmarcada.
+     * [passenger]/[onBoard] = nome e etapa lidos na tela de aceite (null/false no +1).
+     */
+    private fun markAccepted(
+        offer: EvaluatedOffer,
+        accepted: Boolean?,
+        passenger: String? = null,
+        onBoard: Boolean = false,
+        notify: Boolean = true,
+    ) {
         val key = offer.raw.key()
         if (accepted == true && key == markedAcceptedKey) return
         markedAcceptedKey = if (accepted == true) key else null
+        if (accepted == true) {
+            if (notify) rides?.accepted(key, offer, categoryFor(offer.raw), passenger, onBoard, location?.lastKnown, zones)
+        } else {
+            rides?.cancel(key)
+        }
         lifecycleScope.launch {
             try {
                 MappApp.repos.offers.setAccepted(offer, accepted)
@@ -637,6 +656,8 @@ class OverlayService : LifecycleService() {
         } else {
             lastOffer = offer
         }
+        // Corrida já aceita que chegou completada (endereço localizado depois): atualiza a notificação.
+        rides?.updated(key, offer, categoryFor(offer.raw))
         if (key == dismissedKey) return // usuário fechou o cartão desta oferta
 
         val alertZones = offer.zoneHits.filter { it.zone.alertEnabled }.toSet()
