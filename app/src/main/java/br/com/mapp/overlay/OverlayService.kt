@@ -323,13 +323,20 @@ class OverlayService : LifecycleService() {
      * Números junto ao "M" (km e custo em cima, valor bruto embaixo) e anel da meta diária: mesma
      * conta da tela Ganhos e gastos → Hoje (`PeriodMath.totals`), recalculada quando muda a jornada,
      * o histórico de ofertas, os lançamentos, a meta ou o custo/km — e de novo à meia-noite.
+     * **Dia de trabalho:** com jornada aberta vale o dia em que ela começou (`ReportMath.workDay`):
+     * passar da meia-noite rodando não zera os números nem a meta; o dia vira quando a jornada acaba.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun startDayMonitor() {
         val repos = MappApp.repos
         val ctx = this
+        // Dia de trabalho: muda quando a jornada abre/fecha e à meia-noite (sem jornada aberta).
+        val workDays = combine(
+            ShiftTracker.current(ctx).map { it?.startedAt }.distinctUntilChanged(),
+            midnights(),
+        ) { openStartedAt, _ -> ReportMath.workDay(openStartedAt) }.distinctUntilChanged()
         lifecycleScope.launch {
-            todayPeriods().flatMapLatest { p ->
+            workDays.flatMapLatest { p ->
                 val day = combine(
                     ShiftTracker.current(ctx),
                     ShiftTracker.history(ctx),
@@ -338,13 +345,14 @@ class OverlayService : LifecycleService() {
                     repos.finance.goals(),
                 ) { current, history, offers, entries, goals -> DayInputs(current, history, offers, entries, goals.daily) }
                 combine(day, repos.vehicle.config()) { d, cost ->
-                    PeriodMath.totals(p.from, p.to, d.current, d.history, d.offers, d.entries, cost.costPerKm, System.currentTimeMillis()) to d.goal
+                    val t = PeriodMath.totals(p.from, p.to, d.current, d.history, d.offers, d.entries, cost.costPerKm, System.currentTimeMillis())
+                    Triple(p, t, d.goal)
                 }
-            }.collect { (totals, goal) ->
+            }.collect { (p, totals, goal) ->
                 dayTotals = totals
                 dailyGoal = goal
                 pushDay()
-                celebrateGoal(totals.gross, goal)
+                celebrateGoal(ReportMath.dateOf(p.from), totals.gross, goal)
             }
         }
     }
@@ -357,12 +365,12 @@ class OverlayService : LifecycleService() {
         val goal: Double?,
     )
 
-    /** O dia de hoje; emite de novo logo depois da meia-noite. */
-    private fun todayPeriods() = flow {
+    /** Emite agora e logo depois de cada meia-noite (o dia do calendário mudou). */
+    private fun midnights() = flow {
         while (true) {
-            val p = ReportMath.today()
-            emit(p)
-            delay((p.to + 1 - System.currentTimeMillis()).coerceAtLeast(0L) + DAY_ROLL_MS)
+            val today = ReportMath.today()
+            emit(today.from)
+            delay((today.to + 1 - System.currentTimeMillis()).coerceAtLeast(0L) + DAY_ROLL_MS)
         }
     }
 
@@ -379,10 +387,12 @@ class OverlayService : LifecycleService() {
         )
     }
 
-    /** Meta do dia batida: som de dinheiro + aviso, uma vez por dia e por valor de meta. */
-    private fun celebrateGoal(gross: Double, goal: Double?) {
-        val day = java.time.LocalDate.now().toString()
-        val mark = DayGoal.celebration(gross, goal, day, OverlayPrefs.goalMark(this)) ?: return
+    /**
+     * Meta do dia batida: som de dinheiro + aviso, uma vez por dia de trabalho e por valor de meta
+     * (a meia-noite com a jornada aberta não repete o som).
+     */
+    private fun celebrateGoal(workDate: java.time.LocalDate, gross: Double, goal: Double?) {
+        val mark = DayGoal.celebration(gross, goal, workDate.toString(), OverlayPrefs.goalMark(this)) ?: return
         OverlayPrefs.setGoalMark(this, mark)
         cashSound?.playCash()
         tripToast("🎯 Meta do dia batida! ${ShiftMath.money(gross)} de ${ShiftMath.money(goal ?: gross)}")
