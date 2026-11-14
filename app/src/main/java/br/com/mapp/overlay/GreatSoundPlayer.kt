@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import br.com.mapp.core.sound.CashSound
 import br.com.mapp.core.sound.GreatSound
 import br.com.mapp.core.sound.SoundSynth
 
@@ -40,6 +41,12 @@ class GreatSoundPlayer(context: Context) {
         }
     }
 
+    /** Som de dinheiro da meta do dia batida. */
+    fun playCash(): Long {
+        stop()
+        return playPcm(CashSound.render(), CashSound.DURATION_MS.toLong())
+    }
+
     fun stop() {
         handler.removeCallbacksAndMessages(null)
         track?.let(::release)
@@ -47,8 +54,10 @@ class GreatSoundPlayer(context: Context) {
         ringtone = null
     }
 
-    private fun playSynth(sound: GreatSound): Long {
-        val pcm = SoundSynth.render(sound)
+    private fun playSynth(sound: GreatSound): Long =
+        playPcm(SoundSynth.render(sound), SoundSynth.durationMs(sound))
+
+    private fun playPcm(pcm: ShortArray, ms: Long): Long {
         if (pcm.isEmpty()) return 0L
         return try {
             val t = AudioTrack.Builder()
@@ -66,7 +75,6 @@ class GreatSoundPlayer(context: Context) {
             t.write(pcm, 0, pcm.size)
             t.play()
             track = t
-            val ms = SoundSynth.durationMs(sound)
             handler.postDelayed({ release(t) }, ms + 300)
             ms
         } catch (e: Exception) {
