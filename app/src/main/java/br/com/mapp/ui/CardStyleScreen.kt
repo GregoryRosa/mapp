@@ -35,6 +35,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -58,6 +59,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.nativeCanvas
@@ -85,6 +88,8 @@ import br.com.mapp.core.card.CardLayout
 import br.com.mapp.core.card.CardLine
 import br.com.mapp.core.card.CardMetric
 import br.com.mapp.core.engine.OfferEvaluator
+import br.com.mapp.core.geo.StreetView
+import br.com.mapp.core.geo.StreetViewBudget
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.model.Platform
@@ -104,6 +109,7 @@ import br.com.mapp.overlay.CardHeaderView
 import br.com.mapp.overlay.GreatSoundPlayer
 import br.com.mapp.overlay.OverlayPrefs
 import java.time.ZoneId
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /** Espaço numa linha: [line] é um [CardLine] (aba Card) ou um [NoticeLine] (aba Notificação). */
@@ -240,6 +246,7 @@ private fun OfferCardTab() {
 
                 GreatSoundCard()
                 StopSoundCard()
+                StreetViewCard()
 
                 CardLine.entries.forEach { line ->
                     SlotRow(
@@ -695,6 +702,53 @@ private fun NoticeTab() {
             }
         }
         DragGhost(ctl, rootOffset)
+    }
+}
+
+/**
+ * Fotos da rua (Street View) da coleta, paradas e destino embaixo do mapa do Card. A chave do
+ * Google é colada aqui e fica só no celular (o APK é público).
+ */
+@Composable
+private fun StreetViewCard() {
+    val ctx = LocalContext.current
+    var on by remember { mutableStateOf(OverlayPrefs.isStreetViewOn(ctx)) }
+    var key by remember { mutableStateOf(OverlayPrefs.streetViewKey(ctx).orEmpty()) }
+    var showKey by remember { mutableStateOf(false) }
+    val used = remember {
+        OverlayPrefs.streetViewBudget(ctx).usedIn(StreetViewBudget.monthOf(System.currentTimeMillis()))
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SwitchRow(
+                title = "Fotos da rua (Street View)",
+                subtitle = "Foto da coleta (A) e do destino (B) — e da parada, se tiver endereço — embaixo do mapa. " +
+                    "Toque numa foto para ampliar.",
+                checked = on,
+                onChange = { on = it; OverlayPrefs.setStreetViewOn(ctx, it) },
+            )
+            OutlinedTextField(
+                value = key,
+                onValueChange = { key = it.trim(); OverlayPrefs.setStreetViewKey(ctx, key) },
+                label = { Text("Chave da API do Google") },
+                singleLine = true,
+                visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "Ocultar" else "Ver") }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                if (key.isBlank()) {
+                    "Cole a chave do Google Cloud (Street View Static API). Ela fica só neste celular."
+                } else {
+                    "Fotos este mês: ${"%,d".format(Locale("pt", "BR"), used)} de " +
+                        "${"%,d".format(Locale("pt", "BR"), StreetView.LIMIT_PER_MONTH)}. " +
+                        "O Google cobra a partir de 10.000 no mês; o MApp para antes."
+                },
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
 }
 
