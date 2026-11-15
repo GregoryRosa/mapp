@@ -60,6 +60,8 @@ class OfferPipeline(
     /** Uma avaliação. [superseded] = a mesma oferta chegou completada: esta não grava no histórico. */
     private class Run(val raw: RawOffer) {
         @Volatile var superseded = false
+        /** Tipo da corrida: o do 1º quadro ou o lido num quadro seguinte (o OCR nem sempre pega o "UberX"). */
+        @Volatile var category: String? = raw.category
     }
 
     /** Suspende enquanto o escopo estiver ativo (rodar no lifecycleScope do serviço). */
@@ -78,6 +80,20 @@ class OfferPipeline(
             if (identity == lastIdentity && raw.capturedAt - lastSeenAt < DEDUP_WINDOW_MS) {
                 // O leitor republicou a mesma oferta: re-mostra e deixa a avaliação em curso terminar.
                 lastSeenAt = raw.capturedAt
+                val run = evaluation
+                val lateCategory = raw.category
+                if (lateCategory != null && run != null && run.category == null && run.raw.capturedAt == raw.capturedAt) {
+                    // Só o tipo chegou agora: entra no Card, na memória do aceite e no histórico (a jornada
+                    // completa a corrida já contada pelo histórico).
+                    run.category = lateCategory
+                    lastEvaluated = lastEvaluated?.withCategory(lateCategory)
+                    val pending = job
+                    launch {
+                        pending?.join()
+                        lastEvaluated?.takeIf { it.raw.capturedAt == raw.capturedAt && it.raw.platform == raw.platform }
+                            ?.let { safeRecord(it) }
+                    }
+                }
                 lastEvaluated?.let { OfferBus.publishEvaluated(it) }
                 return@collect
             }
@@ -112,7 +128,7 @@ class OfferPipeline(
 
         // Etapa 1: semáforo imediato.
         var result = OfferEvaluator.evaluate(raw, profile, cost)
-        show(result)
+        show(result.withCategory(current.category))
 
         try {
             // Etapa 2: coleta, paradas e destino no mapa, e zonas.
@@ -128,19 +144,26 @@ class OfferPipeline(
                 if (located.first != null || located.second != null || located.third.any { it != null }) {
                     result = OfferEvaluator.evaluate(raw, profile, cost, zones, located.first, located.second)
                         .copy(stops = located.third)
-                    show(result)
+                    show(result.withCategory(current.category))
                 }
             }
         } finally {
-            if (!current.superseded) withContext(NonCancellable) {
-                try {
-                    repos.offers.record(result)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Falha ao gravar histórico", e)
-                }
-            }
+            if (!current.superseded) withContext(NonCancellable) { safeRecord(result.withCategory(current.category)) }
         }
     }
+
+    private suspend fun safeRecord(offer: EvaluatedOffer) {
+        try {
+            repos.offers.record(offer)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao gravar histórico", e)
+        }
+    }
+
+    private fun EvaluatedOffer.withCategory(category: String?): EvaluatedOffer =
+        if (category == null || raw.category == category) this else copy(raw = raw.copy(category = category))
 
     private fun show(result: EvaluatedOffer) {
         lastEvaluated = result

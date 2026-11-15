@@ -305,4 +305,22 @@ class OfferParsersTest {
         assertEquals("UberX", UberParser.categoryOf("Uberx"))
         assertEquals("UberX", UberParser.categoryOf("Uber X"))
     }
+
+    @Test fun tipo_com_selo_na_mesma_linha() {
+        assertEquals("UberX", UberParser.categoryOf("Uberx Exclusivo"))
+        assertEquals("Comfort", UberParser.categoryOf("Comfort · Exclusivo"))
+        assertEquals("Black", UberParser.categoryOf("Uber Black  Exclusivo"))
+        assertNull(UberParser.categoryOf("Exclusivo"))
+        assertNull(UberParser.categoryOf("Rua Nova Exclusivo"))
+    }
+
+    @Test fun tipo_no_texto_gravado_no_historico() {
+        val raw = listOf(
+            "Comfort", "Exclusivo", "R$ 14,41", "9 min (3,9 km) de distância", "Rua A, 10",
+            "Viagem: 16 min (6,4 km)", "Rua B, 20", "Aceitar",
+        ).joinToString("\n")
+        assertEquals("Comfort", OfferParsers.forPlatform(Platform.UBER).categoryIn(raw))
+        assertNull(OfferParsers.forPlatform(Platform.UBER).categoryIn(""))
+        assertNull(OfferParsers.forPlatform(Platform.UBER).categoryIn("R$ 14,41\nViagem: 16 min (6,4 km)"))
+    }
 }

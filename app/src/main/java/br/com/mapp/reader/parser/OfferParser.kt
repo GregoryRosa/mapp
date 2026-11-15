@@ -22,6 +22,9 @@ interface OfferParser {
      * oferta quando parte do cartão está coberta e o preço não pôde ser lido.
      */
     fun stillShows(texts: List<String>, offer: RawOffer): Boolean
+
+    /** Tipo da corrida (UberX, Comfort...) no texto bruto gravado no histórico, ou null. */
+    fun categoryIn(rawText: String): String? = null
 }
 
 object OfferParsers {
@@ -219,11 +222,25 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
 
     // ------------------------------------------------------------------ tipo da corrida
 
-    /** Tipo da linha, ou null. Linhas longas (frases, endereços) nunca são tipo. */
+    /**
+     * Tipo da linha, ou null. Linhas longas (frases, endereços) nunca são tipo. O OCR às vezes junta o
+     * selo ao tipo na mesma linha ("Uberx Exclusivo"): o selo é ignorado.
+     */
     fun categoryOf(line: String): String? {
         val key = ParseUtils.fold(line).filter { it.isLetterOrDigit() }
         if (key.isEmpty() || key.length > MAX_CATEGORY_CHARS) return null
-        return categoryAliases[key]
+        categoryAliases[key]?.let { return it }
+        val words = ParseUtils.fold(line).split(NON_WORD).filter { it.isNotEmpty() }
+        val rest = words.filterNot { it in BADGE_WORDS }
+        if (rest.isEmpty() || rest.size == words.size) return null
+        return categoryAliases[rest.joinToString("")]
+    }
+
+    /** Tipo no texto bruto gravado: mesma regra da leitura ao vivo (o último tipo antes do 1º par). */
+    override fun categoryIn(rawText: String): String? {
+        if (rawText.isBlank()) return null
+        val lines = rawText.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+        return detectCategory(lines, extractLegs(lines, dedupe = false).filter { !it.partial }.minOfOrNull { it.line })
     }
 
     /**
@@ -545,5 +562,8 @@ abstract class BaseOfferParser(final override val platform: Platform) : OfferPar
         const val MARKER_LOOKBACK = 6
         const val MAX_DERIVED_PICKUP_KM = 30.0
         const val MAX_CATEGORY_CHARS = 24
+        /** Selos que a Uber mostra ao lado do tipo da corrida. */
+        val BADGE_WORDS = setOf("exclusivo", "exclusive", "novo", "nova")
+        val NON_WORD = Regex("[^\\p{L}\\p{N}]+")
     }
 }

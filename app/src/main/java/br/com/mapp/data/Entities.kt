@@ -68,6 +68,8 @@ data class OfferEntity(
     val capturedAt: Long,
     val accepted: Boolean?,
     val rawText: String,
+    /** Tipo da corrida lido no cartão (UberX, Comfort...). v3; antes não era gravado. */
+    val category: String? = null,
 )
 
 @Entity(tableName = "finance_entries", indices = [Index(value = ["atMillis"])])

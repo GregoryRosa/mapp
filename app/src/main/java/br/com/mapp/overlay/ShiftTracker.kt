@@ -3,10 +3,12 @@ package br.com.mapp.overlay
 import android.content.Context
 import android.content.SharedPreferences
 import br.com.mapp.core.model.Platform
+import br.com.mapp.core.model.RawOffer
 import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftCodec
 import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.core.shift.ShiftTrip
+import br.com.mapp.core.shift.TripCategories
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -122,6 +124,29 @@ object ShiftTracker {
         }
         edit?.apply()
         return true
+    }
+
+    /**
+     * Corridas sem tipo (UberX, Comfort...) na jornada atual e nas encerradas recebem o tipo da oferta
+     * do histórico ([TripCategories]). Grava só o que mudou.
+     */
+    @Synchronized
+    fun fillCategories(ctx: Context, offers: List<RawOffer>) {
+        load(ctx)
+        if (offers.none { !it.category.isNullOrBlank() }) return
+        update(ctx) { it?.let { s -> TripCategories.fill(s, offers) } }
+        val list = _history.value.map { TripCategories.fill(it, offers) }
+        if (list.indices.all { list[it] === _history.value[it] }) return
+        _history.value = list
+        val edit = prefs?.edit()?.putString(KEY_HISTORY, ShiftCodec.encodeList(list))
+        _last.value?.let { last ->
+            val filled = list.firstOrNull { it.startedAt == last.startedAt } ?: TripCategories.fill(last, offers)
+            if (filled != last) {
+                _last.value = filled
+                edit?.putString(KEY_LAST, ShiftCodec.encode(filled))
+            }
+        }
+        edit?.apply()
     }
 
     @Synchronized
