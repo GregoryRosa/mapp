@@ -266,12 +266,48 @@ class TripScreensTest {
         d.onStage(onTrip("bruno"), 32 * min)
         assertFalse(d.onStage(finished, 55 * min).lateFinish)
         assertEquals(0, d.openRides)
-        // E fim sem nada devido continua fechando na hora, mesmo corrida curta.
+        // Corrida que já embarcou e não tem nada devido: o fim fecha na hora.
         val e = TripMatcher<String>()
         e.offerSeen("o1", 0, expectedMs = 30 * min)
         e.onStage(accepted("caio"), 5_000); e.markCounted("o1")
-        assertFalse(e.onStage(finished, 3 * min).lateFinish)
+        e.onStage(onTrip("caio"), 4 * min)
+        assertFalse(e.onStage(finished, 9 * min).lateFinish)
         assertEquals(0, e.openRides)
+    }
+
+    @Test fun avaliacao_da_anterior_fora_da_memoria_nao_fecha_a_corrida_nova() {
+        // 15/11 20:13: a corrida anterior já tinha se perdido (versão antiga) e o copiloto foi reiniciado
+        // pela atualização no meio dela — a memória não tinha nada aberto. Oferta aceita durante ela;
+        // na troca "Encontro com Rafaela" conta, e o "Como foi a viagem?" da anterior chega depois.
+        val m = TripMatcher<String>()
+        m.offerSeen("eletrico", 0, pickupKm = 1.8, tripKm = 11.3, expectedMs = 32 * min, pickupMin = 6)
+        val troca = m.onStage(accepted("rafaela", km = 1.8), 8 * min)
+        assertEquals("eletrico", troca.count); m.markCounted("eletrico")
+        val avaliacao = m.onStage(finished, 8 * min + 15_000)
+        assertTrue(avaliacao.lateFinish)                               // não fecha a Rafaela
+        assertEquals(1, m.openRides)
+        assertNull(m.onStage(accepted("rafaela"), 9 * min).count)      // continua a mesma corrida
+        m.onStage(onTrip("rafaela", km = 11.3), 14 * min)
+        assertFalse(m.onStage(finished, 38 * min).lateFinish)          // fim real
+        assertEquals(0, m.openRides)
+
+        // Se o embarque nunca for lido (Waze na frente) e a Uber voltar a procurar, conta como
+        // finalizada — não cancelada — porque a tela de fim já tinha aparecido com ela aberta.
+        val w = TripMatcher<String>()
+        w.offerSeen("o1", 0, expectedMs = 40 * min)
+        w.onStage(accepted("caio"), 5_000); w.markCounted("o1")
+        assertTrue(w.onStage(finished, 3 * min).lateFinish)
+        val volta = w.onStage(idle, 10 * min)
+        assertEquals(1, volta.finishedUnseen)
+        assertFalse(volta.cancelledPickup)
+        // A marca sobrevive ao copiloto reaberto.
+        val x = TripMatcher<String>()
+        x.offerSeen("o1", 0, expectedMs = 40 * min)
+        x.onStage(accepted("caio"), 5_000); x.markCounted("o1")
+        x.onStage(finished, 3 * min)
+        val y = TripMatcher<String>()
+        assertTrue(y.restore(x.snapshot(3 * min) { it }, 4 * min) { it })
+        assertEquals(1, y.onStage(idle, 10 * min).finishedUnseen)
     }
 
     @Test fun waze_na_frente_a_corrida_toda_nao_vira_cancelamento() {

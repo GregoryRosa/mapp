@@ -393,6 +393,15 @@ class QuickBubbleView(
         paintBubble()
     }
 
+    /** Corrida aceita em andamento pelo acompanhamento do aceite (vale também sem jornada aberta). */
+    fun updateRide(open: Boolean) {
+        if (rideOpen == open) return
+        rideOpen = open
+        paintBubble()
+    }
+
+    private var rideOpen = false
+
     fun destroy() {
         closeRadial()
         closePanel()
@@ -672,19 +681,22 @@ class QuickBubbleView(
         player.playGoal(sound)
     }
 
+    /** Em corrida: corrida em andamento na jornada ou no acompanhamento do aceite. */
+    private fun inRide(): Boolean = shift?.pendingTrip != null || rideOpen
+
     /** Status no anel de dentro: cores dos ajustes; cinza com "!" = Acessibilidade desligada. */
     private fun paintBubble() {
         val ok = reader.connected
         val s = shown
         val color = when {
             !ok -> GRAY_LIGHT
-            shift?.pendingTrip != null -> s.rideRing // em corrida
-            else -> s.idleRing                       // ligado, sem corrida
+            inRide() -> s.rideRing   // em corrida
+            else -> s.idleRing       // ligado, sem corrida
         }
         bubble.statusColor = color
         bubble.warning = !ok
         bubble.thickRing = shift?.paused == false // anel mais grosso = jornada rodando
-        bubble.riding = ok && shift?.pendingTrip != null // em corrida: a seta (carro) percorre o "M"
+        bubble.riding = ok && inRide() // em corrida: a seta (carro) percorre o "M"
         bubble.invalidate()
     }
 

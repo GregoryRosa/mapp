@@ -46,7 +46,9 @@ import br.com.mapp.core.model.TripStage
  *   fechada sem a tela de fim deixa essa tela "devida" ([owed]); se ela chega quando a corrida aberta
  *   é nova demais para ter terminado, é da anterior ([Result.lateFinish]) e não fecha nada. Antes
  *   fechava a corrida recém-aceita: ela saía da jornada (ícone laranja) e o fim real virava
- *   "não vi o aceite".
+ *   "não vi o aceite". **Mesmo sem a anterior na memória** (perdida antes, copiloto reiniciado no meio
+ *   dela): corrida que nem embarcou e é nova demais nunca termina por essa tela — fica marcada
+ *   ([Rider.finishSeen]) e, se sair da tela sem embarque lido, conta como finalizada.
  *
  * [K] = identidade da oferta (o overlay usa app + horário da 1ª leitura).
  */
@@ -103,6 +105,8 @@ class TripMatcher<K : Any>(
         val expectedMs: Long?,
         var counted: Boolean,
         val platform: Platform?,
+        /** "Como foi a viagem?" apareceu com ela aberta mas nova demais (tratada como da anterior). */
+        var finishSeen: Boolean = false,
     )
 
     /** Passageiro de corrida já fechada (para resto de tela não virar corrida nova). */
@@ -242,6 +246,13 @@ class TripMatcher<K : Any>(
         val done = here.firstOrNull { it.started } ?: here.firstOrNull()
         // Avaliação atrasada da corrida anterior (já fechada quando o passageiro novo apareceu).
         val late = owed.firstOrNull { samePlatform(platform, it.platform) }
+        // Corrida que nem embarcou e é nova demais para ter terminado: a tela é da anterior, esteja ela
+        // na memória ou não (perdida antes, copiloto reiniciado no meio dela).
+        if (done != null && !done.started && tooYoungToFinish(done, now)) {
+            if (late != null) owed.remove(late)
+            done.finishSeen = true
+            return Result(null, newRide = false, lateFinish = true)
+        }
         if (late != null && (done == null || tooYoungToFinish(done, now))) {
             owed.remove(late)
             return Result(null, newRide = false, lateFinish = true)
@@ -382,7 +393,7 @@ class TripMatcher<K : Any>(
 
     /** Corrida aberta que saiu da tela: terminou ou foi cancelada? */
     private fun ending(r: Rider, now: Long, wait: Boolean): Ending {
-        if (r.started) return Ending.FINISHED
+        if (r.started || r.finishSeen) return Ending.FINISHED
         val elapsed = now - r.since
         if (wait && elapsed < settleMs) return Ending.WAIT
         return if (likelyOver(r, now)) Ending.FINISHED else Ending.CANCELLED
@@ -467,7 +478,10 @@ class TripMatcher<K : Any>(
             )
         }
         riders.forEach { r ->
-            row("r", r.name, if (r.started) 1 else 0, r.since, r.expectedMs, if (r.counted) 1 else 0, r.platform?.name)
+            row(
+                "r", r.name, if (r.started) 1 else 0, r.since, r.expectedMs, if (r.counted) 1 else 0, r.platform?.name,
+                if (r.finishSeen) 1 else 0,
+            )
         }
         gone.forEach { g -> row("g", g.name, g.platform?.name, g.at) }
         owed.forEach { f -> row("f", f.platform?.name, f.at) }
@@ -498,7 +512,10 @@ class TripMatcher<K : Any>(
                         )
                     }
                     "r" -> riders.addLast(
-                        Rider(c[1].ifEmpty { null }, c[2] == "1", c[3].toLong(), c[4].toLongOrNull(), c[5] == "1", platformOf(c[6])),
+                        Rider(
+                            c[1].ifEmpty { null }, c[2] == "1", c[3].toLong(), c[4].toLongOrNull(), c[5] == "1", platformOf(c[6]),
+                            finishSeen = c.getOrNull(7) == "1",
+                        ),
                     )
                     "g" -> gone.addLast(Gone(c[1], platformOf(c[2]), c[3].toLong()))
                     "f" -> owed.addLast(Owed(platformOf(c[1]), c[2].toLong()))
