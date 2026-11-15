@@ -77,6 +77,8 @@ class RoomOfferHistoryRepository(private val dao: OfferDao) : OfferHistoryReposi
 
     override suspend fun setAcceptedById(id: Long, accepted: Boolean?) = dao.setAcceptedById(id, accepted)
 
+    override suspend fun delete(id: Long) = lock.withLock { dao.deleteOffer(id) }
+
     override fun recent(limit: Int): Flow<List<OfferRecord>> =
         dao.recent(limit).map { list -> list.map { it.toRecord() } }
 
