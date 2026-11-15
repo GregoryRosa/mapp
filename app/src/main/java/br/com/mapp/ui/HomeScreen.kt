@@ -27,8 +27,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
-import androidx.compose.material.icons.outlined.BarChart
-import androidx.compose.material.icons.outlined.DirectionsCar
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.Style
@@ -251,17 +249,15 @@ private fun StatusPill(running: Boolean) {
 private data class MenuItem(val label: String, val icon: ImageVector, val route: String)
 
 private val MENU = listOf(
-    MenuItem("Ganhos", Icons.Outlined.AccountBalanceWallet, Routes.FINANCE),
-    MenuItem("Relatórios", Icons.Outlined.BarChart, Routes.REPORTS),
+    MenuItem("Financeiro", Icons.Outlined.AccountBalanceWallet, Routes.FINANCE),
     MenuItem("Jornadas", Icons.Outlined.Timer, Routes.SHIFTS),
     MenuItem("Ofertas", Icons.Outlined.History, Routes.HISTORY),
     MenuItem("Perfis", Icons.Outlined.Tune, Routes.PROFILES),
     MenuItem("Card", Icons.Outlined.Style, Routes.CARD_STYLE),
-    MenuItem("Veículo", Icons.Outlined.DirectionsCar, Routes.VEHICLE),
     MenuItem("Zonas", Icons.Outlined.Map, Routes.ZONES),
 )
 
-/** Menu de baixo em vidro escuro, duas linhas de 4 botões. */
+/** Menu de baixo em vidro escuro, duas linhas de 3 botões. */
 @Composable
 private fun BottomMenu(onNavigate: (String) -> Unit) {
     val shape = RoundedCornerShape(26.dp)
@@ -271,7 +267,7 @@ private fun BottomMenu(onNavigate: (String) -> Unit) {
             .border(1.dp, Brush.linearGradient(listOf(MappColors.Border, Color(0x33B59CFF))), shape)
             .padding(vertical = 6.dp, horizontal = 6.dp),
     ) {
-        MENU.chunked(4).forEach { row ->
+        MENU.chunked(3).forEach { row ->
             Row(Modifier.fillMaxWidth()) {
                 row.forEach { item ->
                     Column(

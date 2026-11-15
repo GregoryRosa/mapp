@@ -25,7 +25,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -66,8 +65,9 @@ private val saveScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 /** Espera depois da última tecla antes de salvar sozinho. */
 private const val AUTOSAVE_MS = 600L
 
+/** Aba Custos fixos da tela Financeiro (combustível, manutenção e outros custos por km). */
 @Composable
-fun VehicleScreen(onBack: () -> Unit) {
+internal fun FixedCostsTab() {
     val repos = MappApp.repos
     val ctx = LocalContext.current.applicationContext
     val saved by remember { repos.vehicle.config() }
@@ -75,25 +75,23 @@ fun VehicleScreen(onBack: () -> Unit) {
     // Valores de quando a tela abriu: o formulário não é recarregado a cada salvamento automático.
     val opened = remember(saved != null) { saved }
 
-    Scaffold(topBar = { BackTopBar("Custos do veículo", onBack) }) { pad ->
-        val initial = opened
-        val current = saved
-        if (initial == null || current == null) {
-            Box(Modifier.fillMaxSize().padding(pad), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-        } else {
-            VehicleForm(
-                initial = initial,
-                saved = current,
-                modifier = Modifier.padding(pad),
-                onSave = { cfg ->
-                    saveScope.launch {
-                        repos.vehicle.save(cfg)
-                        // Jornadas de hoje já encerradas também passam a usar o custo/km novo.
-                        ShiftTracker.applyCostToday(ctx, cfg.costPerKm)
-                    }
-                },
-            )
-        }
+    val initial = opened
+    val current = saved
+    if (initial == null || current == null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+    } else {
+        VehicleForm(
+            initial = initial,
+            saved = current,
+            modifier = Modifier,
+            onSave = { cfg ->
+                saveScope.launch {
+                    repos.vehicle.save(cfg)
+                    // Jornadas de hoje já encerradas também passam a usar o custo/km novo.
+                    ShiftTracker.applyCostToday(ctx, cfg.costPerKm)
+                }
+            },
+        )
     }
 }
 

@@ -15,7 +15,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -44,8 +43,9 @@ private enum class ReportRange(val label: String) {
 
 private const val HOUR_BAND = 3
 
+/** Aba Relatórios da tela Financeiro. */
 @Composable
-fun ReportsScreen(onBack: () -> Unit) {
+internal fun ReportsTab() {
     val repos = MappApp.repos
     var range by rememberSaveable { mutableStateOf(ReportRange.LAST_7) }
     val period = remember(range) { range.period() }
@@ -64,98 +64,95 @@ fun ReportsScreen(onBack: () -> Unit) {
     val offerSummary = remember(offers) { ReportMath.summarizeOffers(offers) }
     val bestHours = remember(offers) { ReportMath.bestHours(offers, top = 5) }
 
-    Scaffold(topBar = { BackTopBar("Relatórios", onBack) }) { pad ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(pad)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ReportRange.entries.forEach { r ->
-                    FilterChip(selected = range == r, onClick = { range = r }, label = { Text(r.label) })
-                }
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ReportRange.entries.forEach { r ->
+                FilterChip(selected = range == r, onClick = { range = r }, label = { Text(r.label) })
             }
-            Text(
-                "${Format.day(period.from)} a ${Format.day(period.to)}",
-                style = MaterialTheme.typography.bodySmall,
+        }
+        Text(
+            "${Format.day(period.from)} a ${Format.day(period.to)}",
+            style = MaterialTheme.typography.bodySmall,
+        )
+
+        Text(
+            "Bruto = ${totals.rides} corridas (${Format.brl(totals.ridesGross)}) + ganhos lançados " +
+                "(${Format.brl(totals.manualIncome)}). Custos = carro (km × custo/km) + gastos lançados.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StatCard("Ganho bruto", Format.brl(totals.gross), Modifier.weight(1f))
+            StatCard("Corridas", totals.rides.toString(), Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StatCard("Custos", Format.brl(totals.cost), Modifier.weight(1f))
+            StatCard(
+                "Líquido",
+                Format.brl(totals.net),
+                Modifier.weight(1f),
+                valueColor = if (totals.net < 0) RedSignal else GreenSignal,
             )
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StatCard("Km rodados", Format.km(totals.km.takeIf { it > 0 }), Modifier.weight(1f))
+            StatCard("R$/km (bruto)", Format.perKm(totals.perKm), Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StatCard("R$/hora (bruto)", Format.perHour(totals.perHour), Modifier.weight(1f))
+            StatCard("R$/km médio (ofertas)", Format.perKm(offerSummary.avgPerKm), Modifier.weight(1f))
+        }
 
-            Text(
-                "Bruto = ${totals.rides} corridas (${Format.brl(totals.ridesGross)}) + ganhos lançados " +
-                    "(${Format.brl(totals.manualIncome)}). Custos = carro (km × custo/km) + gastos lançados.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatCard("Ganho bruto", Format.brl(totals.gross), Modifier.weight(1f))
-                StatCard("Corridas", totals.rides.toString(), Modifier.weight(1f))
+        SectionTitle("Ganhos por dia da semana")
+        ChartCard {
+            val max = byWeekday.maxOrNull() ?: 0.0
+            byWeekday.forEachIndexed { i, v ->
+                BarRow(Format.WEEKDAYS[i], v, max, Format.brl(v))
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatCard("Custos", Format.brl(totals.cost), Modifier.weight(1f))
-                StatCard(
-                    "Líquido",
-                    Format.brl(totals.net),
-                    Modifier.weight(1f),
-                    valueColor = if (totals.net < 0) RedSignal else GreenSignal,
-                )
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatCard("Km rodados", Format.km(totals.km.takeIf { it > 0 }), Modifier.weight(1f))
-                StatCard("R$/km (bruto)", Format.perKm(totals.perKm), Modifier.weight(1f))
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatCard("R$/hora (bruto)", Format.perHour(totals.perHour), Modifier.weight(1f))
-                StatCard("R$/km médio (ofertas)", Format.perKm(offerSummary.avgPerKm), Modifier.weight(1f))
-            }
+        }
 
-            SectionTitle("Ganhos por dia da semana")
-            ChartCard {
-                val max = byWeekday.maxOrNull() ?: 0.0
-                byWeekday.forEachIndexed { i, v ->
-                    BarRow(Format.WEEKDAYS[i], v, max, Format.brl(v))
+        SectionTitle("Ganhos por horário")
+        ChartCard {
+            val max = byHour.maxOfOrNull { it.total } ?: 0.0
+            byHour.forEach { b ->
+                BarRow("%02d–%02dh".format(b.startHour, b.endHour), b.total, max, Format.brl(b.total))
+            }
+        }
+
+        SectionTitle("Melhores horários (R$/km das ofertas)")
+        ChartCard {
+            if (bestHours.isEmpty()) {
+                Text("Sem ofertas com km neste período.", style = MaterialTheme.typography.bodySmall)
+            } else {
+                val max = bestHours.maxOf { it.avgPerKm }
+                bestHours.forEach { h ->
+                    BarRow(
+                        "%02d–%02dh".format(h.hour, (h.hour + 1) % 24),
+                        h.avgPerKm,
+                        max,
+                        "${Format.perKm(h.avgPerKm)} (${h.offers})",
+                        color = GreenSignal,
+                    )
                 }
+                Text("Entre parênteses: nº de ofertas vistas.", style = MaterialTheme.typography.bodySmall)
             }
+        }
 
-            SectionTitle("Ganhos por horário")
-            ChartCard {
-                val max = byHour.maxOfOrNull { it.total } ?: 0.0
-                byHour.forEach { b ->
-                    BarRow("%02d–%02dh".format(b.startHour, b.endHour), b.total, max, Format.brl(b.total))
-                }
-            }
-
-            SectionTitle("Melhores horários (R$/km das ofertas)")
-            ChartCard {
-                if (bestHours.isEmpty()) {
-                    Text("Sem ofertas com km neste período.", style = MaterialTheme.typography.bodySmall)
-                } else {
-                    val max = bestHours.maxOf { it.avgPerKm }
-                    bestHours.forEach { h ->
-                        BarRow(
-                            "%02d–%02dh".format(h.hour, (h.hour + 1) % 24),
-                            h.avgPerKm,
-                            max,
-                            "${Format.perKm(h.avgPerKm)} (${h.offers})",
-                            color = GreenSignal,
-                        )
-                    }
-                    Text("Entre parênteses: nº de ofertas vistas.", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-
-            SectionTitle("Ofertas por semáforo")
-            ChartCard {
-                Text("${offerSummary.count} ofertas · ${Format.perHour(offerSummary.avgPerHour)} médio")
-                val max = offerSummary.signals.values.maxOrNull()?.toDouble() ?: 0.0
-                listOf(Signal.GREEN, Signal.YELLOW, Signal.RED).forEach { s ->
-                    val n = offerSummary.signals[s] ?: 0
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SignalDot(s)
-                        Column(Modifier.weight(1f)) {
-                            BarRow(signalLabel(s), n.toDouble(), max, n.toString(), color = signalColor(s))
-                        }
+        SectionTitle("Ofertas por semáforo")
+        ChartCard {
+            Text("${offerSummary.count} ofertas · ${Format.perHour(offerSummary.avgPerHour)} médio")
+            val max = offerSummary.signals.values.maxOrNull()?.toDouble() ?: 0.0
+            listOf(Signal.GREEN, Signal.YELLOW, Signal.RED).forEach { s ->
+                val n = offerSummary.signals[s] ?: 0
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SignalDot(s)
+                    Column(Modifier.weight(1f)) {
+                        BarRow(signalLabel(s), n.toDouble(), max, n.toString(), color = signalColor(s))
                     }
                 }
             }
