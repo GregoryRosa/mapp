@@ -40,7 +40,13 @@ import br.com.mapp.core.model.TripStage
  * - **passageiro que já saiu** (corrida fechada há até [GHOST_MS]) aparecendo de novo na tela não é
  *   corrida nova, a não ser que tenha chegado oferta depois que ele saiu;
  * - corrida aberta **sem nome** (+1 ou aceite sem nome lido) não "pega" o nome do passageiro da fila
- *   quando há oferta mais nova que ela que serve para esse passageiro.
+ *   quando há oferta mais nova que ela que serve para esse passageiro;
+ * - **avaliação atrasada** (15/11/2026): na troca para a corrida da fila a Uber mostra "Encontro com
+ *   <novo>" e só depois (ou já na corrida nova) "Como foi a viagem?" da corrida ANTERIOR. Corrida
+ *   fechada sem a tela de fim deixa essa tela "devida" ([owed]); se ela chega quando a corrida aberta
+ *   é nova demais para ter terminado, é da anterior ([Result.lateFinish]) e não fecha nada. Antes
+ *   fechava a corrida recém-aceita: ela saía da jornada (ícone laranja) e o fim real virava
+ *   "não vi o aceite".
  *
  * [K] = identidade da oferta (o overlay usa app + horário da 1ª leitura).
  */
@@ -63,6 +69,11 @@ class TripMatcher<K : Any>(
         val finishedUnseen: Int = 0,
         /** App das corridas a finalizar/cancelar (null = qualquer). */
         val platform: Platform? = null,
+        /**
+         * "Como foi a viagem?" de uma corrida já fechada (avaliação atrasada da anterior, na troca para
+         * a corrida da fila): não finalizar nada.
+         */
+        val lateFinish: Boolean = false,
     )
 
     /** Oferta na memória. */
@@ -97,6 +108,9 @@ class TripMatcher<K : Any>(
     /** Passageiro de corrida já fechada (para resto de tela não virar corrida nova). */
     private class Gone(val name: String, val platform: Platform?, val at: Long)
 
+    /** Corrida finalizada sem a tela de fim ter aparecido: a avaliação dela ainda pode vir. */
+    private class Owed(val platform: Platform?, val at: Long)
+
     private enum class Ending { FINISHED, CANCELLED, WAIT }
 
     private enum class Fit { OK, NO, TOO_YOUNG }
@@ -107,6 +121,7 @@ class TripMatcher<K : Any>(
     /** Corridas abertas, da mais antiga para a mais nova. */
     private val riders = ArrayDeque<Rider>()
     private val gone = ArrayDeque<Gone>()
+    private val owed = ArrayDeque<Owed>()
 
     /** Muda a cada alteração que vale salvar ([snapshot]); só reler a mesma oferta não muda. */
     var changes: Int = 0
@@ -205,6 +220,7 @@ class TripMatcher<K : Any>(
         counted.clear()
         riders.clear()
         gone.clear()
+        owed.clear()
         changes++
     }
 
@@ -224,8 +240,24 @@ class TripMatcher<K : Any>(
         // Quem terminou: o mais antigo daquele app que já embarcou (ou o mais antigo, se o embarque não foi lido).
         val here = riders.filter { samePlatform(platform, it.platform) }
         val done = here.firstOrNull { it.started } ?: here.firstOrNull()
+        // Avaliação atrasada da corrida anterior (já fechada quando o passageiro novo apareceu).
+        val late = owed.firstOrNull { samePlatform(platform, it.platform) }
+        if (late != null && (done == null || tooYoungToFinish(done, now))) {
+            owed.remove(late)
+            return Result(null, newRide = false, lateFinish = true)
+        }
         if (done != null) close(done, now)
         return Result(null, newRide = false)
+    }
+
+    /**
+     * Corrida aberta há pouco demais para já ter terminado: sem embarque, menos de ¾ do previsto;
+     * com embarque, menos da metade.
+     */
+    private fun tooYoungToFinish(r: Rider, now: Long): Boolean {
+        val full = r.expectedMs ?: UNKNOWN_EXPECTED_MS
+        val elapsed = now - r.since
+        return if (r.started) elapsed * 2 < full else elapsed * 4 < full * 3
     }
 
     /** Tela inicial: nenhuma corrida em andamento NESTE app ([platform]); as dos outros apps seguem. */
@@ -330,7 +362,12 @@ class TripMatcher<K : Any>(
             if (here != null && r.platform != null && r.platform != here) continue
             close(r, now)
             when (ending(r, now, wait = false)) {
-                Ending.FINISHED -> if (r.counted) finished++
+                Ending.FINISHED -> {
+                    if (r.counted) finished++
+                    // A Uber pode mostrar a avaliação desta corrida só agora, já com o passageiro novo.
+                    owed.addLast(Owed(r.platform, now))
+                    while (owed.size > MAX_OWED) owed.removeFirst()
+                }
                 else -> if (r.counted) cancelled = true
             }
         }
@@ -406,6 +443,7 @@ class TripMatcher<K : Any>(
         offers.removeAll { now - it.lastAt > queuedMs }
         riders.removeAll { now - it.since > MAX_RIDE_MS }
         gone.removeAll { now - it.at > GHOST_MS }
+        owed.removeAll { now - it.at > OWED_MS }
     }
 
     private fun trim() {
@@ -432,6 +470,7 @@ class TripMatcher<K : Any>(
             row("r", r.name, if (r.started) 1 else 0, r.since, r.expectedMs, if (r.counted) 1 else 0, r.platform?.name)
         }
         gone.forEach { g -> row("g", g.name, g.platform?.name, g.at) }
+        owed.forEach { f -> row("f", f.platform?.name, f.at) }
         counted.forEach { k -> row("c", encode(k)) }
     }
 
@@ -462,6 +501,7 @@ class TripMatcher<K : Any>(
                         Rider(c[1].ifEmpty { null }, c[2] == "1", c[3].toLong(), c[4].toLongOrNull(), c[5] == "1", platformOf(c[6])),
                     )
                     "g" -> gone.addLast(Gone(c[1], platformOf(c[2]), c[3].toLong()))
+                    "f" -> owed.addLast(Owed(platformOf(c[1]), c[2].toLong()))
                     "c" -> decode(c[1])?.let { counted.add(it) }
                 }
             }
@@ -486,6 +526,9 @@ class TripMatcher<K : Any>(
         /** Ofertas guardadas na memória. */
         const val MAX_OFFERS = 12
         private const val MAX_GONE = 6
+        private const val MAX_OWED = 3
+        /** Avaliação atrasada da corrida anterior vale até isto depois de ela ser fechada. */
+        private const val OWED_MS = 60 * 60_000L
         private const val VERSION = "tm1"
         private const val SEP = "\t"
 

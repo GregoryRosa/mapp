@@ -25,6 +25,7 @@ import br.com.mapp.core.card.CardValues
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.Signal
+import br.com.mapp.core.route.RideRoute
 import br.com.mapp.maps.MapViews
 
 /**
@@ -75,14 +76,17 @@ class CardHeaderView(private val context: Context, private val trailing: List<Te
     }
 
     fun bind(o: EvaluatedOffer, profile: FilterProfile?, layout: CardLayout) {
-        val fg = if (o.signal == Signal.YELLOW) DARK_TEXT else WHITE
-        view.background = ColorDrawable(signalColor(o.signal))
+        // Corrida com parada no caminho: Card roxo (as barrinhas de cada item continuam com o semáforo).
+        val withStop = RideRoute.stopCount(o.raw) > 0
+        val darkText = !withStop && o.signal == Signal.YELLOW
+        val fg = if (darkText) DARK_TEXT else WHITE
+        view.background = ColorDrawable(if (withStop) STOP_PURPLE else signalColor(o.signal))
         trailing.forEach { it.setTextColor(fg) }
 
         platformChip.visibility = if (layout.showPlatform) View.VISIBLE else View.GONE
         platformChip.text = o.raw.platform.label
-        platformChip.setTextColor(if (o.signal == Signal.YELLOW) WHITE else DARK_TEXT)
-        (platformChip.background as GradientDrawable).setColor(if (o.signal == Signal.YELLOW) DARK_TEXT else WHITE)
+        platformChip.setTextColor(if (darkText) WHITE else DARK_TEXT)
+        (platformChip.background as GradientDrawable).setColor(if (darkText) DARK_TEXT else WHITE)
 
         // Tamanho das letras escolhido em "Estilo do cartão" (% do padrão).
         val ts = layout.topFont / 100f
@@ -217,6 +221,8 @@ class CardHeaderView(private val context: Context, private val trailing: List<Te
         val WHITE = 0xFFFFFFFF.toInt()
         val DARK_TEXT = 0xFF212121.toInt()
         private val RED_BG = 0xFFC62828.toInt()
+        /** Fundo do Card (e cor da notificação) de corrida com parada no caminho. */
+        val STOP_PURPLE = 0xFF7B1FA2.toInt()
 
         fun signalColor(signal: Signal): Int = when (signal) {
             Signal.GREEN -> 0xFF2E7D32.toInt()

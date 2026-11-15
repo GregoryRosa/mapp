@@ -52,6 +52,14 @@ class RideNoticeTest {
         assertEquals("Busca 1,6 km · 4 min → Viagem 5,2 km · 12 min", n.summary)
     }
 
+    @Test fun corrida_com_parada_fica_roxa() {
+        val comParada = OfferEvaluator.evaluate(raw.copy(stopCount = 1), profile, cost, pickup = pickup, dropoff = dropoff)
+        val n = RideNotices.of(comParada, "UberX", "caio", acceptedAt, sp)
+        assertEquals("🟣 Corrida aceita · UberX · R$ 15,40", n.title)
+        assertTrue(n.hasStops)
+        assertFalse(RideNotices.of(OfferEvaluator.evaluate(raw, profile, cost), "UberX", "caio", acceptedAt, sp).hasStops)
+    }
+
     @Test fun expandida_tem_numeros_chegada_enderecos_e_passageiro() {
         val offer = OfferEvaluator.evaluate(raw, profile, cost, pickup = pickup, dropoff = dropoff)
         val n = RideNotices.of(offer, "UberX", "caio", acceptedAt, sp, points = RidePoints(here, pickup, dropoff))

@@ -527,7 +527,8 @@ class OverlayService : LifecycleService() {
         }
         if (ShiftTracker.current(this).value == null) return
         // Corridas que terminaram sem a tela de fim ter sido lida (da mais antiga).
-        repeat(match.finishedUnseen) { finishPending(auto = true, platform = match.platform) }
+        // Passageiro novo na tela (troca para a corrida da fila): o aviso diz que é a ANTERIOR que terminou.
+        repeat(match.finishedUnseen) { finishPending(auto = true, platform = match.platform, previous = match.newRide) }
         if (match.finishedUnseen > 0) lastFinishedAt = now
         // Busca sem embarque que saiu da tela cedo demais para ter virado viagem: foi cancelada.
         if (match.cancelledPickup) cancelPending(auto = true, platform = match.platform)
@@ -548,6 +549,12 @@ class OverlayService : LifecycleService() {
                 }
             }
             TripStage.FINISHED -> {
+                // Avaliação atrasada da corrida anterior (já finalizada na troca para a da fila): a
+                // corrida aceita continua em andamento.
+                if (match.lateFinish) {
+                    Log.i(TAG, "Avaliação da corrida anterior: corrida em andamento mantida")
+                    return
+                }
                 lastFinishedAt = now
                 if (ShiftTracker.current(this).value?.nextToFinish(event.platform) != null) {
                     finishPending(auto = true, platform = event.platform)
@@ -578,14 +585,14 @@ class OverlayService : LifecycleService() {
     }
 
     /** Corrida em andamento terminou: o valor entra no ganho/lucro do dia. */
-    private fun finishPending(auto: Boolean, platform: Platform? = null) {
+    private fun finishPending(auto: Boolean, platform: Platform? = null, previous: Boolean = false) {
         val pending = ShiftTracker.current(this).value?.nextToFinish(platform) ?: run {
             if (!auto) toast("Nenhuma corrida em andamento")
             return
         }
         if (!auto) { matcher.closedOldest(System.currentTimeMillis()); saveTripMemory(force = true) }
         ShiftTracker.finishPending(this, platform)
-        tripToast("Corrida finalizada ✓ +${ShiftMath.money(pending.price)} no lucro")
+        tripToast("${if (previous) "Corrida anterior finalizada" else "Corrida finalizada"} ✓ +${ShiftMath.money(pending.price)} no lucro")
     }
 
     private fun playGreat(key: OfferKey): Long {
