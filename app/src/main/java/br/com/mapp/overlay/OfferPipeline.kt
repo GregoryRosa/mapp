@@ -5,6 +5,7 @@ import android.util.Log
 import br.com.mapp.MappApp
 import br.com.mapp.core.bus.OfferBus
 import br.com.mapp.core.engine.OfferEvaluator
+import br.com.mapp.core.engine.OfferSanity
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.GeoPoint
@@ -68,6 +69,11 @@ class OfferPipeline(
         launch { keep(repos.zones.all()) { zones = it } }
 
         OfferBus.raw.collect { raw ->
+            // Oferta que não existe (leitura de outra tela, valor impossível): nada de Card, voz ou histórico.
+            OfferSanity.problem(raw)?.let { why ->
+                Log.i(TAG, "Oferta descartada ($why): R$ ${raw.price} · ${raw.tripKm} km · ${raw.tripMin} min")
+                return@collect
+            }
             val identity = raw.identity()
             if (identity == lastIdentity && raw.capturedAt - lastSeenAt < DEDUP_WINDOW_MS) {
                 // O leitor republicou a mesma oferta: re-mostra e deixa a avaliação em curso terminar.

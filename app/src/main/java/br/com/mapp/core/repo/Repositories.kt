@@ -50,6 +50,8 @@ interface OfferHistoryRepository {
     suspend fun setAccepted(offer: EvaluatedOffer, accepted: Boolean?)
     /** Marca pelo id do registro (ajuste manual na tela de histórico). */
     suspend fun setAcceptedById(id: Long, accepted: Boolean?)
+    /** Apaga o registro (arrastar para a esquerda na tela de histórico). */
+    suspend fun delete(id: Long)
 }
 
 enum class EntryKind { INCOME, EXPENSE }
