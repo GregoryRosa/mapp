@@ -55,6 +55,25 @@ object OfferEvaluator {
         return LegTotals(totalKm, totalMin, kmEstimated, timeEstimated)
     }
 
+    /** Um trecho só (busca ou viagem), com a parte que faltar estimada pela velocidade como em [legs]. */
+    data class Leg(val km: Double?, val minutes: Double?, val kmEstimated: Boolean, val timeEstimated: Boolean)
+
+    /** Busca: você → coleta (A). */
+    fun pickupLeg(raw: RawOffer): Leg = leg(raw, raw.pickupKm, raw.pickupMin)
+
+    /** Viagem: coleta (A) → destino final (passando pelas paradas). */
+    fun tripLeg(raw: RawOffer): Leg = leg(raw, raw.tripKm, raw.tripMin)
+
+    private fun leg(raw: RawOffer, km: Double?, min: Int?): Leg {
+        val speed = speedKmh(raw)
+        return Leg(
+            km = km ?: min?.let { it * speed / 60.0 },
+            minutes = min?.toDouble() ?: km?.let { it / speed * 60.0 },
+            kmEstimated = km == null && min != null,
+            timeEstimated = min == null && km != null,
+        )
+    }
+
     private fun speedKmh(raw: RawOffer): Double {
         fun of(km: Double?, min: Int?): Double? =
             if (km != null && min != null && km > 0 && min > 0) km / min * 60.0 else null

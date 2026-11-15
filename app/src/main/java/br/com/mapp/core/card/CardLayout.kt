@@ -4,6 +4,8 @@ import br.com.mapp.core.engine.OfferEvaluator
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.Signal
+import br.com.mapp.core.route.RideRoute
+import br.com.mapp.core.route.StopKind
 import java.util.Locale
 
 /** Informações que podem ir para o cabeçalho do cartão da oferta. */
@@ -22,6 +24,21 @@ enum class CardMetric(val id: String, val label: String) {
 
     companion object {
         fun fromId(id: String): CardMetric? = entries.firstOrNull { it.id == id }
+    }
+}
+
+/**
+ * Itens da linha de endereços (embaixo das outras duas, texto pequeno). O Card mostra essa linha uma
+ * vez por ponto da corrida: A = coleta (distância e tempo da busca), B, C… = paradas, última letra =
+ * destino (distância e tempo da viagem, da coleta até ele).
+ */
+enum class AddressItem(val id: String, val label: String) {
+    ADDRESS("address", "Endereço"),
+    DISTANCE("distance", "Distância até o ponto"),
+    TIME("time", "Tempo até o ponto");
+
+    companion object {
+        fun fromId(id: String): AddressItem? = entries.firstOrNull { it.id == id }
     }
 }
 
@@ -44,6 +61,10 @@ data class CardLayout(
     val topFont: Int = 100,
     /** Tamanho dos números grandes da linha de baixo, em % do padrão. */
     val bottomFont: Int = 100,
+    /** Linha de endereços (uma por ponto A, B, C…); vazia = não aparece no Card. */
+    val address: List<AddressItem> = emptyList(),
+    /** Tamanho das letras da linha de endereços, em % do padrão. */
+    val addressFont: Int = 100,
 ) {
     fun font(line: CardLine): Int = if (line == CardLine.TOP) topFont else bottomFont
 
@@ -91,12 +112,39 @@ data class CardLayout(
 
     fun remove(metric: CardMetric): CardLayout = copy(top = top - metric, bottom = bottom - metric)
 
+    /** Itens da linha de endereços que ainda não estão nela. */
+    val availableAddress: List<AddressItem> get() = AddressItem.entries.filter { it !in address }
+
+    /** Mesmo jeito de [place], na linha de endereços: vazio vai para o fim; ocupado troca ou substitui. */
+    fun placeAddress(item: AddressItem, index: Int): CardLayout {
+        val list = address.toMutableList()
+        val from = list.indexOf(item)
+        val occupant = list.getOrNull(index)
+        when {
+            occupant == item -> return this
+            occupant == null -> {
+                if (from >= 0) list.removeAt(from)
+                if (list.size >= ADDRESS_SLOTS) return this
+                list.add(item)
+            }
+            from >= 0 -> { list[from] = occupant; list[index] = item }
+            else -> list[index] = item
+        }
+        return copy(address = list)
+    }
+
+    fun removeAddress(item: AddressItem): CardLayout = copy(address = address - item)
+
+    fun withAddressFont(percent: Int): CardLayout = copy(addressFont = clampFont(percent))
+
     fun encode(): String = buildString {
         append("top=").append(top.joinToString(",") { it.id })
         append(";bottom=").append(bottom.joinToString(",") { it.id })
         append(";platform=").append(if (showPlatform) 1 else 0)
         append(";topfont=").append(topFont)
         append(";bottomfont=").append(bottomFont)
+        append(";address=").append(address.joinToString(",") { it.id })
+        append(";addrfont=").append(addressFont)
     }
 
     companion object {
@@ -120,8 +168,14 @@ data class CardLayout(
                 top, bottom, parts["platform"] != "0",
                 topFont = parts["topfont"]?.toIntOrNull()?.let(::clampFont) ?: 100,
                 bottomFont = parts["bottomfont"]?.toIntOrNull()?.let(::clampFont) ?: 100,
+                address = parts["address"].orEmpty().split(',').mapNotNull { AddressItem.fromId(it.trim()) }
+                    .distinct().take(ADDRESS_SLOTS),
+                addressFont = parts["addrfont"]?.toIntOrNull()?.let(::clampFont) ?: 100,
             )
         }
+
+        /** Espaços da linha de endereços (cabem os 3 itens). */
+        const val ADDRESS_SLOTS = 3
 
         const val FONT_MIN = 70
         const val FONT_MAX = 160
@@ -133,6 +187,12 @@ data class CardLayout(
         }
     }
 }
+
+/** Texto de um item da linha de endereços. */
+data class AddressCell(val item: AddressItem, val text: String)
+
+/** Linha de endereço de um ponto da corrida: letra do mapa (A, B…), tipo do ponto e os itens. */
+data class AddressRow(val letter: String, val kind: StopKind, val cells: List<AddressCell>)
 
 /** Valores e cores de cada informação do cartão. */
 object CardValues {
@@ -238,6 +298,48 @@ object CardValues {
         if (o.signal != Signal.GREEN) return false
         if (o.metrics.perKm == null || o.metrics.perHour == null) return false
         return (layout.top + layout.bottom).all { tone(it, o, profile).let { t -> t == null || t == Signal.GREEN } }
+    }
+
+    /**
+     * Linhas de endereço do Card, uma por ponto do [RideRoute] (A coleta, B… paradas, última =
+     * destino), com os itens de [items] na ordem escolhida. Distância/tempo: A = busca (você → A);
+     * destino = viagem (A → destino, passando pelas paradas); parada = sem trecho próprio na Uber,
+     * fica só o endereço ("Parada no caminho" quando a Uber não mostra). "~" = estimado.
+     */
+    fun addressRows(o: EvaluatedOffer, items: List<AddressItem>): List<AddressRow> {
+        if (items.isEmpty()) return emptyList()
+        val pickup = OfferEvaluator.pickupLeg(o.raw)
+        val trip = OfferEvaluator.tripLeg(o.raw)
+        return RideRoute.of(o).map { stop ->
+            val leg = when (stop.kind) {
+                StopKind.PICKUP -> pickup
+                StopKind.DROPOFF -> trip
+                StopKind.STOP -> null
+            }
+            val cells = items.mapNotNull { item ->
+                when (item) {
+                    AddressItem.ADDRESS -> AddressCell(
+                        item,
+                        stop.address ?: if (stop.kind == StopKind.STOP) STOP_TEXT else "Endereço não lido",
+                    )
+                    AddressItem.DISTANCE -> leg?.let { AddressCell(item, legKm(it)) }
+                    AddressItem.TIME -> leg?.let { AddressCell(item, legTime(it)) }
+                }
+            }.ifEmpty { listOf(AddressCell(AddressItem.ADDRESS, STOP_TEXT)) }
+            AddressRow(stop.letter, stop.kind, cells)
+        }
+    }
+
+    private const val STOP_TEXT = "Parada no caminho"
+
+    private fun legKm(leg: OfferEvaluator.Leg): String {
+        val km = leg.km ?: return "— km"
+        return (if (leg.kmEstimated) "~" else "") + num(km, 1) + " km"
+    }
+
+    private fun legTime(leg: OfferEvaluator.Leg): String {
+        val min = leg.minutes ?: return "— min"
+        return (if (leg.timeEstimated) "~" else "") + duration(Math.round(min).toInt())
     }
 
     private fun perKm(o: EvaluatedOffer) = o.metrics.perKm
