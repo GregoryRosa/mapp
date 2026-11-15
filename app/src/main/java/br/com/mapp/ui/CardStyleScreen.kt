@@ -87,6 +87,7 @@ import androidx.compose.ui.zIndex
 import androidx.core.content.IntentCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.com.mapp.MappApp
+import br.com.mapp.core.card.AddressItem
 import br.com.mapp.core.card.CardLayout
 import br.com.mapp.core.card.CardLine
 import br.com.mapp.core.card.CardMetric
@@ -115,8 +116,11 @@ import java.time.ZoneId
 import java.util.Locale
 import kotlin.math.roundToInt
 
-/** Espaço numa linha: [line] é um [CardLine] (aba Card) ou um [NoticeLine] (aba Notificação). */
+/** Espaço numa linha: [line] é um [CardLine] ou [AddressLine] (aba Card) ou um [NoticeLine] (aba Notificação). */
 private data class Slot(val line: Any, val index: Int)
+
+/** A linha de endereços do Card (itens [AddressItem], uma linha por ponto A, B, C…). */
+private object AddressLine
 
 /** Item sendo arrastado: [item] é um [CardMetric] ou um [NoticeItem]. */
 private data class Drag(val item: Any, val label: String, val from: Slot?, val pos: Offset)
@@ -153,16 +157,18 @@ fun CardStyleScreen(onBack: () -> Unit) {
     }
 }
 
-/** Submenu "Card de corridas": as duas linhas do cabeçalho do cartão da oferta. */
+/** Submenu "Card de corridas": as linhas do cabeçalho do cartão da oferta (cima, baixo e endereços). */
 @Composable
 private fun OfferCardTab() {
     val ctx = LocalContext.current
     var layout by remember { mutableStateOf(OverlayPrefs.cardLayout(ctx)) }
-    var selected by remember { mutableStateOf<CardMetric?>(null) }
+    // Item escolhido para colocar: um CardMetric (linhas de cima/baixo) ou um AddressItem (linha de endereços).
+    var selected by remember { mutableStateOf<Any?>(null) }
     var sample by remember { mutableIntStateOf(0) }
     val slotBounds = remember { mutableStateMapOf<Slot, Rect>() }
     val chipOrigins = remember { mutableStateMapOf<Any, Offset>() }
     var availableBounds by remember { mutableStateOf(Rect.Zero) }
+    var addressAvailableBounds by remember { mutableStateOf(Rect.Zero) }
     var rootOffset by remember { mutableStateOf(Offset.Zero) }
     val ctl = remember { DragController() }
 
@@ -175,24 +181,36 @@ private fun OfferCardTab() {
         OverlayPrefs.setCardLayout(ctx, l)
     }
     fun slotAt(pos: Offset): Slot? = slotBounds.entries.firstOrNull { it.value.contains(pos) }?.key
+    // Cada item só entra na sua linha: métricas em cima/baixo, itens de endereço na linha de endereços.
+    fun placeIn(item: Any, slot: Slot): CardLayout = when {
+        item is CardMetric && slot.line is CardLine -> layout.place(item, slot.line, slot.index)
+        item is AddressItem && slot.line == AddressLine -> layout.placeAddress(item, slot.index)
+        else -> layout
+    }
     ctl.onDrop = { d ->
-        val metric = d.item as CardMetric
         val target = slotAt(d.pos)
+        val item = d.item
         when {
-            target != null -> update(layout.place(metric, target.line as CardLine, target.index))
-            d.from != null && availableBounds.contains(d.pos) -> update(layout.remove(metric))
+            target != null -> update(placeIn(item, target))
+            d.from != null && item is CardMetric && availableBounds.contains(d.pos) -> update(layout.remove(item))
+            d.from != null && item is AddressItem && addressAvailableBounds.contains(d.pos) -> update(layout.removeAddress(item))
         }
         selected = null
     }
     fun tapSlot(slot: Slot) {
-        val line = slot.line as CardLine
         val sel = selected
-        val occupant = layout.line(line).getOrNull(slot.index)
+        val occupant: Any? = if (slot.line == AddressLine) {
+            layout.address.getOrNull(slot.index)
+        } else {
+            layout.line(slot.line as CardLine).getOrNull(slot.index)
+        }
         if (sel != null) {
-            update(layout.place(sel, line, slot.index))
+            update(placeIn(sel, slot))
             selected = null
-        } else if (occupant != null) {
+        } else if (occupant is CardMetric) {
             update(layout.remove(occupant))
+        } else if (occupant is AddressItem) {
+            update(layout.removeAddress(occupant))
         }
     }
 
@@ -240,6 +258,7 @@ private fun OfferCardTab() {
                         Text("Tamanho das letras", fontWeight = FontWeight.SemiBold)
                         FontStepper("Linha de cima", layout.topFont) { update(layout.withFont(CardLine.TOP, it)) }
                         FontStepper("Números grandes", layout.bottomFont) { update(layout.withFont(CardLine.BOTTOM, it)) }
+                        FontStepper("Linha de endereços", layout.addressFont) { update(layout.withAddressFont(it)) }
                         Text(
                             "Os números de baixo diminuem sozinhos se não couberem no Card.",
                             style = MaterialTheme.typography.bodySmall,
@@ -260,7 +279,7 @@ private fun OfferCardTab() {
                         labelOf = { (it as CardMetric).label },
                         ctl = ctl,
                         slotBounds = slotBounds,
-                        hasSelection = selected != null,
+                        hasSelection = selected is CardMetric,
                         slotAt = ::slotAt,
                         onTap = ::tapSlot,
                         boxHeight = 76.dp,
@@ -271,11 +290,41 @@ private fun OfferCardTab() {
                     items = layout.available,
                     labelOf = { (it as CardMetric).label },
                     selected = selected,
-                    onSelect = { selected = if (selected == it) null else it as CardMetric },
+                    onSelect = { selected = if (selected == it) null else it },
                     emptyText = "Todos os itens já estão no Card.",
                     ctl = ctl,
                     chipOrigins = chipOrigins,
                     onBounds = { availableBounds = it },
+                )
+
+                SlotRow(
+                    line = AddressLine,
+                    title = "Linha de endereços",
+                    slots = CardLayout.ADDRESS_SLOTS,
+                    items = layout.address,
+                    labelOf = { (it as AddressItem).label },
+                    ctl = ctl,
+                    slotBounds = slotBounds,
+                    hasSelection = selected is AddressItem,
+                    slotAt = ::slotAt,
+                    onTap = ::tapSlot,
+                    boxHeight = 76.dp,
+                )
+                Text(
+                    "Texto pequeno embaixo dos números, repetido para cada ponto: A = coleta (distância e tempo da busca), " +
+                        "B, C… = paradas e a última letra = destino (distância e tempo da viagem, da coleta até lá). " +
+                        "Vazia = não aparece no Card.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                AvailableCard(
+                    items = layout.availableAddress,
+                    labelOf = { (it as AddressItem).label },
+                    selected = selected,
+                    onSelect = { selected = if (selected == it) null else it },
+                    emptyText = "Os 3 itens já estão na linha de endereços.",
+                    ctl = ctl,
+                    chipOrigins = chipOrigins,
+                    onBounds = { addressAvailableBounds = it },
                 )
 
                 TextButton(
@@ -442,9 +491,19 @@ private fun Modifier.dragSource(ctl: DragController, item: Any, label: String, f
 
 /** Ofertas de exemplo para a prévia (avaliadas com o perfil e os custos atuais). */
 private val SAMPLES = listOf(
-    "Curta" to RawOffer(Platform.UBER, 8.43, tripKm = 2.7, tripMin = 5, pickupKm = 1.6, pickupMin = 4, passengerRating = 4.92),
-    "Média" to RawOffer(Platform.NINETY_NINE, 21.90, tripKm = 9.5, tripMin = 22, pickupKm = 2.1, pickupMin = 6, passengerRating = 4.85),
-    "Longa" to RawOffer(Platform.UBER, 29.20, tripKm = 22.0, tripMin = 45, pickupKm = 5.8, pickupMin = 15, passengerRating = 4.20),
+    "Curta" to RawOffer(
+        Platform.UBER, 8.43, tripKm = 2.7, tripMin = 5, pickupKm = 1.6, pickupMin = 4, passengerRating = 4.92,
+        pickupAddress = "Rua Augusta, 1200", dropoffAddress = "Av. Paulista, 900",
+    ),
+    "Média" to RawOffer(
+        Platform.NINETY_NINE, 21.90, tripKm = 9.5, tripMin = 22, pickupKm = 2.1, pickupMin = 6, passengerRating = 4.85,
+        pickupAddress = "Rua das Flores, 85", dropoffAddress = "Shopping Center Norte",
+    ),
+    // Com 1 parada (a Uber não mostra o endereço dela): A coleta, B parada, C destino.
+    "Longa" to RawOffer(
+        Platform.UBER, 29.20, tripKm = 22.0, tripMin = 45, pickupKm = 5.8, pickupMin = 15, passengerRating = 4.20,
+        pickupAddress = "Av. Brasil, 4500", dropoffAddress = "Aeroporto de Congonhas", stopCount = 1,
+    ),
 )
 
 /**

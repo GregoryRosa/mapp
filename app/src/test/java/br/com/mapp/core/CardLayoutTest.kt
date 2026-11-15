@@ -1,5 +1,6 @@
 package br.com.mapp.core
 
+import br.com.mapp.core.card.AddressItem
 import br.com.mapp.core.card.CardLayout
 import br.com.mapp.core.card.CardLine
 import br.com.mapp.core.card.CardMetric
@@ -19,6 +20,7 @@ import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.RawOffer
 import br.com.mapp.core.model.Signal
 import br.com.mapp.core.model.VehicleCostConfig
+import br.com.mapp.core.route.StopKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -179,5 +181,62 @@ class CardLayoutTest {
         val antigo = CardLayout.decode("top=price;bottom=per_km;platform=1")
         assertEquals(100, antigo.topFont)
         assertEquals(100, antigo.bottomFont)
+    }
+
+    @Test
+    fun `linha de enderecos comeca vazia, salva e le texto antigo`() {
+        assertEquals(emptyList<AddressItem>(), def.address)
+        assertEquals(AddressItem.entries, def.availableAddress)
+        val l = def.placeAddress(AddressItem.ADDRESS, 0).placeAddress(AddressItem.TIME, 1).withAddressFont(80)
+        assertEquals(listOf(AddressItem.ADDRESS, AddressItem.TIME), l.address)
+        assertEquals(listOf(AddressItem.DISTANCE), l.availableAddress)
+        assertEquals(l, CardLayout.decode(l.encode()))
+        val antigo = CardLayout.decode("top=price;bottom=per_km;platform=1;topfont=100;bottomfont=100")
+        assertEquals(emptyList<AddressItem>(), antigo.address)
+        assertEquals(100, antigo.addressFont)
+        assertEquals(listOf(AddressItem.TIME), CardLayout.decode("top=;bottom=;address=time,time,xyz").address)
+    }
+
+    @Test
+    fun `linha de enderecos troca, substitui e tira`() {
+        val l = def.placeAddress(AddressItem.ADDRESS, 0).placeAddress(AddressItem.DISTANCE, 1).placeAddress(AddressItem.TIME, 2)
+        assertEquals(listOf(AddressItem.ADDRESS, AddressItem.DISTANCE, AddressItem.TIME), l.address)
+        // Mover para outro espaço ocupado: troca de lugar.
+        assertEquals(listOf(AddressItem.TIME, AddressItem.DISTANCE, AddressItem.ADDRESS), l.placeAddress(AddressItem.TIME, 0).address)
+        // Disponível em espaço ocupado: substitui e o antigo volta para os disponíveis.
+        val two = def.placeAddress(AddressItem.ADDRESS, 0).placeAddress(AddressItem.DISTANCE, 1)
+        val replaced = two.placeAddress(AddressItem.TIME, 0)
+        assertEquals(listOf(AddressItem.TIME, AddressItem.DISTANCE), replaced.address)
+        assertEquals(listOf(AddressItem.ADDRESS), replaced.availableAddress)
+        assertEquals(listOf(AddressItem.DISTANCE), two.removeAddress(AddressItem.ADDRESS).address)
+    }
+
+    @Test
+    fun `uma linha de endereco por ponto A, paradas e destino`() {
+        val items = listOf(AddressItem.ADDRESS, AddressItem.DISTANCE, AddressItem.TIME)
+        val raw = RawOffer(
+            Platform.UBER, 21.90, tripKm = 9.5, tripMin = 22, pickupKm = 2.1, pickupMin = 6,
+            pickupAddress = "Rua Augusta, 1200", dropoffAddress = "Av. Paulista, 900",
+        )
+        val o = OfferEvaluator.evaluate(raw, FilterProfile(), VehicleCostConfig())
+        val rows = CardValues.addressRows(o, items)
+        assertEquals(listOf("A", "B"), rows.map { it.letter })
+        assertEquals(listOf("Rua Augusta, 1200", "2,1 km", "6 min"), rows[0].cells.map { it.text })
+        assertEquals(listOf("Av. Paulista, 900", "9,5 km", "22 min"), rows[1].cells.map { it.text })
+        // Linha vazia: nada no Card.
+        assertEquals(emptyList<Any>(), CardValues.addressRows(o, emptyList()))
+
+        // Com 1 parada (Uber não mostra o endereço): A coleta, B parada, C destino; tempo da viagem ilegível.
+        val withStop = OfferEvaluator.evaluate(raw.copy(stopCount = 1, tripMin = null), FilterProfile(), VehicleCostConfig())
+        val r = CardValues.addressRows(withStop, listOf(AddressItem.TIME, AddressItem.ADDRESS))
+        assertEquals(listOf("A", "B", "C"), r.map { it.letter })
+        assertEquals(listOf(StopKind.PICKUP, StopKind.STOP, StopKind.DROPOFF), r.map { it.kind })
+        assertEquals(listOf("6 min", "Rua Augusta, 1200"), r[0].cells.map { it.text })
+        assertEquals(listOf("Parada no caminho"), r[1].cells.map { it.text })
+        assertEquals("~", r[2].cells[0].text.take(1)) // tempo estimado pela velocidade
+        // Só distância/tempo: a parada ainda aparece.
+        assertEquals(listOf("Parada no caminho"), CardValues.addressRows(withStop, listOf(AddressItem.DISTANCE))[1].cells.map { it.text })
+        // Sem endereço lido.
+        assertEquals("Endereço não lido", CardValues.addressRows(OfferEvaluator.evaluate(raw.copy(dropoffAddress = null), FilterProfile(), VehicleCostConfig()), items)[1].cells[0].text)
     }
 }

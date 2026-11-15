@@ -17,17 +17,21 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
+import br.com.mapp.core.card.AddressItem
+import br.com.mapp.core.card.AddressRow
 import br.com.mapp.core.card.CardLayout
 import br.com.mapp.core.card.CardMetric
 import br.com.mapp.core.card.CardValues
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.Signal
+import br.com.mapp.maps.MapViews
 
 /**
  * Cabeçalho colorido do cartão (cor do semáforo) com as duas linhas escolhidas em
  * "Estilo do cartão": em cima texto corrido (valor · tempo · nota), embaixo números grandes com
- * barrinha de cor. [trailing] = botões à direita da linha de cima (minimizar/fechar).
+ * barrinha de cor e, se escolhida, a linha de endereços em texto pequeno (uma por ponto A, B, C…,
+ * com a letra na cor do marcador do mini mapa). [trailing] = botões à direita da linha de cima (minimizar/fechar).
  * Usado pelo [OfferCardView] e pela prévia da tela de estilo.
  */
 class CardHeaderView(private val context: Context, private val trailing: List<TextView> = emptyList()) {
@@ -57,12 +61,17 @@ class CardHeaderView(private val context: Context, private val trailing: List<Te
         orientation = LinearLayout.HORIZONTAL
         setPadding(0, dp(2), 0, 0)
     }
+    private val addressBox = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(0, dp(4), 0, 0)
+    }
 
     val view: LinearLayout = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(12), dp(4), if (trailing.isEmpty()) dp(12) else dp(4), dp(8))
         addView(topRow, LinearLayout.LayoutParams(MATCH, WRAP))
         addView(bottomRow, LinearLayout.LayoutParams(MATCH, WRAP))
+        addView(addressBox, LinearLayout.LayoutParams(MATCH, WRAP))
     }
 
     fun bind(o: EvaluatedOffer, profile: FilterProfile?, layout: CardLayout) {
@@ -92,6 +101,51 @@ class CardHeaderView(private val context: Context, private val trailing: List<Te
         }
         layout.bottom.forEach { metric ->
             bottomRow.addView(cell(metric, o, profile, fg, valueSp, bs), LinearLayout.LayoutParams(0, WRAP, 1f))
+        }
+
+        addressBox.removeAllViews()
+        val rows = CardValues.addressRows(o, layout.address)
+        addressBox.visibility = if (rows.isEmpty()) View.GONE else View.VISIBLE
+        rows.forEach { addressBox.addView(addressRow(it, fg, layout.addressFont / 100f), LinearLayout.LayoutParams(MATCH, WRAP)) }
+    }
+
+    /**
+     * "Ⓐ Rua Augusta, 1200 · 2,1 km · 6 min" em texto pequeno. O endereço ocupa o espaço que sobra e é
+     * cortado com "…", para distância e tempo nunca sumirem.
+     */
+    private fun addressRow(row: AddressRow, fg: Int, scale: Float): View {
+        val sp = ADDRESS_SP * scale
+        val badgeSize = dp(Math.round(16 * scale))
+        val badge = TextView(context).apply {
+            text = row.letter
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, sp - 2f)
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(WHITE)
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(MapViews.colorOf(row.kind))
+                setStroke(dp(1), WHITE)
+            }
+        }
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(1), 0, dp(1))
+            addView(badge, LinearLayout.LayoutParams(badgeSize, badgeSize).apply { marginEnd = dp(6) })
+            row.cells.forEachIndexed { i, cell ->
+                val isAddress = cell.item == AddressItem.ADDRESS
+                val tv = TextView(context).apply {
+                    text = if (i > 0) "  ·  ${cell.text}" else cell.text
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+                    setTextColor(fg)
+                    if (!isAddress) typeface = Typeface.DEFAULT_BOLD
+                    maxLines = 1
+                    if (isAddress) ellipsize = TextUtils.TruncateAt.END
+                }
+                addView(tv, if (isAddress) LinearLayout.LayoutParams(0, WRAP, 1f) else LinearLayout.LayoutParams(WRAP, WRAP))
+            }
         }
     }
 
@@ -158,6 +212,8 @@ class CardHeaderView(private val context: Context, private val trailing: List<Te
     companion object {
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
+        /** Letras da linha de endereços (100%). */
+        private const val ADDRESS_SP = 12f
         val WHITE = 0xFFFFFFFF.toInt()
         val DARK_TEXT = 0xFF212121.toInt()
         private val RED_BG = 0xFFC62828.toInt()
