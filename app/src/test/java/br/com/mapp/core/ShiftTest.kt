@@ -15,6 +15,7 @@ import br.com.mapp.core.shift.PeriodMath
 import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftCodec
 import br.com.mapp.core.shift.ShiftMath
+import br.com.mapp.core.shift.ShiftSummary
 import br.com.mapp.core.shift.ShiftTrip
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -345,5 +346,14 @@ class ShiftTest {
         val out = ShiftMath.withCostToday(listOf(aberta, hoje, ontem), 0.873, ms(13, 16), zone)
         assertEquals(listOf(null, 0.873, 0.80), out.map { it.costPerKm })
         assertEquals(87.3, ShiftMath.summary(out[1], costPerKm = 0.5, now = ms(13, 16)).cost, eps)
+    }
+
+    @Test fun soma_das_jornadas_mantem_corridas_em_andamento() {
+        fun s(pending: Int) = ShiftSummary(
+            hours = 1.0, trips = 1, revenue = 10.0, totalKm = 5.0, kmWithTrip = 4.0, kmWithoutTrip = 1.0,
+            cost = 4.0, profit = 6.0, perKm = 2.0, perHour = 10.0, avgTripKm = 4.0, categories = emptyList(),
+            pendingTrips = pending,
+        )
+        assertEquals(3, ShiftMath.combine(listOf(s(1), s(2))).pendingTrips)
     }
 }
