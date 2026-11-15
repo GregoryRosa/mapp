@@ -222,7 +222,7 @@ class QuickBubbleView(
 
     /** Prévias no topo do painel: sem corrida com a meta enchendo; em corrida com a meta batida (girando). */
     private val previewIdle = LogoBubble(context, ringBg = RING_BG).apply { setGoal(PREVIEW_GOAL, false) }
-    private val previewRide = LogoBubble(context, ringBg = RING_BG).apply { thickRing = true; setGoal(1f, true) }
+    private val previewRide = LogoBubble(context, ringBg = RING_BG).apply { thickRing = true; riding = true; setGoal(1f, true) }
 
     /** Barra ligada a um campo do estilo: [read] = posição salva na barra. */
     private class Bound(val view: StyleBarView, val read: (BubbleStyle) -> Double)
@@ -684,6 +684,7 @@ class QuickBubbleView(
         bubble.statusColor = color
         bubble.warning = !ok
         bubble.thickRing = shift?.paused == false // anel mais grosso = jornada rodando
+        bubble.riding = ok && shift?.pendingTrip != null // em corrida: a seta (carro) percorre o "M"
         bubble.invalidate()
     }
 
@@ -1167,9 +1168,10 @@ private class OutlineLabel(context: Context, sizePx: Float, outlinePx: Float) : 
 }
 
 /**
- * Ícone flutuante com o logo do MApp: "M" em forma de rota (gradiente verde-água → lilás) com
- * ponto de partida e de chegada, mesmo desenho do app (`ui/MappLogo`). O anel mostra o status:
- * laranja = ligado sem corrida, verde = em corrida, cinza + "!" = leitor desligado.
+ * Ícone flutuante com o logo do MApp: "M" em forma de rota (gradiente verde-água → lilás) com uma
+ * **seta** na partida (o carro) e um **pin** na chegada (o endereço de destino). Em corrida
+ * ([riding]) a seta percorre o "M" até o pin, some e volta do começo, em loop. O anel mostra o
+ * status: laranja = ligado sem corrida, verde = em corrida, cinza + "!" = leitor desligado.
  * Cores, gradientes e giro vêm de [style] (ajustes do botão; o padrão é o visual acima).
  *
  * **Meta do dia** ([setGoal]): com meta definida, um segundo anel fica **por fora** do círculo (o
@@ -1190,11 +1192,21 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
             invalidate()
         }
 
+    /** Em corrida (aceita ou em viagem): a seta anda pelo "M" até o pin, em loop. */
+    var riding = false
+        set(value) {
+            if (field == value) return
+            field = value
+            removeCallbacks(tick)
+            if (animating()) post(tick)
+            invalidate()
+        }
+
     /** Fração 0..1 da meta (null = sem meta). */
     private var goal: Float? = null
     private var reached = false
     private val animStart = System.currentTimeMillis()
-    /** Redesenho contínuo só com a meta batida (pulso + giro); antes disso o anel fica parado. */
+    /** Redesenho contínuo só com a meta batida (pulso + giro) ou em corrida (seta andando); fora disso fica parado. */
     private val tick = object : Runnable {
         override fun run() {
             invalidate()
@@ -1225,6 +1237,19 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         textAlign = Paint.Align.CENTER
     }
     private val path = android.graphics.Path()
+    private val arrow = android.graphics.Path()
+    private val pin = android.graphics.Path()
+    private val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeJoin = Paint.Join.ROUND
+    }
+    /** Caminho da seta em corrida: da partida, pelo "M", até o pin (refeito quando o tamanho muda). */
+    private val travel = android.graphics.Path()
+    private val travelMeasure = android.graphics.PathMeasure()
+    private var travelU = 0f
+    private var travelLength = 0f
+    private val posA = FloatArray(2)
+    private val posB = FloatArray(2)
     private val arc = RectF()
     private var shaderSide = 0f
     private var shaderWarning = false
@@ -1238,7 +1263,7 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         invalidate()
     }
 
-    private fun animating(): Boolean = reached && isAttachedToWindow
+    private fun animating(): Boolean = (reached || riding) && isAttachedToWindow
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
@@ -1330,13 +1355,13 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         path.lineTo(17.5f * u, 15f * u)
         canvas.drawPath(path, line)
 
-        dot.style = Paint.Style.STROKE
-        dot.strokeWidth = 1.1f * u
-        dot.color = c1
-        canvas.drawCircle(6.5f * u, 17.6f * u, 1.6f * u, dot)
-        dot.style = Paint.Style.FILL
-        dot.color = c2
-        canvas.drawCircle(17.5f * u, 17.2f * u, 1.9f * u, dot)
+        drawPin(canvas, u, c2)
+        if (riding && !warning) {
+            drawMovingArrow(canvas, u, c1, c2)
+        } else {
+            // Parada: seta na partida, virada para cima (sentido da rota).
+            drawArrow(canvas, u, START_X * u, START_Y * u, -90f, c1, 255)
+        }
 
         if (warning) {
             dot.color = 0xFFFFB300.toInt()
@@ -1347,7 +1372,99 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         }
     }
 
+    /** Pin de chegada (gota com furo) no fim do "M". */
+    private fun drawPin(canvas: Canvas, u: Float, color: Int) {
+        val x = PIN_X * u
+        val y = PIN_Y * u
+        val r = 1.9f * u
+        pin.reset()
+        pin.addCircle(x, y, r, android.graphics.Path.Direction.CW)
+        pin.moveTo(x - r * 0.82f, y + r * 0.58f)
+        pin.lineTo(x, y + 3.4f * u)
+        pin.lineTo(x + r * 0.82f, y + r * 0.58f)
+        pin.close()
+        dot.style = Paint.Style.FILL
+        dot.color = color
+        canvas.drawPath(pin, dot)
+        dot.color = ringBg
+        canvas.drawCircle(x, y, 0.75f * u, dot)
+    }
+
+    /** Seta de navegação (o carro) com a ponta virada para [degrees]; contorno escuro para destacar da linha. */
+    private fun drawArrow(canvas: Canvas, u: Float, x: Float, y: Float, degrees: Float, color: Int, alpha: Int) {
+        if (alpha <= 0) return
+        arrow.reset()
+        arrow.moveTo(2.0f * u, 0f)
+        arrow.lineTo(-1.6f * u, -1.6f * u)
+        arrow.lineTo(-0.7f * u, 0f)
+        arrow.lineTo(-1.6f * u, 1.6f * u)
+        arrow.close()
+        canvas.save()
+        canvas.translate(x, y)
+        canvas.rotate(degrees)
+        outline.color = ringBg
+        outline.alpha = alpha
+        outline.strokeWidth = 0.9f * u
+        canvas.drawPath(arrow, outline)
+        dot.style = Paint.Style.FILL
+        dot.color = color
+        dot.alpha = alpha
+        canvas.drawPath(arrow, dot)
+        dot.alpha = 255
+        canvas.restore()
+    }
+
+    /**
+     * Em corrida: a seta sai da partida, percorre o "M" e some ao chegar no pin; volta do começo, em
+     * loop de [TRAVEL_MS]. A direção é a média de um trecho curto (vira suave nas pontas do "M") e a
+     * cor vai do começo ao fim do gradiente do logo.
+     */
+    private fun drawMovingArrow(canvas: Canvas, u: Float, c1: Int, c2: Int) {
+        if (travelU != u) {
+            travelU = u
+            travel.reset()
+            travel.moveTo(START_X * u, START_Y * u)
+            travel.lineTo(6.5f * u, 7.5f * u)
+            travel.lineTo(12f * u, 13.5f * u)
+            travel.lineTo(17.5f * u, 7.5f * u)
+            travel.lineTo(PIN_X * u, (PIN_Y - 0.6f) * u)
+            travelMeasure.setPath(travel, false)
+            travelLength = travelMeasure.length
+        }
+        if (travelLength <= 0f) return
+        val t = (System.currentTimeMillis() - animStart) % TRAVEL_MS / TRAVEL_MS.toFloat()
+        val d = t * travelLength
+        val half = 1.2f * u
+        travelMeasure.getPosTan(d, posA, null)
+        val x = posA[0]
+        val y = posA[1]
+        travelMeasure.getPosTan((d - half).coerceAtLeast(0f), posA, null)
+        travelMeasure.getPosTan((d + half).coerceAtMost(travelLength), posB, null)
+        val degrees = Math.toDegrees(kotlin.math.atan2((posB[1] - posA[1]).toDouble(), (posB[0] - posA[0]).toDouble())).toFloat()
+        // Aparece no começo e some chegando no pin.
+        val alpha = when {
+            t < FADE_IN -> t / FADE_IN
+            t > 1f - FADE_OUT -> (1f - t) / FADE_OUT
+            else -> 1f
+        }
+        drawArrow(canvas, u, x, y, degrees, blend(c1, c2, t), (255 * alpha).toInt())
+    }
+
+    private fun blend(a: Int, b: Int, f: Float): Int {
+        fun ch(shift: Int) = (((a shr shift) and 0xFF) + (((b shr shift) and 0xFF) - ((a shr shift) and 0xFF)) * f).toInt() and 0xFF
+        return (0xFF shl 24) or (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+    }
+
     private companion object {
+        /** Seta parada na partida e pin na chegada (em 1/24 do ícone). */
+        const val START_X = 6.5f
+        const val START_Y = 18.0f
+        const val PIN_X = 17.5f
+        const val PIN_Y = 16.5f
+        /** Em corrida: uma volta da seta pelo "M" e quanto dela é aparecer/sumir. */
+        const val TRAVEL_MS = 3_000L
+        const val FADE_IN = 0.08f
+        const val FADE_OUT = 0.15f
         /** Meta batida: pulso de 1,4 s (a volta do gradiente vem dos ajustes), a ~25 quadros/s. */
         const val PULSE_MS = 1_400L
         const val FRAME_MS = 40L
