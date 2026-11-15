@@ -2,8 +2,11 @@
 
 package br.com.mapp.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.util.Log
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -59,6 +62,7 @@ import br.com.mapp.finance.RedSignal
 import br.com.mapp.finance.ReportMath
 import br.com.mapp.finance.rememberNow
 import br.com.mapp.overlay.ShiftTracker
+import br.com.mapp.overlay.TripLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -101,7 +105,19 @@ fun ShiftHistoryScreen(onBack: () -> Unit) {
     val month = all.filter { dateOf(it.first).let { d -> d.year == today.year && d.month == today.month } }
         .map { it.second }
 
-    Scaffold(topBar = { BackTopBar("Histórico de jornadas", onBack) }) { pad ->
+    Scaffold(
+        topBar = {
+            BackTopBar("Histórico de jornadas", onBack) {
+                // Registro das corridas (ofertas, telas lidas e decisões do copiloto) para diagnóstico.
+                TextButton(onClick = {
+                    val log = TripLog.text(ctx)
+                    ctx.getSystemService(ClipboardManager::class.java)
+                        ?.setPrimaryClip(ClipData.newPlainText("MApp", log.ifBlank { "Registro vazio" }))
+                    Toast.makeText(ctx, "Registro das corridas copiado: é só colar", Toast.LENGTH_LONG).show()
+                }) { Text("Registro") }
+            }
+        },
+    ) { pad ->
         LazyColumn(
             Modifier.fillMaxSize().padding(pad),
             contentPadding = PaddingValues(16.dp),
