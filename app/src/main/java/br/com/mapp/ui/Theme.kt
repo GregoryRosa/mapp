@@ -22,9 +22,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -222,10 +227,19 @@ fun StatTile(label: String, value: String, modifier: Modifier = Modifier, valueC
     GlassCard(modifier, padding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = MappColors.TextDim)
         Spacer(Modifier.height(4.dp))
+        // Uma linha só, sem quebrar no espaço de "R$ 168,65": se não couber, a fonte diminui até caber
+        // (antes a quebra escondia o número e só "R$" aparecia).
+        var fontSize by remember(value) { mutableStateOf(19f) }
+        var fits by remember(value) { mutableStateOf(false) }
         Text(
             value,
-            style = TextStyle(fontSize = 19.sp, fontWeight = FontWeight.SemiBold, color = valueColor),
+            modifier = Modifier.drawWithContent { if (fits) drawContent() },
+            style = TextStyle(fontSize = fontSize.sp, fontWeight = FontWeight.SemiBold, color = valueColor),
             maxLines = 1,
+            softWrap = false,
+            onTextLayout = { r ->
+                if (r.didOverflowWidth && fontSize > 11f) fontSize = (fontSize - 1f).coerceAtLeast(11f) else fits = true
+            },
         )
     }
 }
