@@ -11,8 +11,14 @@ import br.com.mapp.core.model.TripStage
  * Problema que resolve: aceitando uma corrida **durante outra viagem**, a Uber continua mostrando
  * "Destino de <passageiro atual>"; o "Encontro com <novo>" só aparece quando a viagem atual termina,
  * muitos minutos depois da oferta. Por isso o nome do passageiro é a prova: **nome novo na tela =
- * corrida nova** → conta a última oferta vista (se ainda não contada). Oferta vista durante uma
- * viagem vale por até [queuedMs]; fora de viagem, por [freshMs] (a tela de oferta some ao aceitar).
+ * corrida nova** → conta a oferta guardada na **memória de ofertas** (se ainda não contada).
+ *
+ * **Memória de ofertas:** guarda as últimas [MAX_OFFERS] ofertas (até [queuedMs]), não só a última —
+ * a corrida é ligada à oferta mais recente que serve para ela. Oferta vista durante uma viagem vale
+ * por até [queuedMs]; fora de viagem, por [freshMs] (a tela de oferta some ao aceitar). Quando uma
+ * oferta é contada, as que ficaram para trás (recusadas/expiradas) saem da memória. A memória inteira
+ * (ofertas, corridas abertas, passageiros que já saíram) é salva com [snapshot] e volta com [restore]:
+ * o Android matar o copiloto no meio da viagem não perde mais a corrida aceita na fila.
  *
  * Etapas (Uber): "Encontro com" = aceita, indo buscar (ainda pode ser cancelada); "Destino de" =
  * passageiro embarcou, viagem confirmada; "Como foi a viagem?" = terminou; "Procurando viagens"
@@ -20,14 +26,23 @@ import br.com.mapp.core.model.TripStage
  *
  * Telas que passaram rápido demais (aceite/fim muito rápidos, Waze na frente) são recuperadas depois:
  * - **aceite não lido**: o passageiro novo só aparece no embarque ou na volta para a Uber → conta a
- *   última oferta vista até [lateMs] antes, se depois dela a tela inicial não apareceu (oferta
- *   recusada) e se a distância da tela combina com a oferta;
+ *   oferta vista até [lateMs] antes, se depois dela a tela inicial não apareceu (oferta recusada) e
+ *   se a distância da tela combina com a oferta;
  * - **fim não lido**: outro passageiro na tela, ou a tela inicial "Procurando viagens" → as corridas
  *   abertas antes dele terminaram. Quem embarcou finaliza; quem não embarcou finaliza se já passou
  *   tempo para a corrida inteira (¾ do previsto), senão foi cancelada. Tela inicial menos de
  *   [settleMs] depois do aceite não fecha nada (pode ser só a transição da Uber).
  *
- * [K] = identidade da oferta (o overlay usa a RawOffer sem endereços/tipo).
+ * Proteções da corrida aceita na fila:
+ * - **embarque cedo demais** ("Destino de <nome>" menos da metade da busca prevista depois da oferta)
+ *   não é dessa oferta: é o passageiro que já estava a bordo (o MApp não viu a viagem começar) — a
+ *   oferta passa a valer como aceita durante a viagem;
+ * - **passageiro que já saiu** (corrida fechada há até [GHOST_MS]) aparecendo de novo na tela não é
+ *   corrida nova, a não ser que tenha chegado oferta depois que ele saiu;
+ * - corrida aberta **sem nome** (+1 ou aceite sem nome lido) não "pega" o nome do passageiro da fila
+ *   quando há oferta mais nova que ela que serve para esse passageiro.
+ *
+ * [K] = identidade da oferta (o overlay usa app + horário da 1ª leitura).
  */
 class TripMatcher<K : Any>(
     private val freshMs: Long = 90_000L,
@@ -50,6 +65,22 @@ class TripMatcher<K : Any>(
         val platform: Platform? = null,
     )
 
+    /** Oferta na memória. */
+    private class Seen<K>(
+        val key: K,
+        val firstAt: Long,
+        var lastAt: Long,
+        /** Apareceu com corrida aberta: se aceita, fica na fila até a viagem atual acabar. */
+        var duringTrip: Boolean,
+        var platform: Platform?,
+        var pickupKm: Double?,
+        var tripKm: Double?,
+        var pickupMin: Int?,
+        var expectedMs: Long?,
+        /** 1ª tela inicial ("Procurando viagens") vista depois dela: o app voltou a procurar. */
+        var idleAt: Long? = null,
+    )
+
     /**
      * Corrida aberta. [counted] = está na jornada (oferta contada ou +1); só essas geram
      * finalizar/cancelar — as outras só guardam o nome para não virar corrida nova de novo.
@@ -63,27 +94,34 @@ class TripMatcher<K : Any>(
         val platform: Platform?,
     )
 
+    /** Passageiro de corrida já fechada (para resto de tela não virar corrida nova). */
+    private class Gone(val name: String, val platform: Platform?, val at: Long)
+
     private enum class Ending { FINISHED, CANCELLED, WAIT }
 
-    private var offer: K? = null
-    private var offerSeenAt = 0L
-    private var offerDuringTrip = false
-    private var offerDeclined = false
-    private var offerPickupKm: Double? = null
-    private var offerTripKm: Double? = null
-    private var offerExpectedMs: Long? = null
-    private var offerPlatform: Platform? = null
-    private var onTrip = false
+    private enum class Fit { OK, NO, TOO_YOUNG }
+
+    /** Ofertas, da mais antiga para a mais nova (1ª leitura). */
+    private val offers = ArrayList<Seen<K>>()
     private val counted = LinkedHashSet<K>()
     /** Corridas abertas, da mais antiga para a mais nova. */
     private val riders = ArrayDeque<Rider>()
+    private val gone = ArrayDeque<Gone>()
+
+    /** Muda a cada alteração que vale salvar ([snapshot]); só reler a mesma oferta não muda. */
+    var changes: Int = 0
+        private set
 
     /** Corridas abertas que estão na jornada. */
     val openRides: Int get() = riders.count { it.counted }
 
+    /** Ofertas na memória que ainda podem virar corrida (diagnóstico/testes). */
+    val rememberedOffers: Int get() = offers.count { it.key !in counted }
+
     /**
      * Oferta no cartão agora (chamar a cada atualização do cartão). [pickupKm]/[tripKm] conferem a
-     * distância das telas seguintes; [expectedMs] = duração prevista (busca + viagem).
+     * distância das telas seguintes; [expectedMs] = duração prevista (busca + viagem);
+     * [pickupMin] = tempo previsto da busca (embarque antes da metade dele não é desta oferta).
      */
     fun offerSeen(
         key: K,
@@ -92,24 +130,40 @@ class TripMatcher<K : Any>(
         tripKm: Double? = null,
         expectedMs: Long? = null,
         platform: Platform? = null,
+        pickupMin: Int? = null,
     ) {
-        if (key != offer) {
-            offer = key
-            offerDuringTrip = onTrip
-            offerDeclined = false
+        prune(now)
+        val o = offers.firstOrNull { it.key == key }
+        if (o == null) {
+            offers += Seen(key, now, now, riders.isNotEmpty(), platform, pickupKm, tripKm, pickupMin, expectedMs)
+            while (offers.size > MAX_OFFERS) offers.removeAt(0)
+            changes++
+            return
         }
-        offerSeenAt = now
-        offerPickupKm = pickupKm
-        offerTripKm = tripKm
-        offerExpectedMs = expectedMs
-        offerPlatform = platform
+        o.lastAt = now
+        o.platform = platform ?: o.platform
+        o.pickupKm = pickupKm ?: o.pickupKm
+        o.tripKm = tripKm ?: o.tripKm
+        o.pickupMin = pickupMin ?: o.pickupMin
+        o.expectedMs = expectedMs ?: o.expectedMs
     }
 
-    /** Oferta contada (automático): não conta de novo. */
+    /**
+     * Oferta contada (automático ou +1): não conta de novo. As ofertas que ficaram para trás dela
+     * (vistas antes, ou junto — o mesmo cartão relido) saem da memória: não foram aceitas.
+     */
     fun markCounted(key: K) {
         counted.remove(key)
         counted.add(key)
         while (counted.size > MAX_KEYS) counted.remove(counted.first())
+        val o = offers.firstOrNull { it.key == key }
+        if (o != null) {
+            offers.removeAll {
+                it !== o && it.key !in counted && samePlatform(it.platform, o.platform) &&
+                    it.firstAt <= o.lastAt + SAME_CARD_MS
+            }
+        }
+        changes++
     }
 
     /**
@@ -122,7 +176,8 @@ class TripMatcher<K : Any>(
         if (open != null) {
             open.counted = true
         } else {
-            riders.addLast(Rider(null, false, now, expectedFor(key), counted = true, platform = platformFor(key)))
+            val o = offers.firstOrNull { it.key == key }
+            riders.addLast(Rider(null, false, now, o?.expectedMs, counted = true, platform = o?.platform))
             trim()
         }
     }
@@ -130,62 +185,68 @@ class TripMatcher<K : Any>(
     /** Corrida desfeita/cancelada: a oferta pode ser contada de novo. */
     fun forget(key: K) {
         counted.remove(key)
+        changes++
     }
 
     /** Finalizada à mão (✓ no painel): sai a corrida aberta mais antiga. */
-    fun closedOldest() {
-        riders.firstOrNull { it.counted }?.let { riders.remove(it) }
+    fun closedOldest(now: Long = 0L) {
+        riders.firstOrNull { it.counted }?.let { close(it, now) }
+        changes++
     }
 
     /** Cancelada ou desfeita à mão (✕ / ↶): sai a corrida aberta mais recente. */
-    fun closedNewest() {
-        riders.lastOrNull { it.counted }?.let { riders.remove(it) }
+    fun closedNewest(now: Long = 0L) {
+        riders.lastOrNull { it.counted }?.let { close(it, now) }
+        changes++
     }
 
     fun reset() {
-        offer = null
-        onTrip = false
-        offerDuringTrip = false
-        offerDeclined = false
+        offers.clear()
         counted.clear()
         riders.clear()
+        gone.clear()
+        changes++
     }
 
-    fun onStage(event: TripEvent, now: Long): Result<K> = when (event.stage) {
-        TripStage.FINISHED -> finished(event.platform)
-        TripStage.IDLE -> idle(event.platform, now)
-        TripStage.ACCEPTED, TripStage.ON_TRIP -> active(event, now)
-    }.copy(platform = event.platform)
+    fun onStage(event: TripEvent, now: Long): Result<K> {
+        prune(now)
+        changes++
+        return when (event.stage) {
+            TripStage.FINISHED -> finished(event.platform, now)
+            TripStage.IDLE -> idle(event.platform, now)
+            TripStage.ACCEPTED, TripStage.ON_TRIP -> active(event, now)
+        }.copy(platform = event.platform)
+    }
 
-    private fun finished(platform: Platform?): Result<K> {
+    // ------------------------------------------------------------------ etapas
+
+    private fun finished(platform: Platform?, now: Long): Result<K> {
         // Quem terminou: o mais antigo daquele app que já embarcou (ou o mais antigo, se o embarque não foi lido).
-        val here = riders.filter { platform == null || it.platform == null || it.platform == platform }
+        val here = riders.filter { samePlatform(platform, it.platform) }
         val done = here.firstOrNull { it.started } ?: here.firstOrNull()
-        if (done != null) riders.remove(done)
-        onTrip = false
+        if (done != null) close(done, now)
         return Result(null, newRide = false)
     }
 
     /** Tela inicial: nenhuma corrida em andamento NESTE app ([platform]); as dos outros apps seguem. */
     private fun idle(platform: Platform?, now: Long): Result<K> {
-        fun here(p: Platform?) = platform == null || p == null || p == platform
-        // Oferta que não virou corrida e o app voltou a procurar: foi recusada ou expirou.
-        offer?.let { if (it !in counted && here(offerPlatform)) offerDeclined = true }
+        // Ofertas que não viraram corrida e o app voltou a procurar: foram recusadas ou expiraram.
+        for (o in offers) {
+            if (o.key !in counted && o.idleAt == null && samePlatform(platform, o.platform)) o.idleAt = now
+        }
         var finished = 0
         var cancelled = false
-        for (r in riders.toList().filter { here(it.platform) }) {
+        for (r in riders.toList().filter { samePlatform(platform, it.platform) }) {
             when (ending(r, now, wait = true)) {
-                Ending.FINISHED -> { riders.remove(r); if (r.counted) finished++ }
-                Ending.CANCELLED -> { riders.remove(r); if (r.counted) cancelled = true }
+                Ending.FINISHED -> { close(r, now); if (r.counted) finished++ }
+                Ending.CANCELLED -> { close(r, now); if (r.counted) cancelled = true }
                 Ending.WAIT -> Unit
             }
         }
-        onTrip = riders.isNotEmpty()
         return Result(null, newRide = false, cancelledPickup = cancelled, finishedUnseen = finished)
     }
 
     private fun active(event: TripEvent, now: Long): Result<K> {
-        onTrip = true
         val boarding = event.stage == TripStage.ON_TRIP
         val name = event.passenger
         if (name == null) {
@@ -195,32 +256,63 @@ class TripMatcher<K : Any>(
             }
             // Aceite sem nome (OCR cortou): é a busca já aberta, ou corrida nova só com oferta recente.
             if (riders.any { !it.started }) return Result(null, newRide = false)
-            val k = candidate(now, named = false, event, boarding = false)
-            riders.addLast(Rider(null, false, now, expectedFor(k), counted = k != null, platform = event.platform))
+            val o = pick(event, now, named = false, boarding = false)
+            riders.addLast(Rider(null, false, now, o?.expectedMs, counted = o != null, platform = event.platform))
             trim()
-            return Result(k, newRide = true)
+            return Result(o?.key, newRide = true)
         }
         val known = riders.firstOrNull { r -> r.name?.let { sameName(it, name) } == true }
-            // Corrida aberta sem nome (aceite lido sem nome ou +1 manual): o nome que apareceu é dela.
-            ?: riders.firstOrNull { it.name == null && (boarding || !it.started) }?.also { it.name = name }
-        if (known != null) {
-            val started = boarding && !known.started
-            if (started) known.started = true
-            val closed = closeBefore(known, now)
+        if (known == null && isGhost(name, event.platform)) return Result(null, newRide = false)
+        val rider = known ?: adopt(name, event, now, boarding)
+        if (rider != null) {
+            val started = boarding && !rider.started
+            if (started) rider.started = true
+            val closed = closeBefore(rider, now)
             return Result(null, newRide = false, started = started, cancelledPickup = closed.second, finishedUnseen = closed.first)
         }
-        val k = candidate(now, named = true, event, boarding = boarding)
-        val rider = Rider(name, boarding, now, expectedFor(k), counted = k != null, platform = event.platform)
-        riders.addLast(rider)
-        val closed = closeBefore(rider, now)
+        val o = pick(event, now, named = true, boarding = boarding)
+        if (o == null && boarding) markQueued(event, now)
+        val fresh = Rider(name, boarding, now, o?.expectedMs, counted = o != null, platform = event.platform)
+        riders.addLast(fresh)
+        val closed = closeBefore(fresh, now)
         trim()
         return Result(
-            k,
+            o?.key,
             newRide = true,
             cancelledPickup = closed.second,
             started = boarding,
             finishedUnseen = closed.first,
         )
+    }
+
+    /**
+     * Corrida aberta sem nome (aceite lido sem nome ou +1 manual) recebe o nome que apareceu — a não
+     * ser que haja oferta mais nova que ela que sirva para este passageiro (é o passageiro da fila)
+     * e ela já não esteja só começando.
+     */
+    private fun adopt(name: String, event: TripEvent, now: Long, boarding: Boolean): Rider? {
+        val r = riders.firstOrNull { it.name == null && (boarding || !it.started) } ?: return null
+        val newer = pick(event, now, named = true, boarding = boarding, after = r.since + SAME_CARD_MS)
+        if (newer != null && (!r.started || likelyOver(r, now))) return null
+        r.name = name
+        return r
+    }
+
+    /** Nome de quem já saiu (corrida fechada há pouco) sem oferta nova depois: resto de tela. */
+    private fun isGhost(name: String, platform: Platform?): Boolean {
+        val g = gone.lastOrNull { sameName(it.name, name) && samePlatform(platform, it.platform) } ?: return false
+        return offers.none { it.firstAt > g.at && samePlatform(platform, it.platform) }
+    }
+
+    /**
+     * Embarque de passageiro desconhecido logo depois de uma oferta: ela não é dele (não dá tempo de
+     * buscar) — foi aceita/vista durante a viagem dele, então vale como corrida na fila.
+     */
+    private fun markQueued(event: TripEvent, now: Long) {
+        for (o in offers) {
+            if (o.key in counted || !samePlatform(event.platform, o.platform)) continue
+            if (now - o.lastAt < minBoardMs(o)) o.duringTrip = true
+        }
     }
 
     /**
@@ -236,7 +328,7 @@ class TripMatcher<K : Any>(
         for (r in riders.subList(0, index).toList()) {
             // Passageiro de um app não encerra corrida aberta de outro.
             if (here != null && r.platform != null && r.platform != here) continue
-            riders.remove(r)
+            close(r, now)
             when (ending(r, now, wait = false)) {
                 Ending.FINISHED -> if (r.counted) finished++
                 else -> if (r.counted) cancelled = true
@@ -245,48 +337,170 @@ class TripMatcher<K : Any>(
         return finished to cancelled
     }
 
+    private fun close(r: Rider, now: Long) {
+        riders.remove(r)
+        r.name?.let { gone.addLast(Gone(it, r.platform, now)) }
+        while (gone.size > MAX_GONE) gone.removeFirst()
+    }
+
     /** Corrida aberta que saiu da tela: terminou ou foi cancelada? */
     private fun ending(r: Rider, now: Long, wait: Boolean): Ending {
         if (r.started) return Ending.FINISHED
         val elapsed = now - r.since
         if (wait && elapsed < settleMs) return Ending.WAIT
-        val full = r.expectedMs ?: UNKNOWN_EXPECTED_MS
-        return if (elapsed * 4 >= full * 3) Ending.FINISHED else Ending.CANCELLED
+        return if (likelyOver(r, now)) Ending.FINISHED else Ending.CANCELLED
     }
 
-    private fun candidate(now: Long, named: Boolean, event: TripEvent, boarding: Boolean): K? {
-        val k = offer ?: return null
-        if (k in counted) return null
-        // Tela de um app, oferta de outro (Uber + 99 ligados juntos): não é ela.
-        if (event.platform != null && offerPlatform != null && event.platform != offerPlatform) return null
-        val screenKm = event.km
-        val age = now - offerSeenAt
-        if (age <= freshMs) return k
-        if (!named) return null
-        if (offerDuringTrip && age <= queuedMs) return k
-        // Aceite não lido: o passageiro aparece só minutos depois (embarque ou volta do Waze).
-        if (!offerDeclined && age <= lateMs && plausible(screenKm, boarding)) return k
+    /** Já passou tempo para a corrida inteira (¾ do previsto)? */
+    private fun likelyOver(r: Rider, now: Long): Boolean {
+        val full = r.expectedMs ?: UNKNOWN_EXPECTED_MS
+        return (now - r.since) * 4 >= full * 3
+    }
+
+    // ------------------------------------------------------------------ memória de ofertas
+
+    /**
+     * Oferta da memória para a corrida nova desta tela: a mais recente (não contada, do mesmo app,
+     * vista depois de [after]) que serve. Embarque cedo demais para uma oferta para a busca: as mais
+     * velhas também não são deste passageiro.
+     */
+    private fun pick(event: TripEvent, now: Long, named: Boolean, boarding: Boolean, after: Long = Long.MIN_VALUE): Seen<K>? {
+        val list = offers
+            .filter { it.key !in counted && it.firstAt >= after && samePlatform(event.platform, it.platform) }
+            .sortedByDescending { it.lastAt }
+        for (o in list) {
+            when (fit(o, now, named, boarding, event.km)) {
+                Fit.OK -> return o
+                Fit.TOO_YOUNG -> return null
+                Fit.NO -> Unit
+            }
+        }
         return null
     }
 
+    private fun fit(o: Seen<K>, now: Long, named: Boolean, boarding: Boolean, screenKm: Double?): Fit {
+        val age = now - o.lastAt
+        if (boarding && age < minBoardMs(o)) return Fit.TOO_YOUNG
+        if (age <= freshMs) return Fit.OK
+        if (!named) return Fit.NO
+        val idle = o.idleAt
+        // Na fila: vale até a viagem atual acabar (uma tela inicial rápida na troca não derruba).
+        if (o.duringTrip && age <= queuedMs && (idle == null || now - idle <= IDLE_GRACE_MS)) return Fit.OK
+        // Aceite não lido: o passageiro aparece só minutos depois (embarque ou volta do Waze).
+        if (idle == null && age <= lateMs && plausible(o, screenKm, boarding)) return Fit.OK
+        return Fit.NO
+    }
+
     /** Distância que a tela mostra cabe na oferta? (folga para desvio/trânsito; sem dado = cabe). */
-    private fun plausible(screenKm: Double?, boarding: Boolean): Boolean {
-        val leg = if (boarding) offerTripKm else offerPickupKm
+    private fun plausible(o: Seen<K>, screenKm: Double?, boarding: Boolean): Boolean {
+        val leg = if (boarding) o.tripKm else o.pickupKm
         if (screenKm == null || leg == null) return true
         return screenKm <= leg * 1.5 + 1.0
     }
 
-    private fun expectedFor(key: K?): Long? = if (key != null && key == offer) offerExpectedMs else null
+    /** Embarque antes disto depois da oferta não é dela: metade da busca prevista (30 s – 5 min). */
+    private fun minBoardMs(o: Seen<K>): Long =
+        ((o.pickupMin?.let { it * 60_000L } ?: DEFAULT_PICKUP_MS) / 2).coerceIn(30_000L, 5 * 60_000L)
 
-    private fun platformFor(key: K?): Platform? = if (key != null && key == offer) offerPlatform else null
+    private fun prune(now: Long) {
+        offers.removeAll { now - it.lastAt > queuedMs }
+        riders.removeAll { now - it.since > MAX_RIDE_MS }
+        gone.removeAll { now - it.at > GHOST_MS }
+    }
 
     private fun trim() {
         while (riders.size > MAX_RIDERS) riders.removeFirst()
     }
 
+    private fun samePlatform(a: Platform?, b: Platform?) = a == null || b == null || a == b
+
+    // ------------------------------------------------------------------ salvar / restaurar
+
+    /**
+     * Memória inteira em texto (ofertas, corridas abertas, quem saiu, contadas), para salvar no
+     * aparelho. [encode] = chave da oferta em texto sem tab nem quebra de linha.
+     */
+    fun snapshot(now: Long, encode: (K) -> String): String = buildString {
+        append(listOf(VERSION, now).joinToString(SEP))
+        offers.forEach { o ->
+            row(
+                "o", encode(o.key), o.firstAt, o.lastAt, if (o.duringTrip) 1 else 0, o.platform?.name,
+                o.pickupKm, o.tripKm, o.pickupMin, o.expectedMs, o.idleAt,
+            )
+        }
+        riders.forEach { r ->
+            row("r", r.name, if (r.started) 1 else 0, r.since, r.expectedMs, if (r.counted) 1 else 0, r.platform?.name)
+        }
+        gone.forEach { g -> row("g", g.name, g.platform?.name, g.at) }
+        counted.forEach { k -> row("c", encode(k)) }
+    }
+
+    /**
+     * Volta a memória salva por [snapshot] (copiloto reaberto). Memória salva há mais de
+     * [MAX_RESTORE_MS] não vale (dia/jornada já mudou). Devolve se restaurou.
+     */
+    fun restore(text: String?, now: Long, decode: (String) -> K?): Boolean {
+        if (text.isNullOrBlank()) return false
+        val rows = text.split('\n')
+        val head = rows.first().split(SEP)
+        if (head.getOrNull(0) != VERSION) return false
+        val savedAt = head.getOrNull(1)?.toLongOrNull() ?: return false
+        if (now - savedAt > MAX_RESTORE_MS || savedAt > now + 60_000L) return false
+        return try {
+            reset()
+            for (row in rows.drop(1)) {
+                val c = row.split(SEP)
+                when (c[0]) {
+                    "o" -> decode(c[1])?.let { k ->
+                        offers += Seen(
+                            k, c[2].toLong(), c[3].toLong(), c[4] == "1", platformOf(c[5]),
+                            c[6].toDoubleOrNull(), c[7].toDoubleOrNull(), c[8].toIntOrNull(), c[9].toLongOrNull(),
+                            c[10].toLongOrNull(),
+                        )
+                    }
+                    "r" -> riders.addLast(
+                        Rider(c[1].ifEmpty { null }, c[2] == "1", c[3].toLong(), c[4].toLongOrNull(), c[5] == "1", platformOf(c[6])),
+                    )
+                    "g" -> gone.addLast(Gone(c[1], platformOf(c[2]), c[3].toLong()))
+                    "c" -> decode(c[1])?.let { counted.add(it) }
+                }
+            }
+            prune(now)
+            true
+        } catch (e: RuntimeException) {
+            reset()
+            false
+        }
+    }
+
+    private fun StringBuilder.row(vararg cells: Any?) {
+        append('\n')
+        append(cells.joinToString(SEP) { cell -> cell?.toString()?.replace(SEP, " ")?.replace("\n", " ") ?: "" })
+    }
+
+    private fun platformOf(s: String?): Platform? = s?.takeIf { it.isNotEmpty() }?.let { runCatching { Platform.valueOf(it) }.getOrNull() }
+
     companion object {
         private const val MAX_KEYS = 50
         private const val MAX_RIDERS = 4
+        /** Ofertas guardadas na memória. */
+        const val MAX_OFFERS = 12
+        private const val MAX_GONE = 6
+        private const val VERSION = "tm1"
+        private const val SEP = "\t"
+
+        /** Oferta vista até isto depois da contada é o mesmo cartão relido (ou recusada junto). */
+        private const val SAME_CARD_MS = 30_000L
+        /** Tela inicial rápida na troca de corrida (fila): a oferta na fila continua valendo por isto. */
+        private const val IDLE_GRACE_MS = 2 * 60_000L
+        /** Busca prevista desconhecida (embarque antes da metade disto não é da oferta). */
+        private const val DEFAULT_PICKUP_MS = 2 * 60_000L
+        /** Quem saiu há até isto e aparece de novo na tela é resto de tela, não corrida nova. */
+        private const val GHOST_MS = 30 * 60_000L
+        /** Corrida aberta há mais que isto (nunca fechou) sai da memória. */
+        private const val MAX_RIDE_MS = 4 * 60 * 60_000L
+        /** Memória salva há mais que isto não é restaurada. */
+        const val MAX_RESTORE_MS = 3 * 60 * 60_000L
 
         /** Duração prevista desconhecida: corrida aberta há menos de ¾ disto foi cancelada. */
         private const val UNKNOWN_EXPECTED_MS = 20 * 60_000L
