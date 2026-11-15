@@ -376,6 +376,8 @@ class OverlayService : LifecycleService() {
 
     private fun pushShift() {
         bubble?.updateShift(ShiftTracker.current(this).value)
+        // Corrida aceita aberta no acompanhamento: "M" verde mesmo sem jornada aberta.
+        bubble?.updateRide(matcher.openRides > 0)
     }
 
     // ------------------------------------------------------------------ dia e meta (ícone "M")
@@ -511,6 +513,7 @@ class OverlayService : LifecycleService() {
             handleTripStage(event)
         } finally {
             saveTripMemory(force = true)
+            pushShift()
         }
     }
 
@@ -525,7 +528,13 @@ class OverlayService : LifecycleService() {
             markAccepted(offer, true, passenger = event.passenger, onBoard = event.stage == TripStage.ON_TRIP)
             matcher.markCounted(key!!)
         }
-        if (ShiftTracker.current(this).value == null) return
+        if (ShiftTracker.current(this).value == null) {
+            // Sem jornada: a corrida fica em "Aceitas hoje" e no dia, e o "M" fica verde até ela acabar.
+            if (offer != null && event.stage != TripStage.FINISHED) {
+                tripToast("Corrida aceita: ${offerLabel(offer.raw)} · fora da jornada (▶ no M para iniciar)")
+            }
+            return
+        }
         // Corridas que terminaram sem a tela de fim ter sido lida (da mais antiga).
         // Passageiro novo na tela (troca para a corrida da fila): o aviso diz que é a ANTERIOR que terminou.
         repeat(match.finishedUnseen) { finishPending(auto = true, platform = match.platform, previous = match.newRide) }
