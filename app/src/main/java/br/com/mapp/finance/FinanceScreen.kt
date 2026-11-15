@@ -5,6 +5,7 @@ package br.com.mapp.finance
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -21,7 +23,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.RequestQuote
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.DatePicker
@@ -37,11 +42,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SelectableDates
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -49,6 +57,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
@@ -61,6 +72,7 @@ import br.com.mapp.core.repo.FinanceEntry
 import br.com.mapp.core.repo.Goals
 import br.com.mapp.core.shift.PeriodTotals
 import br.com.mapp.core.shift.ShiftMath
+import br.com.mapp.ui.MappColors
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.ZoneId
@@ -69,8 +81,61 @@ import java.time.ZoneOffset
 private val EXPENSE_CATEGORIES = listOf("Combustível", "Manutenção", "Alimentação", "Lavagem", "Outros")
 private const val OTHER_PLATFORM = "Outros"
 
+/** Abas da tela Financeiro, com os mesmos ícones do menu da tela inicial. */
+private enum class FinanceTab(val label: String, val icon: ImageVector) {
+    EARNINGS("Ganhos e gastos", Icons.Outlined.AccountBalanceWallet),
+    REPORTS("Relatórios", Icons.Outlined.BarChart),
+    FIXED_COSTS("Custos fixos", Icons.Outlined.RequestQuote),
+}
+
+/** Tela Financeiro: abas Ganhos e gastos, Relatórios e Custos fixos (antes eram 3 telas do menu). */
 @Composable
 fun FinanceScreen(onBack: () -> Unit) {
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var showGoals by remember { mutableStateOf(false) }
+    Scaffold(
+        topBar = {
+            BackTopBar("Financeiro", onBack) {
+                if (tab == FinanceTab.EARNINGS.ordinal) {
+                    IconButton(onClick = { showGoals = true }) { Icon(Icons.Filled.Flag, contentDescription = "Metas") }
+                }
+            }
+        },
+    ) { pad ->
+        Column(Modifier.fillMaxSize().padding(pad)) {
+            TabRow(selectedTabIndex = tab, containerColor = Color.Transparent, contentColor = MappColors.Teal) {
+                FinanceTab.entries.forEach { t ->
+                    Tab(
+                        selected = tab == t.ordinal,
+                        onClick = { tab = t.ordinal },
+                        selectedContentColor = MappColors.Teal,
+                        unselectedContentColor = MappColors.TextDim,
+                    ) {
+                        Icon(t.icon, contentDescription = null, modifier = Modifier.padding(top = 10.dp).size(22.dp))
+                        Text(
+                            t.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(start = 4.dp, top = 4.dp, end = 4.dp, bottom = 10.dp),
+                        )
+                    }
+                }
+            }
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                when (FinanceTab.entries[tab]) {
+                    FinanceTab.EARNINGS -> EarningsTab(showGoals = showGoals, onGoalsDone = { showGoals = false })
+                    FinanceTab.REPORTS -> ReportsTab()
+                    FinanceTab.FIXED_COSTS -> FixedCostsTab()
+                }
+            }
+        }
+    }
+}
+
+/** Aba Ganhos e gastos: Hoje, Semana, Mês e os lançamentos. Metas abrem pelo 🚩 da barra de cima. */
+@Composable
+private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
     val repos = MappApp.repos
     val scope = rememberCoroutineScope()
     val now = rememberNow()
@@ -99,25 +164,11 @@ fun FinanceScreen(onBack: () -> Unit) {
     var showPicker by remember { mutableStateOf(false) }
     var showEntryDialog by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<FinanceEntry?>(null) }
-    var showGoals by remember { mutableStateOf(false) }
     var toDelete by remember { mutableStateOf<FinanceEntry?>(null) }
 
-    Scaffold(
-        topBar = {
-            BackTopBar("Ganhos e gastos", onBack) {
-                IconButton(onClick = { showGoals = true }) { Icon(Icons.Filled.Flag, contentDescription = "Metas") }
-            }
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                text = { Text("Lançar") },
-                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                onClick = { editing = null; showEntryDialog = true },
-            )
-        },
-    ) { pad ->
+    Box(Modifier.fillMaxSize()) {
         LazyColumn(
-            Modifier.fillMaxSize().padding(pad),
+            Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -177,6 +228,12 @@ fun FinanceScreen(onBack: () -> Unit) {
                 )
             }
         }
+        ExtendedFloatingActionButton(
+            text = { Text("Lançar") },
+            icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+            onClick = { editing = null; showEntryDialog = true },
+            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+        )
     }
 
     if (showPicker) {
@@ -200,10 +257,10 @@ fun FinanceScreen(onBack: () -> Unit) {
     if (showGoals) {
         GoalsDialog(
             goals = goals,
-            onDismiss = { showGoals = false },
+            onDismiss = onGoalsDone,
             onSave = { g ->
                 scope.launch { repos.finance.saveGoals(g) }
-                showGoals = false
+                onGoalsDone()
             },
         )
     }
