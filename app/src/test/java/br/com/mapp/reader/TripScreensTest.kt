@@ -225,6 +225,55 @@ class TripScreensTest {
         assertEquals(1, m.openRides)
     }
 
+    @Test fun avaliacao_atrasada_da_anterior_nao_fecha_a_corrida_da_fila() {
+        // 15/11: corrida aceita durante outra viagem. Na troca a Uber mostrou "Encontro com Bruno" e só
+        // depois "Como foi a viagem?" da Ana: o Bruno saía da jornada (ícone laranja a viagem toda) e o
+        // fim real virava "não vi o aceite".
+        fun fila(): TripMatcher<String> {
+            val m = TripMatcher<String>()
+            m.offerSeen("ana", 0, expectedMs = 20 * min)
+            m.onStage(accepted("ana"), 1_000); m.markCounted("ana")
+            m.onStage(onTrip("ana"), 5 * min)
+            m.offerSeen("bruno", 15 * min, expectedMs = 25 * min, pickupMin = 7)
+            val troca = m.onStage(accepted("bruno"), 25 * min)
+            assertEquals("bruno", troca.count); m.markCounted("bruno")
+            assertEquals(1, troca.finishedUnseen)                     // Ana finalizada na troca
+            return m
+        }
+        val m = fila()
+        assertTrue(m.onStage(finished, 25 * min + 20_000).lateFinish) // avaliação da Ana
+        assertEquals(1, m.openRides)                                   // Bruno continua aberto
+        assertNull(m.onStage(accepted("bruno"), 26 * min).count)
+        m.onStage(onTrip("bruno"), 32 * min)
+        val fim = m.onStage(finished, 55 * min)                        // fim real do Bruno
+        assertFalse(fim.lateFinish)
+        assertEquals(0, m.openRides)
+
+        // Avaliação da Ana só com o Bruno já a bordo: também não fecha o Bruno.
+        val b = fila()
+        b.onStage(onTrip("bruno"), 31 * min)
+        assertTrue(b.onStage(finished, 33 * min).lateFinish)
+        assertEquals(1, b.openRides)
+        // Memória salva e reaberta (Android matou o copiloto) mantém a avaliação devida.
+        val c = fila()
+        val reaberto = TripMatcher<String>()
+        assertTrue(reaberto.restore(c.snapshot(25 * min + 5_000) { it }, 25 * min + 10_000) { it })
+        assertTrue(reaberto.onStage(finished, 25 * min + 30_000).lateFinish)
+        assertEquals(1, reaberto.openRides)
+
+        // Sem a avaliação atrasada, o fim do Bruno fecha normalmente (a devida não atrapalha).
+        val d = fila()
+        d.onStage(onTrip("bruno"), 32 * min)
+        assertFalse(d.onStage(finished, 55 * min).lateFinish)
+        assertEquals(0, d.openRides)
+        // E fim sem nada devido continua fechando na hora, mesmo corrida curta.
+        val e = TripMatcher<String>()
+        e.offerSeen("o1", 0, expectedMs = 30 * min)
+        e.onStage(accepted("caio"), 5_000); e.markCounted("o1")
+        assertFalse(e.onStage(finished, 3 * min).lateFinish)
+        assertEquals(0, e.openRides)
+    }
+
     @Test fun waze_na_frente_a_corrida_toda_nao_vira_cancelamento() {
         // Nem embarque nem fim lidos; 15 min depois (corrida prevista de 14 min) aparece outro passageiro.
         val m = TripMatcher<String>()

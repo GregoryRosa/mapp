@@ -359,7 +359,7 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
         val expectedMin = o.metrics.totalMin ?: DEFAULT_RIDE_MIN
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_map)
-            .setColor(MAPP_TEAL)
+            .setColor(if (text.hasStops) CardHeaderView.STOP_PURPLE else MAPP_TEAL)
             .setContentTitle(text.title)
             .setContentText(text.summary)
             .setStyle(NotificationCompat.DecoratedCustomViewStyle())

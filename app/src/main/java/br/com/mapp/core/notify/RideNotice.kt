@@ -27,6 +27,8 @@ data class RideNotice(
     val mapNote: String?,
     /** Mapa na notificação aberta (menu Card → Notificação). */
     val showMap: Boolean = true,
+    /** Corrida com parada no caminho: bolinha 🟣 no título e notificação roxa (como o Card). */
+    val hasStops: Boolean = false,
 )
 
 /** Retângulo do mapa da notificação, em graus. */
@@ -95,7 +97,8 @@ object RideNotices {
             "Corrida aceita".takeIf { layout.headline },
             render(NoticeLine.TITLE).ifEmpty { null },
         ).joinToString(" · ").ifEmpty { "Corrida aceita" }
-        val title = "${dot(offer.signal)} $head"
+        val hasStops = RideRoute.stopCount(offer.raw) > 0
+        val title = "${if (hasStops) STOP_DOT else dot(offer.signal)} $head"
         val details = NoticeLine.entries.filter { it.expanded }.map(::render).filter { it.isNotEmpty() }.take(MAX_DETAILS)
         return RideNotice(
             title = title,
@@ -103,6 +106,7 @@ object RideNotices {
             details = details,
             mapNote = if (layout.showMap) mapNote(offer, points) else null,
             showMap = layout.showMap,
+            hasStops = hasStops,
         )
     }
 
@@ -246,6 +250,9 @@ object RideNotices {
         val cat = category?.trim()?.takeIf { it.isNotEmpty() } ?: return platform.label
         return if (platform == Platform.UBER || cat.startsWith(platform.label, ignoreCase = true)) cat else "${platform.label} $cat"
     }
+
+    /** Corrida com parada: roxo no lugar do semáforo (mesma cor do Card). */
+    private const val STOP_DOT = "🟣"
 
     private fun dot(signal: Signal): String = when (signal) {
         Signal.GREEN -> "🟢"
