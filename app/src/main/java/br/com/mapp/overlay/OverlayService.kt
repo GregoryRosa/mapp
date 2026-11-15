@@ -51,6 +51,7 @@ import br.com.mapp.reader.OfferAccessibilityService
 import br.com.mapp.reader.ReaderStatus
 import br.com.mapp.ui.MainActivity
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.delay
@@ -116,6 +117,16 @@ class OverlayService : LifecycleService() {
     private var acceptedSinceFinish = false
     /** Qual oferta foi aceita: pelo nome do passageiro na tela (vale para corrida aceita durante outra). */
     private val matcher = TripMatcher<OfferKey>()
+    /**
+     * Ofertas recentes por identidade: a memória do [matcher] devolve a chave da oferta aceita (pode
+     * não ser a última — corrida aceita na fila) e a oferta completa vem daqui.
+     */
+    private val recentOffers = LinkedHashMap<OfferKey, EvaluatedOffer>()
+    /** Última versão da memória do aceite salva no aparelho ([TripMatcher.changes]). */
+    private var savedMatcher = -1
+    private var savedMatcherAt = 0L
+    /** Memória salva já foi lida (antes disso não grava por cima — ex.: serviço que nem chegou a abrir). */
+    private var memoryReady = false
     private val odometer = Odometer()
     /** Notificação no celular a cada corrida aceita (rota + mapa ao expandir). */
     private var rides: RideNotifier? = null
@@ -138,6 +149,10 @@ class OverlayService : LifecycleService() {
         greatSound = GreatSoundPlayer(this)
         cashSound = GreatSoundPlayer(this)
         rides = RideNotifier(this, lifecycleScope)
+        // Memória do aceite: volta ao reabrir o copiloto (o Android pode matar o serviço no meio da
+        // viagem) — antes das ofertas novas chegarem. As ofertas dela vêm do histórico (Room).
+        restoreTripMemory()
+        val preload = lifecycleScope.async { preloadOffers() }
 
         val pipeline = OfferPipeline(this)
         lifecycleScope.launch { pipeline.run() }
@@ -154,7 +169,8 @@ class OverlayService : LifecycleService() {
         }
         startShiftMonitor(loc)
         startDayMonitor()
-        lifecycleScope.launch { OfferBus.tripStages.collect { onTripStage(it) } }
+        // Telas lidas enquanto as ofertas do histórico carregam esperam na fila.
+        lifecycleScope.launch { OfferBus.tripStages.collect { preload.await(); onTripStage(it) } }
 
         // Ícone flutuante "M" com o menu circular (e cartão): recriados quando o leitor liga/desliga.
         lifecycleScope.launch { OfferAccessibilityService.windowContext.collect { useHost(it) } }
@@ -205,6 +221,7 @@ class OverlayService : LifecycleService() {
             val ended = ShiftTracker.end(this@OverlayService, costPerKm) ?: return
             countedKey = null
             matcher.reset()
+            saveTripMemory(force = true)
             val s = ShiftMath.summary(ended, costPerKm, System.currentTimeMillis())
             tripToast("Jornada encerrada: ${s.trips} corridas · lucro ${ShiftMath.money(s.profit)}")
         }
@@ -244,6 +261,75 @@ class OverlayService : LifecycleService() {
     private data class OfferKey(val platform: Platform, val capturedAt: Long)
 
     private fun RawOffer.key(): OfferKey = OfferKey(platform, capturedAt)
+
+    private fun OfferKey.encode(): String = "${platform.name}:$capturedAt"
+
+    private fun decodeKey(text: String): OfferKey? {
+        val (p, at) = text.split(':').takeIf { it.size == 2 } ?: return null
+        val platform = runCatching { Platform.valueOf(p) }.getOrNull() ?: return null
+        return at.toLongOrNull()?.let { OfferKey(platform, it) }
+    }
+
+    /** Guarda a oferta na memória (a mais nova por último; as mais velhas saem primeiro). */
+    private fun remember(offer: EvaluatedOffer) {
+        val key = offer.raw.key()
+        recentOffers.remove(key)
+        recentOffers[key] = offer
+        while (recentOffers.size > TripMatcher.MAX_OFFERS) {
+            val oldest = recentOffers.keys.minByOrNull { it.capturedAt } ?: break
+            recentOffers.remove(oldest)
+        }
+    }
+
+    /**
+     * Salva a memória do aceite quando ela muda (oferta nova, tela de corrida, contagem) ou, com a
+     * oferta no cartão, a cada poucos segundos. [force] = salva agora.
+     */
+    private fun saveTripMemory(force: Boolean = false) {
+        if (!memoryReady) return
+        val now = System.currentTimeMillis()
+        if (!force && matcher.changes == savedMatcher && now - savedMatcherAt < SAVE_MEMORY_MS) return
+        savedMatcher = matcher.changes
+        savedMatcherAt = now
+        OverlayPrefs.setTripMemory(this, matcher.snapshot(now) { it.encode() })
+    }
+
+    private fun restoreTripMemory() {
+        memoryReady = true
+        val now = System.currentTimeMillis()
+        if (matcher.restore(OverlayPrefs.tripMemory(this), now) { decodeKey(it) }) {
+            savedMatcher = matcher.changes
+            savedMatcherAt = now
+            Log.i(TAG, "Memória do aceite restaurada: ${matcher.rememberedOffers} ofertas, ${matcher.openRides} corridas abertas")
+        }
+    }
+
+    /**
+     * Ofertas da memória que este serviço não viu (copiloto reaberto): vêm do histórico gravado. A
+     * mais nova, se recente, volta a ser a "última oferta" do +1.
+     */
+    private suspend fun preloadOffers() {
+        val now = System.currentTimeMillis()
+        val records = try {
+            MappApp.repos.offers.between(now - TripMatcher.MAX_RESTORE_MS, now).first()
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao carregar ofertas recentes", e)
+            return
+        }
+        records.asSequence()
+            .map { it.evaluated }
+            .sortedByDescending { it.raw.capturedAt }
+            .take(TripMatcher.MAX_OFFERS)
+            .filter { it.raw.key() !in recentOffers }
+            .forEach { remember(it) }
+        if (lastOffer == null) {
+            val newest = recentOffers.values.maxByOrNull { it.raw.capturedAt }
+            if (newest != null && now - newest.raw.capturedAt <= LAST_OFFER_RESTORE_MS) {
+                lastOffer = newest
+                lastOfferSeenAt = newest.raw.capturedAt
+            }
+        }
+    }
 
     private fun startShiftMonitor(loc: LocationProvider) {
         lifecycleScope.launch { MappApp.repos.vehicle.config().collect { costPerKm = it.costPerKm; pushShift() } }
@@ -385,6 +471,7 @@ class OverlayService : LifecycleService() {
         countedKey = key
         // +1 com a corrida em andamento: o leitor passa a acompanhar o fim dela também.
         if (!auto && !alreadyFinished) matcher.manualCount(key, System.currentTimeMillis()) else matcher.markCounted(key)
+        saveTripMemory(force = true)
         countedOffer = offer
         // +1 tocado com a corrida já terminada: não manda a notificação da rota.
         markAccepted(offer, true, notify = !alreadyFinished)
@@ -410,10 +497,19 @@ class OverlayService : LifecycleService() {
      *   [TripMatcher] decide quais corridas abertas terminaram e quais foram canceladas.
      */
     private fun onTripStage(event: TripEvent) {
+        try {
+            handleTripStage(event)
+        } finally {
+            saveTripMemory(force = true)
+        }
+    }
+
+    private fun handleTripStage(event: TripEvent) {
         val now = System.currentTimeMillis()
         val match = matcher.onStage(event, now)
         val key = match.count
-        val offer = lastOffer?.takeIf { key != null && it.raw.key() == key }
+        // A oferta aceita vem da memória (não só a última: a da fila pode ter ficado para trás).
+        val offer = key?.let { recentOffers[it] }
         if (offer != null) {
             // Histórico: marca a oferta como aceita mesmo sem jornada aberta (e notifica no celular).
             markAccepted(offer, true, passenger = event.passenger, onBoard = event.stage == TripStage.ON_TRIP)
@@ -457,7 +553,7 @@ class OverlayService : LifecycleService() {
     /** Corrida aceita que não aconteceu (✕ no painel, ou outra busca começou sem este embarque). */
     private fun cancelPending(auto: Boolean, platform: Platform? = null) {
         val pending = ShiftTracker.current(this).value?.pendingTrip(platform) ?: return
-        if (!auto) matcher.closedNewest()
+        if (!auto) { matcher.closedNewest(System.currentTimeMillis()); saveTripMemory(force = true) }
         ShiftTracker.cancelPending(this, platform)
         countedOffer?.let { markAccepted(it, null) }
         countedKey?.let { matcher.forget(it) }
@@ -477,7 +573,7 @@ class OverlayService : LifecycleService() {
             if (!auto) toast("Nenhuma corrida em andamento")
             return
         }
-        if (!auto) matcher.closedOldest()
+        if (!auto) { matcher.closedOldest(System.currentTimeMillis()); saveTripMemory(force = true) }
         ShiftTracker.finishPending(this, platform)
         tripToast("Corrida finalizada ✓ +${ShiftMath.money(pending.price)} no lucro")
     }
@@ -562,6 +658,7 @@ class OverlayService : LifecycleService() {
 
     override fun onDestroy() {
         _running.value = false
+        saveTripMemory(force = true)
         // Sem o copiloto não há GPS: a jornada fica pausada até o próximo ▶.
         if (ShiftTracker.current(this).value?.paused == false) {
             ShiftTracker.pause(this)
@@ -600,7 +697,10 @@ class OverlayService : LifecycleService() {
             tripKm = offer.raw.tripKm,
             expectedMs = offer.metrics.totalMin?.let { it * 60_000L },
             platform = offer.raw.platform,
+            pickupMin = offer.raw.pickupMin,
         )
+        remember(offer)
+        saveTripMemory()
         if (lastOffer?.raw?.key() != key) {
             lastOffer = offer
             pushShift()
@@ -779,6 +879,10 @@ class OverlayService : LifecycleService() {
         private const val NOTICE_MS = 4_000L
         /** Avisos de corrida aceita/finalizada/cancelada: tempo para ler dirigindo. */
         private const val TRIP_NOTICE_MS = 6_000L
+        /** Memória do aceite salva no máx. a cada isto enquanto a mesma oferta está no cartão. */
+        private const val SAVE_MEMORY_MS = 3_000L
+        /** Copiloto reaberto: a oferta do histórico mais nova volta a ser a "última" do +1 se tiver até isto. */
+        private const val LAST_OFFER_RESTORE_MS = 60 * 60_000L
 
         private val _running = MutableStateFlow(false)
         /** true enquanto o copiloto (serviço) está ativo — a tela inicial mostra o estado. */

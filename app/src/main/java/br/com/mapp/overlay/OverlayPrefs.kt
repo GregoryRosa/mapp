@@ -30,6 +30,7 @@ object OverlayPrefs {
     const val KEY_STREETVIEW_ON = "streetview_on"
     const val KEY_STREETVIEW_KEY = "streetview_key"
     const val KEY_STREETVIEW_BUDGET = "streetview_budget"
+    const val KEY_TRIP_MEMORY = "trip_memory"
 
     fun of(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -124,5 +125,12 @@ object OverlayPrefs {
 
     fun setStreetViewBudget(context: Context, budget: StreetViewBudget) {
         of(context).edit().putString(KEY_STREETVIEW_BUDGET, budget.encode()).apply()
+    }
+
+    /** Memória do aceite automático (`TripMatcher.snapshot`): ofertas recentes e corridas abertas. */
+    fun tripMemory(context: Context): String? = of(context).getString(KEY_TRIP_MEMORY, null)
+
+    fun setTripMemory(context: Context, text: String?) {
+        of(context).edit().putString(KEY_TRIP_MEMORY, text).apply()
     }
 }

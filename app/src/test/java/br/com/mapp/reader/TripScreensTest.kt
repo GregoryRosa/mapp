@@ -356,4 +356,102 @@ class TripScreensTest {
         assertFalse(r.cancelledPickup)
         assertEquals("ana", r.count)
     }
+
+    // ------------------------------------------------------------------ memória de ofertas (15/11)
+
+    @Test fun memoria_salva_volta_e_conta_a_corrida_da_fila_depois_de_reabrir() {
+        // Android matou o copiloto no meio da viagem da Ana, com o Bruno aceito na fila.
+        val m = TripMatcher<String>()
+        m.offerSeen("ana", 0, expectedMs = 25 * min)
+        m.onStage(accepted("ana"), 2_000); m.markCounted("ana")
+        m.onStage(onTrip("ana"), 6 * min)
+        m.offerSeen("bruno", 20 * min, pickupKm = 1.2)
+        val salvo = m.snapshot(21 * min) { it }
+        val reaberto = TripMatcher<String>()
+        assertTrue(reaberto.restore(salvo, 25 * min) { it })
+        assertEquals(1, reaberto.openRides)
+        assertEquals(1, reaberto.rememberedOffers)
+        val r = reaberto.onStage(accepted("bruno", km = 1.1), 31 * min)
+        assertEquals("bruno", r.count)
+        assertEquals(1, r.finishedUnseen)                            // Ana (a bordo) terminou
+        // Memória velha (outro dia) ou estragada não volta.
+        assertFalse(TripMatcher<String>().restore(salvo, 21 * min + TripMatcher.MAX_RESTORE_MS + 1) { it })
+        assertFalse(TripMatcher<String>().restore("lixo", 0) { it })
+    }
+
+    @Test fun passageiro_que_ja_saiu_aparecendo_de_novo_nao_gasta_a_oferta_da_fila() {
+        val m = TripMatcher<String>()
+        m.offerSeen("ana", 0)
+        m.onStage(accepted("ana"), 1_000); m.markCounted("ana")
+        m.onStage(onTrip("ana"), 5 * min)
+        m.offerSeen("bruno", 20 * min)                               // aceita na fila
+        m.onStage(finished, 29 * min)                                // Ana desceu
+        val resto = m.onStage(onTrip("ana"), 29 * min + 25_000)      // "Destino de Ana" ainda na tela
+        assertNull(resto.count)
+        assertFalse(resto.newRide)
+        assertEquals("bruno", m.onStage(accepted("bruno"), 30 * min).count)
+    }
+
+    @Test fun embarque_logo_depois_da_oferta_e_de_quem_ja_estava_a_bordo() {
+        // Copiloto ligado no meio da viagem da Ana: o MApp não viu a viagem começar.
+        val m = TripMatcher<String>()
+        m.offerSeen("bruno", 0, pickupKm = 2.0, pickupMin = 5)
+        // Aceitou e a Uber voltou para "Destino de Ana": não dá tempo de buscar o Bruno.
+        assertNull(m.onStage(onTrip("ana"), 20_000).count)
+        // A oferta ficou na fila: vale mesmo mais de 20 min depois (aceite não lido teria vencido).
+        assertEquals("bruno", m.onStage(accepted("bruno", km = 2.1), 35 * min).count)
+    }
+
+    @Test fun corrida_do_mais1_sem_nome_nao_pega_o_passageiro_da_fila() {
+        val m = TripMatcher<String>()
+        m.offerSeen("ana", 0, expectedMs = 20 * min)
+        m.manualCount("ana", 30_000)                                 // +1: corrida sem nome
+        m.offerSeen("bruno", 18 * min)                               // aceita na fila
+        val r = m.onStage(accepted("bruno"), 24 * min)
+        assertEquals("bruno", r.count)
+        assertEquals(1, r.finishedUnseen)                            // a do +1 terminou
+        assertEquals(1, m.openRides)
+    }
+
+    @Test fun oferta_recusada_antes_da_aceita_sai_da_memoria() {
+        val m = TripMatcher<String>()
+        m.offerSeen("ana", 0)
+        m.onStage(accepted("ana"), 1_000); m.markCounted("ana")
+        m.onStage(onTrip("ana"), 5 * min)
+        m.offerSeen("ruim", 12 * min)                                // recusada no X (sem tela inicial)
+        m.offerSeen("boa", 14 * min)                                 // aceita na fila
+        assertEquals(2, m.rememberedOffers)
+        assertEquals("boa", m.onStage(accepted("bruno"), 25 * min).count)
+        m.markCounted("boa")
+        assertEquals(0, m.rememberedOffers)
+        // Próxima corrida com a oferta não lida: a recusada não volta.
+        m.onStage(onTrip("bruno"), 30 * min)
+        assertNull(m.onStage(accepted("carla"), 50 * min).count)
+    }
+
+    @Test fun fila_aguenta_tela_inicial_rapida_na_troca_de_corrida() {
+        val m = TripMatcher<String>()
+        m.offerSeen("ana", 0)
+        m.onStage(accepted("ana"), 1_000); m.markCounted("ana")
+        m.onStage(onTrip("ana"), 5 * min)
+        m.offerSeen("bruno", 20 * min)
+        m.onStage(finished, 29 * min)
+        m.onStage(idle, 29 * min + 10_000)                           // "Procurando viagens" piscou
+        assertEquals("bruno", m.onStage(accepted("bruno"), 30 * min).count)
+        // Tela inicial de verdade (minutos): a oferta da fila não foi aceita.
+        val m2 = TripMatcher<String>()
+        m2.offerSeen("ana", 0)
+        m2.onStage(accepted("ana"), 1_000); m2.markCounted("ana")
+        m2.onStage(onTrip("ana"), 5 * min)
+        m2.offerSeen("bruno", 20 * min)
+        m2.onStage(idle, 29 * min)
+        assertNull(m2.onStage(accepted("carla"), 40 * min).count)
+    }
+
+    @Test fun oferta_mais_nova_que_nao_cabe_na_distancia_cede_para_a_anterior() {
+        val m = TripMatcher<String>()
+        m.offerSeen("certa", 0, pickupKm = 1.0, tripKm = 3.0)
+        m.offerSeen("outra", 20_000, pickupKm = 0.5, tripKm = 1.0)   // cartão relido errado / recusada
+        assertEquals("certa", m.onStage(onTrip("caio", km = 3.1), 9 * min).count)
+    }
 }
