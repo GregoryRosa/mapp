@@ -228,8 +228,9 @@ private fun dayTitle(date: LocalDate, today: LocalDate): String {
 }
 
 /**
- * Resumo de um período. O valor bruto fica sempre à vista; o botão Bruto/Líquido mostra o que sobra
- * tirando os custos (carro: km × custo/km do veículo; mais os gastos lançados).
+ * Resumo de um período: bruto, custos e líquido sempre à vista, corridas e tempo embaixo. O botão
+ * Bruto/Líquido troca o R$/km e R$/h entre bruto e líquido e mostra de onde vêm os custos
+ * (carro: km × custo/km do veículo; mais os gastos lançados).
  */
 @Composable
 private fun PeriodCard(
@@ -251,20 +252,21 @@ private fun PeriodCard(
                 NetToggle(net, onToggle = { net = !net })
             }
             subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            // Bruto, custos e líquido sempre à vista; corridas e tempo na linha de baixo (mesmas colunas).
             Row(Modifier.fillMaxWidth()) {
                 LabeledValue("Ganho bruto", Format.brl(t.gross), Modifier.weight(1f))
-                if (net) {
-                    LabeledValue("Custos", Format.brl(t.cost), Modifier.weight(1f), color = RedSignal)
-                    LabeledValue(
-                        "Líquido",
-                        Format.brl(t.net),
-                        Modifier.weight(1f),
-                        color = if (t.net < 0) RedSignal else GreenSignal,
-                    )
-                } else {
-                    LabeledValue("Corridas", t.rides.toString(), Modifier.weight(1f))
-                    LabeledValue("Tempo", ShiftMath.duration(t.hours), Modifier.weight(1f))
-                }
+                LabeledValue("Custos", Format.brl(t.cost), Modifier.weight(1f), color = RedSignal)
+                LabeledValue(
+                    "Líquido",
+                    Format.brl(t.net),
+                    Modifier.weight(1f),
+                    color = if (t.net < 0) RedSignal else GreenSignal,
+                )
+            }
+            Row(Modifier.fillMaxWidth()) {
+                LabeledValue("Corridas", t.rides.toString(), Modifier.weight(1f))
+                LabeledValue("Tempo", ShiftMath.duration(t.hours), Modifier.weight(1f))
+                Spacer(Modifier.weight(1f))
             }
             if (t.km > 0) {
                 Text(

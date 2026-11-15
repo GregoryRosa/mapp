@@ -239,6 +239,7 @@ object ShiftMath {
             perHour = if (hours >= 1.0 / 60 && trips > 0) revenue / hours else null,
             avgTripKm = if (tripsWithKm >= 0.5) withTrip / tripsWithKm else null,
             categories = cats,
+            pendingTrips = list.sumOf { it.pendingTrips },
         )
     }
 
