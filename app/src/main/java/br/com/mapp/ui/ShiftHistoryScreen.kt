@@ -2,6 +2,8 @@
 
 package br.com.mapp.ui
 
+import android.content.Context
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -30,6 +32,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,6 +59,10 @@ import br.com.mapp.finance.RedSignal
 import br.com.mapp.finance.ReportMath
 import br.com.mapp.finance.rememberNow
 import br.com.mapp.overlay.ShiftTracker
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -77,6 +84,8 @@ fun ShiftHistoryScreen(onBack: () -> Unit) {
     val openShift by remember { ShiftTracker.current(ctx) }.collectAsStateWithLifecycle()
     val cost by remember { MappApp.repos.vehicle.config() }.collectAsStateWithLifecycle(VehicleCostConfig())
     var toDelete by remember { mutableStateOf<Shift?>(null) }
+    // Corridas sem tipo nas jornadas (antigas ou contadas antes do tipo ser lido) recebem o tipo do histórico.
+    LaunchedEffect(Unit) { fillShiftCategories(ctx) }
 
     val zone = ZoneId.systemDefault()
     val now = rememberNow()
@@ -148,6 +157,30 @@ fun ShiftHistoryScreen(onBack: () -> Unit) {
         )
     }
 }
+
+/**
+ * Completa o tipo das corridas sem tipo (jornada atual e encerradas, até [FILL_DAYS] dias) com as
+ * ofertas gravadas no histórico. Roda fora da thread principal; falha = deixa como está.
+ */
+internal suspend fun fillShiftCategories(ctx: Context) {
+    try {
+        withContext(Dispatchers.Default) {
+            val shifts = listOfNotNull(ShiftTracker.current(ctx).value) + ShiftTracker.history(ctx).value
+            if (shifts.any { s -> s.trips.any { it.category.isNullOrBlank() } }) {
+                val now = System.currentTimeMillis()
+                val from = maxOf(shifts.minOf { it.startedAt } - 60 * 60_000L, now - FILL_DAYS * 86_400_000L)
+                val offers = MappApp.repos.offers.between(from, now).first().map { it.evaluated.raw }
+                ShiftTracker.fillCategories(ctx, offers)
+            }
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("MApp/Jornadas", "Falha ao completar tipos das corridas", e)
+    }
+}
+
+private const val FILL_DAYS = 62L
 
 @Composable
 private fun TotalCard(title: String, list: List<ShiftSummary>, status: String? = null, empty: String = "Sem jornadas no período.") {
@@ -306,7 +339,6 @@ private val CATEGORY_COLORS = mapOf(
     "Pop" to Color(0xFFFFD54F),
     "Pop Expresso" to Color(0xFFFFA726),
     "Táxi" to Color(0xFFFF8A65),
-    ShiftMath.NO_CATEGORY to Color(0xFF78909C),
 )
 private val EXTRA_COLORS = listOf(
     Color(0xFFB39DDB), Color(0xFFF06292), Color(0xFF4DD0E1), Color(0xFF7986CB), Color(0xFF81C784), Color(0xFFFF8A65),

@@ -125,6 +125,7 @@ fun EvaluatedOffer.toEntity(accepted: Boolean? = null) = OfferEntity(
     capturedAt = raw.capturedAt,
     accepted = accepted,
     rawText = raw.rawText,
+    category = raw.category,
 )
 
 /** Reconstrói a oferta. zoneHits não é persistido e volta vazio. */
@@ -141,6 +142,7 @@ fun OfferEntity.toRecord(): OfferRecord {
         passengerRating = passengerRating,
         rawText = rawText,
         capturedAt = capturedAt,
+        category = category,
     )
     val evaluated = EvaluatedOffer(
         raw = raw,

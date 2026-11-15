@@ -169,7 +169,6 @@ data class ShiftSummary(
 )
 
 object ShiftMath {
-    const val NO_CATEGORY = "Outros"
 
     /**
      * [costPerKm] vale só se a jornada não guardou o seu ([Shift.costPerKm], gravado ao encerrar).
@@ -203,12 +202,17 @@ object ShiftMath {
         )
     }
 
-    /** % de corridas por tipo (UberX, Comfort, Black, Electric...), da mais comum para a menos. */
+    /**
+     * % de corridas por tipo (UberX, Comfort, Black, Electric...), da mais comum para a menos. Só
+     * corridas com o tipo lido entram (sem grupo "Outros"); o tipo que falta é completado pelo
+     * histórico de ofertas ([TripCategories]).
+     */
     fun categories(trips: List<ShiftTrip>): List<CategoryShare> {
-        if (trips.isEmpty()) return emptyList()
-        return trips.groupBy { it.category ?: NO_CATEGORY }
+        val known = trips.filter { !it.category.isNullOrBlank() }
+        if (known.isEmpty()) return emptyList()
+        return known.groupBy { it.category!! }
             .map { (label, list) ->
-                CategoryShare(label, list.size, list.size * 100.0 / trips.size, list.sumOf { it.price })
+                CategoryShare(label, list.size, list.size * 100.0 / known.size, list.sumOf { it.price })
             }
             .sortedWith(compareByDescending<CategoryShare> { it.count }.thenByDescending { it.revenue })
     }
@@ -222,9 +226,10 @@ object ShiftMath {
         val withTrip = list.sumOf { it.kmWithTrip }
         val cost = list.sumOf { it.cost }
         val tripsWithKm = list.sumOf { s -> if (s.avgTripKm != null && s.avgTripKm > 0) s.kmWithTrip / s.avgTripKm else 0.0 }
-        val cats = list.flatMap { it.categories }.groupBy { it.label }
+        val grouped = list.flatMap { it.categories }.groupBy { it.label }
             .map { (label, c) -> CategoryShare(label, c.sumOf { it.count }, 0.0, c.sumOf { it.revenue }) }
-            .map { it.copy(percent = if (trips > 0) it.count * 100.0 / trips else 0.0) }
+        val known = grouped.sumOf { it.count } // só corridas com o tipo lido
+        val cats = grouped.map { it.copy(percent = if (known > 0) it.count * 100.0 / known else 0.0) }
             .sortedWith(compareByDescending<CategoryShare> { it.count }.thenByDescending { it.revenue })
         return ShiftSummary(
             hours = hours,

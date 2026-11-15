@@ -90,6 +90,8 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
     LaunchedEffect(lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { refresh++ }
     }
+    // Corridas sem tipo (UberX, Comfort...) nas jornadas recebem o tipo do histórico de ofertas.
+    LaunchedEffect(Unit) { fillShiftCategories(ctx) }
     val runtimePerms = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { refresh++ }

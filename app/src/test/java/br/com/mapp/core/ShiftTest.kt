@@ -90,9 +90,10 @@ class ShiftTest {
         assertEquals(1.4, s.perKm!!, eps)
         assertEquals(35.0, s.perHour!!, eps)
         assertEquals(8.0, s.avgTripKm!!, eps)
-        assertEquals(listOf("UberX", "Comfort", ShiftMath.NO_CATEGORY), s.categories.map { it.label })
-        assertEquals(50.0, s.categories[0].percent, eps)
-        assertEquals(25.0, s.categories[1].percent, eps)
+        // Sem "Outros": a corrida sem tipo lido fica fora e a % é sobre as 3 com tipo.
+        assertEquals(listOf("UberX", "Comfort"), s.categories.map { it.label })
+        assertEquals(2.0 * 100 / 3, s.categories[0].percent, eps)
+        assertEquals(100.0 / 3, s.categories[1].percent, eps)
     }
 
     @Test fun custo_segue_o_gps_e_nao_salta_ao_aceitar() {

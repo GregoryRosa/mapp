@@ -6,10 +6,12 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import br.com.mapp.core.model.Platform
+import br.com.mapp.reader.parser.OfferParsers
 
 @Database(
     entities = [ProfileEntity::class, ZoneEntity::class, OfferEntity::class, FinanceEntryEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -31,6 +33,28 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v3: tipo da corrida (UberX, Comfort...) gravado com a oferta. As ofertas antigas recuperam o
+         * tipo pelo texto lido da tela (rawText), com a mesma regra do leitor.
+         */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE offers ADD COLUMN category TEXT")
+                val found = mutableListOf<Pair<Long, String>>()
+                db.query("SELECT id, platform, rawText FROM offers").use { c ->
+                    while (c.moveToNext()) {
+                        val category = runCatching {
+                            OfferParsers.forPlatform(Platform.valueOf(c.getString(1))).categoryIn(c.getString(2) ?: "")
+                        }.getOrNull()
+                        if (category != null) found += c.getLong(0) to category
+                    }
+                }
+                found.forEach { (id, category) ->
+                    db.execSQL("UPDATE offers SET category = ? WHERE id = ?", arrayOf<Any>(category, id))
+                }
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -38,7 +62,7 @@ abstract class AppDatabase : RoomDatabase() {
         fun get(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, NAME)
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { instance = it }
             }

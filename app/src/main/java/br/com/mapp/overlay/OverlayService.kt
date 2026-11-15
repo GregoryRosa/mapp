@@ -167,6 +167,16 @@ class OverlayService : LifecycleService() {
         lifecycleScope.launch {
             OfferBus.raw.collect { raw -> raw.category?.let { lastCategory = raw.key() to it } }
         }
+        // Corrida contada sem o tipo (lido num quadro depois, ou oferta restaurada da memória): o tipo
+        // vem da oferta gravada no histórico — sem "Outros" na jornada.
+        lifecycleScope.launch {
+            combine(ShiftTracker.current(this@OverlayService), MappApp.repos.offers.recent(100)) { shift, offers -> shift to offers }
+                .collect { (shift, offers) ->
+                    if (shift?.trips?.any { it.category.isNullOrBlank() } == true) {
+                        ShiftTracker.fillCategories(this@OverlayService, offers.map { it.evaluated.raw })
+                    }
+                }
+        }
         startShiftMonitor(loc)
         startDayMonitor()
         // Telas lidas enquanto as ofertas do histórico carregam esperam na fila.

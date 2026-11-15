@@ -59,12 +59,15 @@ class RoomOfferHistoryRepository(private val dao: OfferDao) : OfferHistoryReposi
      */
     override suspend fun record(offer: EvaluatedOffer): Long = lock.withLock {
         val key = offer.raw.capturedAt to offer.raw.price
-        var accepted = if (pending.containsKey(key)) pending.remove(key) else null
+        val accepted = if (pending.containsKey(key)) pending.remove(key) else null
+        var entity = offer.toEntity(accepted)
         dao.findOffer(offer.raw.capturedAt, offer.raw.platform.name)?.let { prior ->
-            if (accepted == null) accepted = prior.accepted
+            if (accepted == null) entity = entity.copy(accepted = prior.accepted)
+            // Tipo lido num quadro anterior não se perde quando a oferta é regravada sem ele.
+            if (entity.category == null) entity = entity.copy(category = prior.category)
             dao.deleteOffer(prior.id)
         }
-        dao.insert(offer.toEntity(accepted))
+        dao.insert(entity)
     }
 
     override suspend fun setAccepted(offer: EvaluatedOffer, accepted: Boolean?) = lock.withLock {
