@@ -39,19 +39,33 @@ object TripScreens {
         val folded = lines.map { ParseUtils.fold(it) }
         val keys = folded.map { line -> line.filter { it.isLetterOrDigit() } }
         if (keys.any { k -> finished.any { k.contains(it) } }) return TripEvent(TripStage.FINISHED)
-        val km = screenKm(lines)
-        nameAfter(folded, pickupName)?.let { return TripEvent(TripStage.ACCEPTED, it.ifEmpty { null }, km) }
-        if (keys.any { k -> accepted.any { k.contains(it) } }) return TripEvent(TripStage.ACCEPTED, km = km)
-        nameAfter(folded, dropoffName)?.let { name -> if (name.isNotEmpty()) return TripEvent(TripStage.ON_TRIP, name, km) }
+        nameAfter(folded, pickupName)?.let {
+            return TripEvent(TripStage.ACCEPTED, it.ifEmpty { null }, screenKm(lines, folded.indexOfFirst(pickupName::containsMatchIn)))
+        }
+        if (keys.any { k -> accepted.any { k.contains(it) } }) return TripEvent(TripStage.ACCEPTED, km = screenKm(lines, -1))
+        nameAfter(folded, dropoffName)?.let { name ->
+            if (name.isNotEmpty()) {
+                return TripEvent(TripStage.ON_TRIP, name, screenKm(lines, folded.indexOfFirst(dropoffName::containsMatchIn)))
+            }
+        }
         if (fromOcr && keys.any { k -> idle.any { k.contains(it) } }) return TripEvent(TripStage.IDLE)
         return null
     }
 
-    /** Distância até a busca/destino que a tela mostra ("2 min · 0,9 km"); ignora R$/km. */
-    private fun screenKm(lines: List<String>): Double? = lines.asSequence()
-        .filter { '$' !in it && "/km" !in it.lowercase() }
-        .mapNotNull { ParseUtils.parseDistanceKm(it) }
-        .firstOrNull()
+    /**
+     * Distância até a busca/destino que a tela mostra ("2 min · 0,9 km"); ignora R$/km. Vale a que
+     * está junto da frase ([phraseAt]: na linha dela ou até 3 acima) — com a navegação da Uber aberta
+     * a 1ª distância da tela é a da próxima curva ("0.8 km"), não a da corrida. Sem frase, a 1ª.
+     */
+    private fun screenKm(lines: List<String>, phraseAt: Int): Double? {
+        fun kmAt(i: Int): Double? = lines.getOrNull(i)
+            ?.takeIf { '$' !in it && "/km" !in it.lowercase() }
+            ?.let { ParseUtils.parseDistanceKm(it) }
+        if (phraseAt >= 0) {
+            for (i in phraseAt downTo maxOf(0, phraseAt - 3)) kmAt(i)?.let { return it }
+        }
+        return lines.indices.firstNotNullOfOrNull(::kmAt)
+    }
 
     /**
      * Nome depois da frase: na mesma linha ou, se a linha acaba na frase, na seguinte.

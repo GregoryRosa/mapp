@@ -152,6 +152,7 @@ class OverlayService : LifecycleService() {
         // Memória do aceite: volta ao reabrir o copiloto (o Android pode matar o serviço no meio da
         // viagem) — antes das ofertas novas chegarem. As ofertas dela vêm do histórico (Room).
         restoreTripMemory()
+        TripLog.add(this, "— Copiloto ligado · v${ReaderStatus.versionOf(this)} · ${matcher.describe()} · ${shiftLine()}")
         val preload = lifecycleScope.async { preloadOffers() }
 
         val pipeline = OfferPipeline(this)
@@ -514,7 +515,42 @@ class OverlayService : LifecycleService() {
         } finally {
             saveTripMemory(force = true)
             pushShift()
+            if (stageLogged) TripLog.add(this, "  → ${matcher.describe()} · ${shiftLine()}")
         }
+    }
+
+    /** A última tela entrou no registro? (tela inicial repetida sem efeito não entra) */
+    private var stageLogged = false
+
+    /** Jornada em uma linha para o registro: últimas corridas e quais estão em andamento. */
+    private fun shiftLine(): String {
+        val shift = ShiftTracker.current(this).value ?: return "sem jornada"
+        val trips = shift.trips.takeLast(4).joinToString(", ") { ShiftMath.money(it.price) + if (it.finished) " ✓" else " em andamento" }
+        return "jornada${if (shift.paused) " pausada" else ""}=[$trips]"
+    }
+
+    /** Tela lida + decisão do acompanhamento, para o registro. */
+    private fun logStage(event: TripEvent, match: TripMatcher.Result<OfferKey>, offer: EvaluatedOffer?) {
+        val screen = when (event.stage) {
+            TripStage.ACCEPTED -> "Encontro com"
+            TripStage.ON_TRIP -> "Destino de"
+            TripStage.FINISHED -> "Como foi a viagem?"
+            TripStage.IDLE -> "Procurando viagens"
+        }
+        val decided = listOfNotNull(
+            offer?.let { "conta ${ShiftMath.money(it.raw.price)}" },
+            "oferta fora da memória".takeIf { match.count != null && offer == null },
+            "corrida nova".takeIf { match.newRide },
+            "embarcou".takeIf { match.started },
+            "fecha ${match.finishedUnseen} anterior(es)".takeIf { match.finishedUnseen > 0 },
+            "busca anterior cancelada".takeIf { match.cancelledPickup },
+            "avaliação da anterior (não fecha)".takeIf { match.lateFinish },
+        ).joinToString(", ")
+        // "Procurando viagens" se repete a cada 30 s parado: só entra quando fecha alguma corrida.
+        stageLogged = !(event.stage == TripStage.IDLE && decided.isEmpty())
+        if (!stageLogged) return
+        val km = event.km?.let { " ${ShiftMath.km(it)}" }.orEmpty()
+        TripLog.add(this, "Tela ${event.platform?.label.orEmpty()} \"$screen ${event.passenger.orEmpty()}\"$km: ${decided.ifEmpty { "nada muda" }}")
     }
 
     private fun handleTripStage(event: TripEvent) {
@@ -523,6 +559,7 @@ class OverlayService : LifecycleService() {
         val key = match.count
         // A oferta aceita vem da memória (não só a última: a da fila pode ter ficado para trás).
         val offer = key?.let { recentOffers[it] }
+        logStage(event, match, offer)
         if (offer != null) {
             // Histórico: marca a oferta como aceita mesmo sem jornada aberta (e notifica no celular).
             markAccepted(offer, true, passenger = event.passenger, onBoard = event.stage == TripStage.ON_TRIP)
@@ -671,7 +708,10 @@ class OverlayService : LifecycleService() {
     }
 
     /** Avisos da corrida (aceita, embarque, finalizada, cancelada): ficam mais tempo. */
-    private fun tripToast(msg: String) = toast(msg, TRIP_NOTICE_MS)
+    private fun tripToast(msg: String) {
+        TripLog.add(this, "  Aviso: $msg")
+        toast(msg, TRIP_NOTICE_MS)
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
@@ -728,6 +768,12 @@ class OverlayService : LifecycleService() {
         remember(offer)
         saveTripMemory()
         if (lastOffer?.raw?.key() != key) {
+            val r = offer.raw
+            TripLog.add(
+                this,
+                "Oferta ${offerLabel(r)} · busca ${r.pickupKm?.let(ShiftMath::km) ?: "?"}/${r.pickupMin ?: "?"} min" +
+                    " · viagem ${r.tripKm?.let(ShiftMath::km) ?: "?"}/${r.tripMin ?: "?"} min · ${matcher.describe()}",
+            )
             lastOffer = offer
             pushShift()
         } else {

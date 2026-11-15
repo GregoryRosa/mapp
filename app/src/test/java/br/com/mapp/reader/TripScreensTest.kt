@@ -310,6 +310,80 @@ class TripScreensTest {
         assertEquals(1, y.onStage(idle, 10 * min).finishedUnseen)
     }
 
+    @Test fun proximo_passageiro_mostrado_antes_do_fim_nao_perde_a_corrida_da_fila() {
+        // "Encontro com Bruno" lido com a Ana ainda a bordo (logo depois de aceitar na fila); a Ana só
+        // desce 14 min depois — mais que ¾ da corrida curta do Bruno. A tela de fim é da Ana.
+        val m = TripMatcher<String>()
+        m.offerSeen("ana", 0, expectedMs = 40 * min)
+        m.onStage(accepted("ana"), 1_000); m.markCounted("ana")
+        m.onStage(onTrip("ana"), 5 * min)
+        m.offerSeen("bruno", 10 * min, expectedMs = 12 * min)
+        assertEquals("bruno", m.onStage(accepted("bruno"), 11 * min).count); m.markCounted("bruno")
+        assertTrue(m.onStage(finished, 25 * min).lateFinish)
+        assertEquals(1, m.openRides)
+        m.onStage(onTrip("bruno"), 30 * min)
+        assertFalse(m.onStage(finished, 41 * min).lateFinish)          // fim do Bruno
+        assertEquals(0, m.openRides)
+    }
+
+    @Test fun tela_de_fim_repetida_nao_fecha_a_corrida_seguinte() {
+        // A avaliação da Ana continua aparecendo (cartão na tela / texto de fundo) durante a busca e
+        // até depois do embarque do Bruno.
+        val m = TripMatcher<String>()
+        m.offerSeen("ana", 0, expectedMs = 25 * min)
+        m.onStage(accepted("ana"), 1_000); m.markCounted("ana")
+        m.onStage(onTrip("ana"), 5 * min)
+        m.offerSeen("bruno", 20 * min, expectedMs = 20 * min)
+        assertFalse(m.onStage(finished, 29 * min).lateFinish)          // fim da Ana
+        assertEquals("bruno", m.onStage(accepted("bruno"), 29 * min + 10_000).count); m.markCounted("bruno")
+        assertTrue(m.onStage(finished, 29 * min + 20_000).lateFinish)
+        assertTrue(m.onStage(finished, 31 * min).lateFinish)
+        m.onStage(onTrip("bruno"), 35 * min)
+        assertTrue(m.onStage(finished, 35 * min + 10_000).lateFinish)  // a bordo há 10 s: não é o fim dele
+        assertEquals(1, m.openRides)
+        assertFalse(m.onStage(finished, 56 * min).lateFinish)          // fim de verdade
+        assertEquals(0, m.openRides)
+    }
+
+    @Test fun passageiro_a_bordo_e_da_corrida_aberta_sem_nome_nao_da_oferta_nova() {
+        // Aceite lido sem nome e embarque não lido (Waze). Oferta do Bruno aceita na fila; 4 min depois
+        // "Destino de Ana" aparece pela 1ª vez: a Ana é da corrida aberta, o Bruno fica na fila.
+        val m = TripMatcher<String>()
+        m.offerSeen("ana", 0, expectedMs = 20 * min)
+        assertEquals("ana", m.onStage(accepted(), 5_000).count); m.markCounted("ana")
+        m.offerSeen("bruno", 6 * min, pickupKm = 1.5, pickupMin = 4)
+        val bordo = m.onStage(onTrip("ana"), 10 * min)
+        assertNull(bordo.count)
+        assertFalse(bordo.cancelledPickup)
+        assertTrue(bordo.started)
+        assertEquals(1, m.openRides)
+        assertFalse(m.onStage(finished, 18 * min).lateFinish)          // fim da Ana
+        assertEquals("bruno", m.onStage(accepted("bruno", km = 1.4), 45 * min).count) // fila: vale depois de 20 min
+    }
+
+    @Test fun passageiro_a_bordo_perto_do_destino_nao_e_da_oferta_que_acabou_de_chegar() {
+        // O MApp não viu a corrida da Ana. Oferta do Bruno (11,3 km) há 4 min; "Destino de Ana" com
+        // 2 km pela frente: não dá para ter buscado e rodado 9 km — o Bruno fica na fila.
+        val m = TripMatcher<String>()
+        m.offerSeen("bruno", 0, pickupKm = 1.8, tripKm = 11.3, pickupMin = 6, expectedMs = 32 * min)
+        assertNull(m.onStage(onTrip("ana", km = 2.0), 4 * min).count)
+        assertEquals("bruno", m.onStage(accepted("bruno", km = 1.8), 30 * min).count)
+        // Com os km da viagem inteira pela frente é o embarque dele (aceite e busca não lidos).
+        val m2 = TripMatcher<String>()
+        m2.offerSeen("bruno", 0, pickupKm = 1.8, tripKm = 11.3, pickupMin = 6)
+        assertEquals("bruno", m2.onStage(onTrip("bruno", km = 11.1), 7 * min).count)
+    }
+
+    @Test fun km_da_tela_e_o_que_esta_junto_da_frase() {
+        // Print de 15/11 (navegação da Uber aberta): a 1ª distância da tela é a da próxima curva.
+        val tela = listOf(
+            "0.8 km", "Rua Washington Luiz", "para Rua General Salus...", "Praça da Alfândega", "30", "LIMITE",
+            "Navegar", "5 min", "1,8 km", "Encontro com Rafaela",
+        )
+        assertEquals(accepted("rafaela", 1.8), TripScreens.detect(tela))
+        assertEquals(onTrip("ana", 11.3), TripScreens.detect(listOf("0,3 km", "Av. Ipiranga", "21 min 11,3 km", "Destino de Ana")))
+    }
+
     @Test fun waze_na_frente_a_corrida_toda_nao_vira_cancelamento() {
         // Nem embarque nem fim lidos; 15 min depois (corrida prevista de 14 min) aparece outro passageiro.
         val m = TripMatcher<String>()
