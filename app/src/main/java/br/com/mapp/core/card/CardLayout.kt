@@ -1,6 +1,7 @@
 package br.com.mapp.core.card
 
 import br.com.mapp.core.engine.OfferEvaluator
+import br.com.mapp.core.media.MediaLayout
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.Signal
@@ -65,6 +66,8 @@ data class CardLayout(
     val address: List<AddressItem> = emptyList(),
     /** Tamanho das letras da linha de endereços, em % do padrão. */
     val addressFont: Int = 100,
+    /** Mapa e fotos embaixo do cabeçalho: modelo e lugar de cada quadro (Card de corridas → Mapa e fotos). */
+    val media: MediaLayout = MediaLayout.CARD_DEFAULT,
 ) {
     fun font(line: CardLine): Int = if (line == CardLine.TOP) topFont else bottomFont
 
@@ -145,6 +148,7 @@ data class CardLayout(
         append(";bottomfont=").append(bottomFont)
         append(";address=").append(address.joinToString(",") { it.id })
         append(";addrfont=").append(addressFont)
+        append(";media=").append(media.encode())
     }
 
     companion object {
@@ -171,6 +175,7 @@ data class CardLayout(
                 address = parts["address"].orEmpty().split(',').mapNotNull { AddressItem.fromId(it.trim()) }
                     .distinct().take(ADDRESS_SLOTS),
                 addressFont = parts["addrfont"]?.toIntOrNull()?.let(::clampFont) ?: 100,
+                media = MediaLayout.decode(parts["media"], MediaLayout.CARD_DEFAULT),
             )
         }
 

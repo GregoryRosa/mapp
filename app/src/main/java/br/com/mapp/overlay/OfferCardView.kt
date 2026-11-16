@@ -20,7 +20,14 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import br.com.mapp.core.card.CardFilters
 import br.com.mapp.core.geo.PhotoView
+import br.com.mapp.core.geo.SatelliteShot
 import br.com.mapp.core.geo.StreetView
+import br.com.mapp.core.media.MediaArea
+import br.com.mapp.core.media.MediaBlock
+import br.com.mapp.core.media.MediaLayout
+import br.com.mapp.core.media.MediaPhotos
+import br.com.mapp.core.media.MediaPlaced
+import br.com.mapp.core.media.MediaSizes
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.GeoPoint
@@ -41,11 +48,13 @@ import kotlinx.coroutines.launch
 import org.osmdroid.views.overlay.Marker
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 
 /**
  * Cartão flutuante (View tradicional, sem XML/Compose): cabeçalho na cor do semáforo com as
- * informações escolhidas em "Estilo do cartão" ([CardHeaderView]), alertas de zona, mini mapa e fotos
- * da coleta, paradas e destino — foto da rua (Street View) ou satélite: toque troca, segurar amplia.
+ * informações escolhidas em "Estilo do cartão" ([CardHeaderView]), alertas de zona e a área de mapa e
+ * fotos no modelo escolhido em Card → Card de corridas → Mapa e fotos ([MediaLayout]): mini mapa da
+ * rota e fotos da coleta e do destino — foto da rua (Street View) ou satélite: toque troca, segurar amplia.
  * Arrastável pela barra de título; não bloqueia toques fora dele.
  * Reutilizável: [dismiss] só tira da tela; [destroy] libera o mapa.
  */
@@ -87,24 +96,28 @@ class OfferCardView(
     private val layoutListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when (key) {
             // Estilo ou filtros mudados na tela do app: o Card aberto já mostra.
-            OverlayPrefs.KEY_CARD_LAYOUT, OverlayPrefs.KEY_CARD_FILTERS -> offer?.let { bindHeader(it) }
+            OverlayPrefs.KEY_CARD_FILTERS -> offer?.let { bindHeader(it) }
+            OverlayPrefs.KEY_CARD_LAYOUT -> {
+                media = OverlayPrefs.cardLayout(context).media
+                offer?.let { bindHeader(it) }
+                if (attached && !minimized) refreshMedia()
+            }
             OverlayPrefs.KEY_STREETVIEW_ON, OverlayPrefs.KEY_STREETVIEW_KEY -> if (attached && !minimized) {
                 photoCells.values.forEach { it.reset() }
-                renderPhotos()
-                applyMinimized()
+                refreshMedia()
             }
             // Escolhido em Card → Card de corridas (o toque na foto já trocou aqui mesmo).
             OverlayPrefs.KEY_PHOTO_VIEW -> {
                 val view = OverlayPrefs.photoView(context)
                 if (view != photoView) {
                     photoView = view
-                    if (attached && !minimized) renderPhotos()
+                    if (attached && !minimized) renderMedia()
                 }
             }
         }
     }
 
-    // ---- Corpo: alertas e mini mapa (endereços já aparecem na própria Uber) ----
+    // ---- Corpo: alertas e a área de mapa e fotos (endereços já aparecem na própria Uber) ----
     private val reasonsBox = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val mapNote = text(11f, color = SECONDARY).apply {
         text = "Coleta/destino ainda não localizados no mapa"
@@ -112,30 +125,58 @@ class OfferCardView(
     private val mapView = MapViews.create(context, interactive = false).apply {
         // O cartão entra e sai da janela várias vezes; o mapa só é destruído em destroy().
         setDestroyMode(false)
+        // Quadro do mapa mudou de tamanho (outro modelo): reenquadra a rota no tamanho novo.
+        addOnLayoutChangeListener { v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            val resized = right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop
+            if (resized && right > left) {
+                v.post {
+                    mapKey = null
+                    renderMap()
+                }
+            }
+        }
     }
-
-    // ---- Fotos dos pontos: A, B… lado a lado embaixo do mapa; toque = rua ⇄ satélite, segurar = amplia ----
-    private val photosRow = LinearLayout(context).apply {
-        orientation = LinearLayout.HORIZONTAL
+    private val mapStatus = text(11f, color = SECONDARY).apply {
+        text = "Localizando no mapa…"
+        gravity = Gravity.CENTER
         visibility = View.GONE
     }
-    private val photoCells = LinkedHashMap<String, PhotoCell>()
-    private var zoomedLetter: String? = null
+    private val mapCell = FrameLayout(context).apply {
+        background = GradientDrawable().apply {
+            setColor(PHOTO_BG)
+            cornerRadius = 10f * density
+        }
+        clipToOutline = true
+        addView(mapView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        addView(mapStatus, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+    }
+
+    // ---- Fotos da coleta e do destino: toque = rua ⇄ satélite, segurar = ocupa a área toda ----
+    private val photoCells = linkedMapOf(MediaBlock.PICKUP to PhotoCell(MediaBlock.PICKUP), MediaBlock.DROPOFF to PhotoCell(MediaBlock.DROPOFF))
+    private var zoomed: MediaBlock? = null
     private var photosOfferId: Any? = null
 
     /** Foto da rua ou satélite (todas as fotos juntas; fica salvo para as próximas corridas). */
     private var photoView = OverlayPrefs.photoView(context)
 
+    /** Modelo e lugar de cada quadro (Card → Card de corridas → Mapa e fotos). */
+    private var media: MediaLayout = OverlayPrefs.cardLayout(context).media
+
+    /** Quadros desenhados agora (posição em px dentro da área). */
+    private var placed: Map<MediaBlock, MediaPlaced> = emptyMap()
+
+    /** Área com os quadros soltos em posições absolutas (calculadas por [MediaLayout.place]). */
+    private val mediaArea = FrameLayout(context).apply {
+        addView(mapCell)
+        photoCells.values.forEach { addView(it.view) }
+    }
+
     private val body = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(12), dp(8), dp(12), dp(12))
         addView(reasonsBox)
-        addView(mapView, LinearLayout.LayoutParams(dp(CARD_WIDTH_DP - 24), dp(MAP_HEIGHT_DP)).apply { topMargin = dp(8) })
+        addView(mediaArea, LinearLayout.LayoutParams(dp(MEDIA_WIDTH_DP), dp(MediaSizes.CARD.single)).apply { topMargin = dp(8) })
         addView(mapNote, topMargin(2))
-        addView(
-            photosRow,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
-        )
     }
 
     private val root = LinearLayout(context).apply {
@@ -203,7 +244,7 @@ class OfferCardView(
     fun updateCurrentPosition(point: GeoPoint?) {
         if (point == null || point == current) return
         current = point
-        if (!attached || minimized) return
+        if (!attached || minimized || MediaBlock.MAP !in placed) return
         val marker = hereMarker
         if (marker != null) {
             // GPS a cada segundo: só move o ponto azul, sem redesenhar zonas nem reenquadrar.
@@ -243,9 +284,17 @@ class OfferCardView(
     private fun bind(o: EvaluatedOffer) {
         bindHeader(o)
         bindReasons(o)
-        if (!minimized) renderPhotos()
+        if (!minimized) renderMedia()
         applyMinimized()
         if (!minimized) renderMap()
+    }
+
+    /** Modelo ou fotos ligadas/desligadas mudaram: refaz a área e o mapa e mede o Card de novo. */
+    private fun refreshMedia() {
+        renderMedia()
+        renderMap()
+        applyMinimized()
+        relayout()
     }
 
     /** Cabeçalho com o estilo salvo e os filtros do usuário que casam com a oferta (cor + etiquetas). */
@@ -281,81 +330,111 @@ class OfferCardView(
     private fun renderMap() {
         val o = offer ?: return
         val route = RideRoute.of(o)
-        val hasPoints = route.any { it.point != null } || current != null
-        mapView.visibility = if (hasPoints) View.VISIBLE else View.GONE
         // O semáforo aparece antes da geocodificação; os pontos chegam logo depois (ou nunca, sem rede).
         val missing = route.any { it.address != null && it.point == null }
         mapNote.visibility = if (missing) View.VISIBLE else View.GONE
-        applyMinimized()
+        // Mapa fora do modelo escolhido (ou foto ampliada): nem carrega os tiles.
+        val cell = placed[MediaBlock.MAP] ?: return
+        val hasPoints = route.any { it.point != null } || current != null
+        mapView.visibility = if (hasPoints) View.VISIBLE else View.INVISIBLE
+        mapStatus.visibility = if (hasPoints) View.GONE else View.VISIBLE
         if (!hasPoints) return
         // Mesmos pontos e zonas: o mapa já está certo (redesenhar recarrega tiles e trava o cartão).
         val key = Pair(route, zones)
         if (key == mapKey && (hereMarker != null) == (current != null)) return
         mapKey = key
-        hereMarker = MapViews.renderOffer(mapView, zones, current, route)
+        // Quadro pequeno: margem menor para a rota não ficar minúscula.
+        val margin = (min(cell.width, cell.height) / density / 6f).toInt().coerceIn(10, 28)
+        hereMarker = MapViews.renderOffer(mapView, zones, current, route, margin)
     }
 
     /**
-     * Fotos da coleta, paradas e destino ([StreetView.pick]). Só busca com o Card aberto (cada foto
-     * conta no limite do mês); o mesmo ponto não busca de novo.
+     * Área de mapa e fotos no modelo escolhido: só entram os quadros que existem nesta corrida (sem a
+     * chave do Google não há fotos; o vizinho ocupa o espaço). Foto ampliada ocupa a área toda. Só
+     * busca foto com o Card aberto e no quadro que aparece (cada foto conta no limite do mês); o mesmo
+     * ponto não busca de novo.
      */
-    private fun renderPhotos() {
+    private fun renderMedia() {
         val o = offer ?: return
-        val stops = if (OverlayPrefs.streetViewEnabled(context)) StreetView.pick(RideRoute.of(o)) else emptyList()
-        // Oferta nova começa com as fotos lado a lado (sem a ampliada da anterior).
+        val stops = if (OverlayPrefs.streetViewEnabled(context)) MediaPhotos.stops(RideRoute.of(o)) else emptyMap()
+        // Oferta nova começa no modelo (sem a foto ampliada da anterior).
         val offerId = o.raw.platform to o.raw.capturedAt
         if (offerId != photosOfferId) {
             photosOfferId = offerId
-            zoomedLetter?.let { toggleZoom(it) }
+            zoomed = null
         }
-        if (stops.map { it.letter } != photoCells.keys.toList()) {
-            photoCells.values.forEach { it.reset() }
-            photoCells.clear()
-            photosRow.removeAllViews()
-            zoomedLetter = null
-            stops.forEach { stop ->
-                val cell = PhotoCell(stop)
-                photosRow.addView(
-                    cell.view,
-                    LinearLayout.LayoutParams(0, dp(PHOTO_HEIGHT_DP), 1f).apply {
-                        if (photoCells.isNotEmpty()) marginStart = dp(6)
-                    },
-                )
-                photoCells[stop.letter] = cell
+        if (zoomed != null && zoomed !in stops) zoomed = null
+        val area = media.arrange(stops.keys + MediaBlock.MAP)
+        layoutMedia(area, zoomed)
+        photoCells.forEach { (block, cell) ->
+            val p = placed[block]
+            val stop = stops[block]
+            if (p == null || stop == null) {
+                cell.reset()
+            } else {
+                cell.bind(stop, photoView, SatelliteShot.forAspect(p.width.toDouble() / p.height))
             }
         }
-        stops.forEach { photoCells[it.letter]?.bind(it, photoView) }
-        photosRow.visibility = if (stops.isEmpty()) View.GONE else View.VISIBLE
+    }
+
+    /** Põe cada quadro no lugar (px) e acerta a altura da área; nada muda = não mexe nas views. */
+    private fun layoutMedia(area: MediaArea?, zoom: MediaBlock?) {
+        if (area == null) {
+            mediaArea.visibility = View.GONE
+            placed = emptyMap()
+            return
+        }
+        val sizes = MediaSizes.CARD
+        // Ampliada: a foto ocupa a área inteira, sem o Card mudar de altura.
+        val heightDp = MediaLayout.height(area, sizes).let { if (zoom != null) max(it, sizes.single) else it }
+        val shownArea = zoom?.let { MediaArea.Leaf(it) } ?: area
+        val list = MediaLayout.place(shownArea, dp(MEDIA_WIDTH_DP), dp(heightDp), sizes, gap = dp(sizes.gap))
+        val next = list.associateBy { it.block }
+        mediaArea.visibility = View.VISIBLE
+        if (next == placed) return
+        placed = next
+        (mediaArea.layoutParams as LinearLayout.LayoutParams).height = dp(heightDp)
+        mediaArea.layoutParams = mediaArea.layoutParams
+        place(mapCell, next[MediaBlock.MAP])
+        photoCells.forEach { (block, cell) -> place(cell.view, next[block]) }
+    }
+
+    private fun place(view: View, p: MediaPlaced?) {
+        if (p == null) {
+            view.visibility = View.GONE
+            return
+        }
+        view.visibility = View.VISIBLE
+        view.layoutParams = FrameLayout.LayoutParams(p.width, p.height).apply {
+            leftMargin = p.x
+            topMargin = p.y
+        }
     }
 
     /**
-     * Toque numa foto: todas trocam entre foto da rua e satélite (A e B sempre no mesmo modo, para
-     * comparar). A escolha fica salva para as próximas corridas.
+     * Toque numa foto: todas trocam entre foto da rua e satélite (A e destino sempre no mesmo modo,
+     * para comparar). A escolha fica salva para as próximas corridas.
      */
     private fun togglePhotoView() {
         photoView = photoView.other()
         OverlayPrefs.setPhotoView(context, photoView)
-        renderPhotos()
+        renderMedia()
     }
 
-    /** Segurar uma foto: ela ocupa a largura toda (as outras somem); segurar de novo volta. */
-    private fun toggleZoom(letter: String) {
-        zoomedLetter = if (zoomedLetter == letter) null else letter
-        val zoom = zoomedLetter
-        photoCells.forEach { (l, cell) ->
-            cell.view.visibility = if (zoom == null || zoom == l) View.VISIBLE else View.GONE
-            (cell.view.layoutParams as LinearLayout.LayoutParams).apply {
-                height = dp(if (zoom == l) PHOTO_ZOOM_HEIGHT_DP else PHOTO_HEIGHT_DP)
-                marginStart = if (zoom == l || l == photoCells.keys.first()) 0 else dp(6)
-                cell.view.layoutParams = this
-            }
-        }
-        if (attached) {
-            try {
-                windowManager.updateViewLayout(root, params)
-            } catch (e: Exception) {
-                Log.w(TAG, "Falha ao redimensionar cartão", e)
-            }
+    /** Segurar uma foto: ela ocupa a área toda (mapa e a outra foto somem); segurar de novo volta. */
+    private fun toggleZoom(block: MediaBlock) {
+        zoomed = if (zoomed == block) null else block
+        renderMedia()
+        renderMap()
+        relayout()
+    }
+
+    private fun relayout() {
+        if (!attached) return
+        try {
+            windowManager.updateViewLayout(root, params)
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao redimensionar cartão", e)
         }
     }
 
@@ -363,7 +442,7 @@ class OfferCardView(
      * Uma foto: letra do mapa no canto (mesma cor do marcador), crédito e data embaixo e, no canto
      * de cima, o modo que o toque mostra. Satélite aparece inteiro (logo e créditos do Google na imagem).
      */
-    private inner class PhotoCell(stop: RouteStop) {
+    private inner class PhotoCell(private val block: MediaBlock) {
         private val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
         private val status = text(11f, color = SECONDARY).apply {
             gravity = Gravity.CENTER
@@ -378,16 +457,7 @@ class OfferCardView(
             setShadowLayer(3f, 0f, 0f, 0xFF000000.toInt())
             setPadding(dp(4), dp(2), dp(4), 0)
         }
-        private val badge = text(12f, bold = true).apply {
-            text = stop.letter
-            gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(MapViews.colorOf(stop.kind))
-                setStroke(dp(1), 0xFFFFFFFF.toInt())
-            }
-        }
-        private val title = MapViews.titleOf(stop)
+        private val badge = text(12f, bold = true).apply { gravity = Gravity.CENTER }
         val view = FrameLayout(context).apply {
             background = GradientDrawable().apply {
                 setColor(PHOTO_BG)
@@ -401,30 +471,42 @@ class OfferCardView(
             addView(badge, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.TOP or Gravity.START).apply { setMargins(dp(4), dp(4), 0, 0) })
             setOnClickListener { togglePhotoView() }
             setOnLongClickListener {
-                toggleZoom(stop.letter)
+                toggleZoom(block)
                 true
             }
         }
         private var loadedId: String? = null
         private var job: Job? = null
 
-        fun bind(stop: RouteStop, mode: PhotoView) {
+        fun bind(stop: RouteStop, mode: PhotoView, shot: SatelliteShot) {
+            badge.text = stop.letter
+            badge.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(MapViews.colorOf(stop.kind))
+                setStroke(dp(1), 0xFFFFFFFF.toInt())
+            }
             modeHint.text = "⇄ ${if (mode == PhotoView.STREET) "satélite" else "rua"}"
-            view.contentDescription = "${mode.label}: $title. Toque para ver ${mode.other().label.lowercase()}; segure para ampliar."
+            view.contentDescription =
+                "${mode.label}: ${MapViews.titleOf(stop)}. Toque para ver ${mode.other().label.lowercase()}; segure para ampliar."
             val point = stop.point
             if (point == null) {
                 reset()
                 showMissing(if (stop.address != null) "Localizando endereço…" else "Endereço não lido")
                 return
             }
-            val id = "${mode.id}|${StreetView.cacheKey(point)}"
+            // Satélite: a letra/cor do marcador e o formato do quadro entram na imagem.
+            val id = if (mode == PhotoView.SATELLITE) {
+                "${mode.id}|${stop.letter}|${shot.width}x${shot.height}|${StreetView.cacheKey(point)}"
+            } else {
+                "${mode.id}|${StreetView.cacheKey(point)}"
+            }
             if (id == loadedId) return
             reset()
             loadedId = id
-            StreetViewPhotos.cached(stop, mode)?.let { show(it); return }
+            StreetViewPhotos.cached(stop, mode, shot)?.let { show(it); return }
             showMissing(if (mode == PhotoView.SATELLITE) "Carregando satélite…" else "Carregando foto…")
             job = scope.launch {
-                val result = StreetViewPhotos.load(context, stop, mode)
+                val result = StreetViewPhotos.load(context, stop, mode, shot)
                 if (loadedId != id) return@launch
                 show(result)
                 // Falha passageira (rede, chave): tenta de novo no próximo desenho do Card.
@@ -463,21 +545,15 @@ class OfferCardView(
     private fun toggleMinimized() {
         minimized = !minimized
         prefs.edit().putBoolean(OverlayPrefs.KEY_CARD_MINIMIZED, minimized).apply()
-        if (!minimized) renderPhotos()
+        if (!minimized) renderMedia()
         applyMinimized()
         if (!minimized) renderMap()
-        if (attached) {
-            try {
-                windowManager.updateViewLayout(root, params)
-            } catch (e: Exception) {
-                Log.w(TAG, "Falha ao redimensionar cartão", e)
-            }
-        }
+        relayout()
     }
 
     private fun applyMinimized() {
         // Sem alerta e sem mapa o corpo some: fica só o cabeçalho com os números.
-        val hasContent = listOf(reasonsBox, mapView, mapNote, photosRow).any { it.visibility == View.VISIBLE }
+        val hasContent = listOf(reasonsBox, mediaArea, mapNote).any { it.visibility == View.VISIBLE }
         body.visibility = if (minimized || !hasContent) View.GONE else View.VISIBLE
         minimizeButton.text = if (minimized) "▢" else "–"
         minimizeButton.contentDescription = if (minimized) "Mostrar mapa" else "Esconder mapa"
@@ -588,9 +664,9 @@ class OfferCardView(
     private companion object {
         const val TAG = "MApp/OfferCard"
         const val CARD_WIDTH_DP = 300
-        const val MAP_HEIGHT_DP = 180
-        const val PHOTO_HEIGHT_DP = 96
-        const val PHOTO_ZOOM_HEIGHT_DP = 182
+
+        /** Largura da área de mapa e fotos (Card menos as margens do corpo). */
+        const val MEDIA_WIDTH_DP = CARD_WIDTH_DP - 24
         val PHOTO_BG = 0xFF2C2F33.toInt()
 
         val CARD_BG = 0xF0202124.toInt()

@@ -3,6 +3,8 @@ package br.com.mapp.core.geo
 import br.com.mapp.core.model.GeoPoint
 import java.net.URLEncoder
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.ln
 
 /** Como aparecem as fotos dos pontos da corrida: foto da rua (Street View) ou vista de cima (satélite). */
 enum class PhotoView(val id: String, val label: String) {
@@ -30,6 +32,23 @@ data class SatelliteShot(val width: Int, val height: Int, val zoom: Int) {
 
         /** Zoom 16: ~750 × 230 m numa faixa do tamanho dos quadros A/B da notificação. */
         val STRIP = SatelliteShot(480, 150, 16)
+
+        /** Quadro quase quadrado (fotos lado a lado no Card). */
+        val SQUARE = SatelliteShot(480, 480, 17)
+
+        /** Quadro em pé (coluna inteira ao lado de outra dividida). */
+        val TALL = SatelliteShot(400, 540, 17)
+
+        private val ALL = listOf(TALL, SQUARE, CARD, STRIP)
+
+        /**
+         * Formato mais perto da proporção do quadro na tela ([aspect] = largura ÷ altura), para a imagem
+         * caber inteira sem sobrar faixa grande. Poucos formatos: o mesmo ponto acerta mais o cache.
+         */
+        fun forAspect(aspect: Double): SatelliteShot {
+            if (!(aspect > 0.0) || aspect.isInfinite()) return CARD
+            return ALL.minBy { abs(ln(aspect * it.height / it.width)) }
+        }
     }
 }
 
