@@ -26,6 +26,7 @@ class BubbleStyleTest {
             goalSound = GoalSound.DING_DONG,
             iconSize = 130,
             textSize = 160,
+            pinSize = 140,
         )
         assertEquals(s, BubbleStyle.decode(s.encode()))
         assertEquals(BubbleStyle(), BubbleStyle.decode(BubbleStyle().encode()))
@@ -111,6 +112,13 @@ class BubbleStyleTest {
         assertEquals(160, BubbleSize.percentAt(BubbleSize.ICON_STEPS, 1.0))
         assertEquals(200, BubbleSize.percentAt(BubbleSize.TEXT_STEPS, 1.0))
         assertEquals("120%", BubbleSize.label(120))
+        // Pin: 60% a 160%, 100% = padrão.
+        assertEquals(100, d.pinSize)
+        assertEquals(60, BubbleSize.percentAt(BubbleSize.PIN_STEPS, 0.0))
+        assertEquals(160, BubbleSize.percentAt(BubbleSize.PIN_STEPS, 1.0))
+        BubbleSize.PIN_STEPS.forEach { assertEquals(it, BubbleSize.percentAt(BubbleSize.PIN_STEPS, BubbleSize.fractionOf(BubbleSize.PIN_STEPS, it))) }
+        assertEquals(0.6f, BubbleSize.pinScale(60), 0.001f)
+        assertEquals(100, BubbleStyle.decode("v1;pin=55").pinSize)
         // Configuração antiga (sem tamanho) ou valor fora dos passos fica em 100%.
         assertEquals(100, BubbleStyle.decode("v1;spin=8").iconSize)
         val bad = BubbleStyle.decode("v1;size=135;text=500")

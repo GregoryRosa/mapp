@@ -270,12 +270,17 @@ class QuickBubbleView(
     private val textSizeBar = bar(
         StyleBarView.Kind.SPEED, { BubbleSize.fractionOf(BubbleSize.TEXT_STEPS, it.textSize) }, steps = BubbleSize.TEXT_STEPS.size,
     ) { s, f -> s.copy(textSize = BubbleSize.percentAt(BubbleSize.TEXT_STEPS, f)) }
+    private val pinSizeBar = bar(
+        StyleBarView.Kind.SPEED, { BubbleSize.fractionOf(BubbleSize.PIN_STEPS, it.pinSize) }, steps = BubbleSize.PIN_STEPS.size,
+    ) { s, f -> s.copy(pinSize = BubbleSize.percentAt(BubbleSize.PIN_STEPS, f)) }
     private val bars = listOf(
-        backgroundBar, logoStartBar, logoEndBar, idleBar, rideBar, goalStartBar, goalEndBar, spinBar, iconSizeBar, textSizeBar,
+        backgroundBar, logoStartBar, logoEndBar, idleBar, rideBar, goalStartBar, goalEndBar, spinBar,
+        iconSizeBar, textSizeBar, pinSizeBar,
     )
     private val spinLabel = text(12f, color = WHITE)
     private val iconSizeLabel = text(12f, color = WHITE)
     private val textSizeLabel = text(12f, color = WHITE)
+    private val pinSizeLabel = text(12f, color = WHITE)
 
     /** Um botão por som; tocar escolhe e já toca para ouvir. */
     private val soundChips = GoalSound.entries.associateWith { sound ->
@@ -325,7 +330,11 @@ class QuickBubbleView(
             addView(iconSizeBar.view, fullWidth(2))
             addView(textSizeLabel, fullWidth(10))
             addView(textSizeBar.view, fullWidth(2))
-            addView(text(11f, color = SECONDARY).apply { text = "Arraste e veja no botão ao lado" }, fullWidth(4))
+            addView(pinSizeLabel, fullWidth(10))
+            addView(pinSizeBar.view, fullWidth(2))
+            addView(text(11f, color = SECONDARY).apply {
+                text = "Ícone e texto: veja no botão ao lado. Pin (só aparece em corrida): veja na prévia \"Em corrida\"."
+            }, fullWidth(4))
         }, fullWidth(8))
         addView(section("BOTÃO").apply {
             labeled("Fundo", backgroundBar)
@@ -780,6 +789,7 @@ class QuickBubbleView(
         spinLabel.text = "Giro com a meta batida: " + SpinSpeed.label(s.spinSeconds)
         iconSizeLabel.text = "Tamanho do ícone: " + BubbleSize.label(s.iconSize)
         textSizeLabel.text = "Tamanho do texto: " + BubbleSize.label(s.textSize)
+        pinSizeLabel.text = "Tamanho do pin de chegada: " + BubbleSize.label(s.pinSize)
         soundChips.forEach { (sound, chip) ->
             (chip.background as? GradientDrawable)?.setColor(if (sound == s.goalSound) SELECTED_BG else BUTTON_BG)
             chip.setTextColor(if (sound == s.goalSound) SELECTED_TEXT else WHITE)
@@ -1382,9 +1392,10 @@ private class OutlineLabel(context: Context, sizePx: Float, outlinePx: Float) : 
 }
 
 /**
- * Ícone flutuante com o logo do MApp: "M" em forma de rota (gradiente verde-água → lilás) com uma
- * **seta** na partida (o carro) e um **pin** na chegada (o endereço de destino). Em corrida
- * ([riding]) a seta percorre o "M" até o pin, some e volta do começo, em loop. O anel mostra o
+ * Ícone flutuante com o logo do MApp: "M" em forma de rota (gradiente verde-água → lilás). **Só em
+ * corrida** ([riding]) aparecem a **seta** na partida (o carro) e o **pin vermelho** na chegada (o
+ * endereço de destino), e a seta percorre o "M" até o pin, some e volta do começo, em loop; fora de
+ * corrida fica só a letra "M". O anel mostra o
  * status: laranja = ligado sem corrida, verde = em corrida, cinza + "!" = leitor desligado.
  * Cores, gradientes e giro vêm de [style] (ajustes do botão; o padrão é o visual acima).
  *
@@ -1406,7 +1417,7 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
             invalidate()
         }
 
-    /** Em corrida (aceita ou em viagem): a seta anda pelo "M" até o pin, em loop. */
+    /** Em corrida (aceita ou em viagem): seta e pin aparecem e a seta anda pelo "M" até o pin, em loop. */
     var riding = false
         set(value) {
             if (field == value) return
@@ -1461,6 +1472,7 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
     private val travel = android.graphics.Path()
     private val travelMeasure = android.graphics.PathMeasure()
     private var travelU = 0f
+    private var travelPin = 0
     private var travelLength = 0f
     private val posA = FloatArray(2)
     private val posB = FloatArray(2)
@@ -1570,12 +1582,15 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         path.lineTo(17.5f * u, 15f * u)
         canvas.drawPath(path, line)
 
-        drawPin(canvas, u)
-        if (riding && !warning) {
-            drawMovingArrow(canvas, u, c1, c2)
-        } else {
-            // Parada: seta na partida, virada para cima (sentido da rota).
-            drawArrow(canvas, u, START_X * u, START_Y * u, -90f, c1, 255)
+        // Seta e pin só em corrida (aceita, indo buscar ou em viagem); fora dela fica só a letra "M".
+        if (riding) {
+            drawPin(canvas, u)
+            if (!warning) {
+                drawMovingArrow(canvas, u, c1, c2)
+            } else {
+                // Leitor desligado no meio da corrida: seta parada na partida, virada para cima.
+                drawArrow(canvas, u, START_X * u, START_Y * u, -90f, c1, 255)
+            }
         }
 
         if (warning) {
@@ -1590,12 +1605,14 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
     /**
      * Pin de chegada no fim do "M", como o destino nos mapas: gota **vermelha** com bolinha branca e
      * contorno escuro — não segue as cores do logo, para não sumir no gradiente (cinza com o leitor
-     * desligado). A ponta para antes do anel de status, mesmo grosso.
+     * desligado). Tamanho dos ajustes do botão ([BubbleStyle.pinSize]): a ponta fica no lugar e a
+     * cabeça cresce para cima, então cabe no círculo em qualquer tamanho (a ponta para antes do anel
+     * de status, mesmo grosso).
      */
     private fun drawPin(canvas: Canvas, u: Float) {
         val x = PIN_X * u
-        val y = PIN_HEAD_Y * u
-        val r = PIN_R * u
+        val y = pinHeadY() * u
+        val r = PIN_R * BubbleSize.pinScale(style.pinSize) * u
         val tip = PIN_TIP_Y * u
         // Lados retos da ponta tangentes à cabeça.
         val phi = kotlin.math.acos(r / (tip - y))
@@ -1649,14 +1666,15 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
      * cor vai do começo ao fim do gradiente do logo.
      */
     private fun drawMovingArrow(canvas: Canvas, u: Float, c1: Int, c2: Int) {
-        if (travelU != u) {
+        if (travelU != u || travelPin != style.pinSize) {
             travelU = u
+            travelPin = style.pinSize
             travel.reset()
             travel.moveTo(START_X * u, START_Y * u)
             travel.lineTo(6.5f * u, 7.5f * u)
             travel.lineTo(12f * u, 13.5f * u)
             travel.lineTo(17.5f * u, 7.5f * u)
-            travel.lineTo(PIN_X * u, PIN_HEAD_Y * u)
+            travel.lineTo(PIN_X * u, pinHeadY() * u)
             travelMeasure.setPath(travel, false)
             travelLength = travelMeasure.length
         }
@@ -1679,6 +1697,9 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         drawArrow(canvas, u, x, y, degrees, blend(c1, c2, t), (255 * alpha).toInt())
     }
 
+    /** Centro da cabeça do pin (em 1/24 do ícone): a ponta fica fixa, a cabeça sobe quando o pin cresce. */
+    private fun pinHeadY(): Float = PIN_TIP_Y - (PIN_TIP_Y - PIN_HEAD_Y) * BubbleSize.pinScale(style.pinSize)
+
     private fun blend(a: Int, b: Int, f: Float): Int {
         fun ch(shift: Int) = (((a shr shift) and 0xFF) + (((b shr shift) and 0xFF) - ((a shr shift) and 0xFF)) * f).toInt() and 0xFF
         return (0xFF shl 24) or (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
@@ -1689,7 +1710,7 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         const val START_X = 6.5f
         const val START_Y = 18.0f
         const val PIN_X = 17.5f
-        /** Pin vermelho: centro da cabeça (onde o "M" termina), raio e ponta. */
+        /** Pin vermelho com 100%: centro da cabeça (onde o "M" termina), raio e ponta (a ponta não muda com o tamanho). */
         const val PIN_HEAD_Y = 15.3f
         const val PIN_R = 2.5f
         const val PIN_TIP_Y = 19.7f

@@ -15,7 +15,8 @@ import kotlin.math.roundToInt
  * - anel de fora (meta do dia): gradiente [goalStart] → [goalEnd]; [spinSeconds] = uma volta a cada
  *   N segundos com a meta batida (0 = parado);
  * - [goalSound]: som da meta batida;
- * - [iconSize]/[textSize]: tamanho do botão e dos números em volta dele, em % do padrão ([BubbleSize]).
+ * - [iconSize]/[textSize]: tamanho do botão e dos números em volta dele, em % do padrão ([BubbleSize]);
+ * - [pinSize]: tamanho do pin de chegada (só aparece em corrida), em % do padrão.
  * O padrão é o visual original do MApp (com o botão um pouco maior: 60 dp).
  */
 data class BubbleStyle(
@@ -30,6 +31,7 @@ data class BubbleStyle(
     val goalSound: GoalSound = GoalSound.DEFAULT,
     val iconSize: Int = BubbleSize.DEFAULT,
     val textSize: Int = BubbleSize.DEFAULT,
+    val pinSize: Int = BubbleSize.DEFAULT,
 ) {
     /**
      * Cores do gradiente do anel da meta, em volta do círculo (a partir do topo). Com as cores
@@ -52,6 +54,7 @@ data class BubbleStyle(
         "sound=" + goalSound.id,
         "size=$iconSize",
         "text=$textSize",
+        "pin=$pinSize",
     ).joinToString(";")
 
     companion object {
@@ -87,6 +90,7 @@ data class BubbleStyle(
                 goalSound = map["sound"]?.let { GoalSound.fromId(it) } ?: d.goalSound,
                 iconSize = map["size"]?.toIntOrNull()?.takeIf { it in BubbleSize.ICON_STEPS } ?: d.iconSize,
                 textSize = map["text"]?.toIntOrNull()?.takeIf { it in BubbleSize.TEXT_STEPS } ?: d.textSize,
+                pinSize = map["pin"]?.toIntOrNull()?.takeIf { it in BubbleSize.PIN_STEPS } ?: d.pinSize,
             )
         }
 
@@ -207,10 +211,16 @@ object BubbleSize {
     /** Números: 70% a 200%. */
     val TEXT_STEPS: List<Int> = (70..200 step 10).toList()
 
+    /** Pin de chegada: 60% a 160% (a ponta fica no lugar e a cabeça cresce para cima — cabe no círculo). */
+    val PIN_STEPS: List<Int> = (60..160 step 10).toList()
+
     fun iconDp(percent: Int): Int = (BASE_ICON_DP * percent / 100.0).roundToInt()
 
     /** Fator de escala do texto (1.0 = 100%). */
     fun textScale(percent: Int): Float = percent / 100f
+
+    /** Fator de escala do pin (1.0 = 100%). */
+    fun pinScale(percent: Int): Float = percent / 100f
 
     /** Passo mais perto da posição 0..1 da barra. */
     fun percentAt(steps: List<Int>, fraction: Double): Int =
