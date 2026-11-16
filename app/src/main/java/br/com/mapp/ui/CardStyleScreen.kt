@@ -97,6 +97,7 @@ import br.com.mapp.core.engine.OfferEvaluator
 import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.geo.StreetViewBudget
+import br.com.mapp.core.geo.StreetZoom
 import br.com.mapp.core.media.MediaBlock
 import br.com.mapp.core.media.MediaLayout
 import br.com.mapp.core.media.MediaSizes
@@ -1075,6 +1076,7 @@ private fun StreetViewCard(view: PhotoView, onView: (PhotoView) -> Unit) {
     var on by remember { mutableStateOf(OverlayPrefs.isStreetViewOn(ctx)) }
     var key by remember { mutableStateOf(OverlayPrefs.streetViewKey(ctx).orEmpty()) }
     var showKey by remember { mutableStateOf(false) }
+    var zoom by remember { mutableStateOf(OverlayPrefs.streetZoom(ctx)) }
     val month = remember { StreetViewBudget.monthOf(System.currentTimeMillis()) }
     val used = remember { OverlayPrefs.streetViewBudget(ctx).usedIn(month) }
     val usedSatellite = remember { OverlayPrefs.satelliteBudget(ctx).usedIn(month) }
@@ -1101,6 +1103,21 @@ private fun StreetViewCard(view: PhotoView, onView: (PhotoView) -> Unit) {
             )
             Text("Mostrar no Card (o toque na foto também troca)", style = MaterialTheme.typography.labelMedium)
             PhotoViewChips(view) { onView(it); OverlayPrefs.setPhotoView(ctx, it) }
+            Text("Zoom da foto da rua", style = MaterialTheme.typography.labelMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                StreetZoom.entries.forEach { z ->
+                    FilterChip(
+                        selected = zoom == z,
+                        onClick = { zoom = z; OverlayPrefs.setStreetZoom(ctx, z) },
+                        label = { Text(z.label) },
+                    )
+                }
+            }
+            Text(
+                "Mais zoom = fachada do local maior no quadro (1× = como era antes). " +
+                    "Trocar o zoom busca as fotos de novo.",
+                style = MaterialTheme.typography.bodySmall,
+            )
             Text(
                 if (key.isBlank()) {
                     "Cole a chave do Google Cloud. Ela fica só neste celular. Ative no mesmo projeto a " +

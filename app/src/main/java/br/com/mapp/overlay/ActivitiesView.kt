@@ -353,7 +353,9 @@ class ActivitiesView(
     /** Foto já carregada, ou começa a carregar (null = ainda não chegou). */
     private fun photoFor(stop: RouteStop, mode: PhotoView, shot: SatelliteShot): StreetViewPhotos.Result? {
         val point = stop.point ?: return null
-        val id = "${mode.id}|${shot.width}x${shot.height}|${stop.letter}@${point.lat},${point.lon}"
+        // O zoom das fotos da rua entra na chave: mudar nos ajustes busca de novo.
+        val zoom = if (mode == PhotoView.STREET) OverlayPrefs.streetZoom(context).id else "-"
+        val id = "${mode.id}|z$zoom|${shot.width}x${shot.height}|${stop.letter}@${point.lat},${point.lon}"
         photos[id]?.let { return it }
         if (photoJobs[id]?.isActive == true) return null
         photoJobs[id] = scope.launch {

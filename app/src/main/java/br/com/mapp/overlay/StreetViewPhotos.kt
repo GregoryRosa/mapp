@@ -10,6 +10,7 @@ import br.com.mapp.core.geo.SatelliteShot
 import br.com.mapp.core.geo.SatelliteView
 import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.geo.StreetViewBudget
+import br.com.mapp.core.geo.StreetZoom
 import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.route.RouteStop
 import br.com.mapp.maps.MapViews
@@ -51,16 +52,22 @@ object StreetViewPhotos {
 
     private val budgetLock = Any()
 
-    fun cached(point: GeoPoint): Result? = cache.get(StreetView.cacheKey(point))
+    /** Foto da rua já na memória do ponto com o [zoom] escolhido (mudar o zoom busca de novo). */
+    fun cached(point: GeoPoint, zoom: StreetZoom): Result? = cache.get(StreetView.cacheKey(point, zoom))
 
     /**
      * Imagem já na memória do ponto [stop] no modo [view] (null = ainda não buscada). [shot] = tamanho
      * do satélite (Card ou faixa da notificação/Atividades).
      */
-    fun cached(stop: RouteStop, view: PhotoView, shot: SatelliteShot = SatelliteShot.CARD): Result? {
+    fun cached(
+        stop: RouteStop,
+        view: PhotoView,
+        shot: SatelliteShot = SatelliteShot.CARD,
+        zoom: StreetZoom = StreetZoom.DEFAULT,
+    ): Result? {
         val point = stop.point ?: return null
         return when (view) {
-            PhotoView.STREET -> cached(point)
+            PhotoView.STREET -> cached(point, zoom)
             PhotoView.SATELLITE -> cache.get(satelliteKey(stop, point, shot))
         }
     }
@@ -68,9 +75,10 @@ object StreetViewPhotos {
     suspend fun load(context: Context, point: GeoPoint): Result {
         val key = OverlayPrefs.streetViewKey(context)
             ?: return Result.Missing("Cole a chave do Google em Card", retry = true)
-        cached(point)?.let { return it }
-        val result = withContext(Dispatchers.IO) { fetch(context.applicationContext, point, key) }
-        if (!(result is Result.Missing && result.retry)) cache.put(StreetView.cacheKey(point), result)
+        val zoom = OverlayPrefs.streetZoom(context)
+        cached(point, zoom)?.let { return it }
+        val result = withContext(Dispatchers.IO) { fetch(context.applicationContext, point, key, zoom) }
+        if (!(result is Result.Missing && result.retry)) cache.put(StreetView.cacheKey(point, zoom), result)
         return result
     }
 
@@ -141,7 +149,7 @@ object StreetViewPhotos {
         }
     }
 
-    private fun fetch(context: Context, point: GeoPoint, key: String): Result {
+    private fun fetch(context: Context, point: GeoPoint, key: String, zoom: StreetZoom): Result {
         // 1) Metadados (grátis): há foto perto? Sem foto, nada é cobrado.
         val meta = try {
             val (code, body) = get(StreetView.metadataUrl(point, key))
@@ -175,7 +183,7 @@ object StreetViewPhotos {
             OverlayPrefs.setStreetViewBudget(context, budget.spend(month))
         }
         return try {
-            val (code, bytes) = get(StreetView.imageUrl(point, key))
+            val (code, bytes) = get(StreetView.imageUrl(point, key, zoom))
             if (code != 200) return Result.Missing("Sem foto da rua aqui")
             val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                 ?: return Result.Missing("Foto indisponível", retry = true)

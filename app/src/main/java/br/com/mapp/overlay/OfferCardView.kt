@@ -102,7 +102,7 @@ class OfferCardView(
                 offer?.let { bindHeader(it) }
                 if (attached && !minimized) refreshMedia()
             }
-            OverlayPrefs.KEY_STREETVIEW_ON, OverlayPrefs.KEY_STREETVIEW_KEY -> if (attached && !minimized) {
+            OverlayPrefs.KEY_STREETVIEW_ON, OverlayPrefs.KEY_STREETVIEW_KEY, OverlayPrefs.KEY_STREET_ZOOM -> if (attached && !minimized) {
                 photoCells.values.forEach { it.reset() }
                 refreshMedia()
             }
@@ -479,6 +479,7 @@ class OfferCardView(
         private var job: Job? = null
 
         fun bind(stop: RouteStop, mode: PhotoView, shot: SatelliteShot) {
+            val zoom = OverlayPrefs.streetZoom(context)
             badge.text = stop.letter
             badge.background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
@@ -498,12 +499,12 @@ class OfferCardView(
             val id = if (mode == PhotoView.SATELLITE) {
                 "${mode.id}|${stop.letter}|${shot.width}x${shot.height}|${StreetView.cacheKey(point)}"
             } else {
-                "${mode.id}|${StreetView.cacheKey(point)}"
+                "${mode.id}|${StreetView.cacheKey(point, zoom)}"
             }
             if (id == loadedId) return
             reset()
             loadedId = id
-            StreetViewPhotos.cached(stop, mode, shot)?.let { show(it); return }
+            StreetViewPhotos.cached(stop, mode, shot, zoom)?.let { show(it); return }
             showMissing(if (mode == PhotoView.SATELLITE) "Carregando satélite…" else "Carregando foto…")
             job = scope.launch {
                 val result = StreetViewPhotos.load(context, stop, mode, shot)
