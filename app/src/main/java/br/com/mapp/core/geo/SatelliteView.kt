@@ -26,7 +26,14 @@ enum class PhotoView(val id: String, val label: String) {
  * pouco mais aberto para caber o entorno). A API aceita até 640 de cada lado.
  */
 data class SatelliteShot(val width: Int, val height: Int, val zoom: Int) {
+
+    /** O mesmo formato com o zoom escolhido pelo usuário ([SatelliteZoom]); a API vai até [MAX_ZOOM]. */
+    fun zoomed(z: SatelliteZoom): SatelliteShot = copy(zoom = (zoom + z.levels).coerceAtMost(MAX_ZOOM))
+
     companion object {
+        /** Zoom máximo da Maps Static API (em muitos lugares o satélite só tem imagem até 19–20). */
+        const val MAX_ZOOM = 21
+
         /** Zoom 17: ~700 m de largura — a quadra e o entorno do ponto. */
         val CARD = SatelliteShot(StreetView.WIDTH, StreetView.HEIGHT, 17)
 
@@ -49,6 +56,24 @@ data class SatelliteShot(val width: Int, val height: Int, val zoom: Int) {
             if (!(aspect > 0.0) || aspect.isInfinite()) return CARD
             return ALL.minBy { abs(ln(aspect * it.height / it.width)) }
         }
+    }
+}
+
+/**
+ * Zoom do satélite (Card → Card de corridas → Fotos da rua e satélite), somado ao zoom de cada
+ * formato ([SatelliteShot]): cada passo do Google dobra o tamanho. [X1] = como era antes (Card no
+ * zoom 17, ~700 m de largura); padrão [X4] = zoom 19 no Card (~175 m: a quadra e as casas do ponto).
+ */
+enum class SatelliteZoom(val id: String, val label: String, val levels: Int) {
+    X1("0", "1×", 0),
+    X2("1", "2×", 1),
+    X4("2", "4×", 2),
+    X8("3", "8×", 3);
+
+    companion object {
+        val DEFAULT = X4
+
+        fun fromId(id: String?): SatelliteZoom = entries.firstOrNull { it.id == id } ?: DEFAULT
     }
 }
 

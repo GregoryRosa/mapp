@@ -8,6 +8,7 @@ import android.util.LruCache
 import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.SatelliteShot
 import br.com.mapp.core.geo.SatelliteView
+import br.com.mapp.core.geo.SatelliteZoom
 import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.geo.StreetViewBudget
 import br.com.mapp.core.geo.StreetZoom
@@ -64,11 +65,12 @@ object StreetViewPhotos {
         view: PhotoView,
         shot: SatelliteShot = SatelliteShot.CARD,
         zoom: StreetZoom = StreetZoom.DEFAULT,
+        satelliteZoom: SatelliteZoom = SatelliteZoom.DEFAULT,
     ): Result? {
         val point = stop.point ?: return null
         return when (view) {
             PhotoView.STREET -> cached(point, zoom)
-            PhotoView.SATELLITE -> cache.get(satelliteKey(stop, point, shot))
+            PhotoView.SATELLITE -> cache.get(satelliteKey(stop, point, shot.zoomed(satelliteZoom)))
         }
     }
 
@@ -93,10 +95,12 @@ object StreetViewPhotos {
         if (view == PhotoView.STREET) return load(context, point)
         val key = OverlayPrefs.streetViewKey(context)
             ?: return Result.Missing("Cole a chave do Google em Card", retry = true)
-        val id = satelliteKey(stop, point, shot)
+        // Zoom escolhido em Card → Fotos da rua e satélite, somado ao do formato do quadro.
+        val zoomed = shot.zoomed(OverlayPrefs.satelliteZoom(context))
+        val id = satelliteKey(stop, point, zoomed)
         cache.get(id)?.let { return it }
         val color = MapViews.colorOf(stop.kind)
-        val result = withContext(Dispatchers.IO) { fetchSatellite(context.applicationContext, point, stop.letter, color, key, shot) }
+        val result = withContext(Dispatchers.IO) { fetchSatellite(context.applicationContext, point, stop.letter, color, key, zoomed) }
         if (!(result is Result.Missing && result.retry)) cache.put(id, result)
         return result
     }

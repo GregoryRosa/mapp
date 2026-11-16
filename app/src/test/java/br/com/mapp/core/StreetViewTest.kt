@@ -38,9 +38,9 @@ class StreetViewTest {
         assertEquals(58, StreetZoom.X1_5.fov)
         assertEquals(46, StreetZoom.X2.fov)
         assertEquals(31, StreetZoom.X3.fov)
-        assertEquals(StreetZoom.X2, StreetZoom.DEFAULT)
-        assertTrue(StreetView.imageUrl(p, "abc").contains("fov=46&"))
-        assertTrue(StreetView.imageUrl(p, "abc", StreetZoom.X1).contains("fov=80&"))
+        assertEquals(StreetZoom.X1, StreetZoom.DEFAULT) // padrão = como antes
+        assertTrue(StreetView.imageUrl(p, "abc").contains("fov=80&"))
+        assertTrue(StreetView.imageUrl(p, "abc", StreetZoom.X2).contains("fov=46&"))
         assertEquals(StreetZoom.X2_5, StreetZoom.fromId("2.5"))
         assertEquals(StreetZoom.DEFAULT, StreetZoom.fromId(null))
         assertEquals(StreetZoom.DEFAULT, StreetZoom.fromId("lixo"))

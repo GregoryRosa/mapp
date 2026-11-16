@@ -102,7 +102,8 @@ class OfferCardView(
                 offer?.let { bindHeader(it) }
                 if (attached && !minimized) refreshMedia()
             }
-            OverlayPrefs.KEY_STREETVIEW_ON, OverlayPrefs.KEY_STREETVIEW_KEY, OverlayPrefs.KEY_STREET_ZOOM -> if (attached && !minimized) {
+            OverlayPrefs.KEY_STREETVIEW_ON, OverlayPrefs.KEY_STREETVIEW_KEY, OverlayPrefs.KEY_STREET_ZOOM,
+            OverlayPrefs.KEY_SATELLITE_ZOOM ->  if (attached && !minimized) {
                 photoCells.values.forEach { it.reset() }
                 refreshMedia()
             }
@@ -480,6 +481,7 @@ class OfferCardView(
 
         fun bind(stop: RouteStop, mode: PhotoView, shot: SatelliteShot) {
             val zoom = OverlayPrefs.streetZoom(context)
+            val satZoom = OverlayPrefs.satelliteZoom(context)
             badge.text = stop.letter
             badge.background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
@@ -497,14 +499,14 @@ class OfferCardView(
             }
             // Satélite: a letra/cor do marcador e o formato do quadro entram na imagem.
             val id = if (mode == PhotoView.SATELLITE) {
-                "${mode.id}|${stop.letter}|${shot.width}x${shot.height}|${StreetView.cacheKey(point)}"
+                "${mode.id}|${stop.letter}|${shot.width}x${shot.height}z${satZoom.id}|${StreetView.cacheKey(point)}"
             } else {
                 "${mode.id}|${StreetView.cacheKey(point, zoom)}"
             }
             if (id == loadedId) return
             reset()
             loadedId = id
-            StreetViewPhotos.cached(stop, mode, shot, zoom)?.let { show(it); return }
+            StreetViewPhotos.cached(stop, mode, shot, zoom, satZoom)?.let { show(it); return }
             showMissing(if (mode == PhotoView.SATELLITE) "Carregando satélite…" else "Carregando foto…")
             job = scope.launch {
                 val result = StreetViewPhotos.load(context, stop, mode, shot)

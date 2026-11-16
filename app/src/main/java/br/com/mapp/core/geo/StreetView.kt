@@ -95,7 +95,7 @@ object StreetView {
 
 /**
  * Zoom das fotos da rua (Card → Card de corridas → Fotos da rua e satélite): menos campo de visão
- * pedido ao Google, a fachada do ponto fica maior no quadro pequeno do Card. [X1] = como era antes.
+ * pedido ao Google, a fachada do ponto fica maior no quadro pequeno do Card. [X1] = como era antes (padrão).
  */
 enum class StreetZoom(val id: String, val label: String, val factor: Double) {
     X1("1", "1×", 1.0),
@@ -107,7 +107,8 @@ enum class StreetZoom(val id: String, val label: String, val factor: Double) {
     val fov: Int get() = StreetView.fovFor(factor)
 
     companion object {
-        val DEFAULT = X2
+        /** Padrão = como era antes (a foto da rua já estava boa; o zoom fica para quem quiser). */
+        val DEFAULT = X1
 
         fun fromId(id: String?): StreetZoom = entries.firstOrNull { it.id == id } ?: DEFAULT
     }

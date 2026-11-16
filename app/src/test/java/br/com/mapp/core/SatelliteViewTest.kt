@@ -3,6 +3,7 @@ package br.com.mapp.core
 import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.SatelliteShot
 import br.com.mapp.core.geo.SatelliteView
+import br.com.mapp.core.geo.SatelliteZoom
 import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.geo.StreetViewBudget
 import br.com.mapp.core.model.GeoPoint
@@ -40,6 +41,23 @@ class SatelliteViewTest {
         assertTrue(url.contains("zoom=16"))
         val big = SatelliteView.imageUrl(p, "k", "B", red, SatelliteShot(2000, 900, 15))
         assertTrue(big.contains("size=640x640")) // a API aceita até 640 de cada lado
+    }
+
+    @Test
+    fun `zoom do satelite soma ao zoom do formato`() {
+        assertEquals(SatelliteZoom.X4, SatelliteZoom.DEFAULT)
+        assertEquals(19, SatelliteShot.CARD.zoomed(SatelliteZoom.DEFAULT).zoom) // ~175 m no Card
+        assertEquals(18, SatelliteShot.STRIP.zoomed(SatelliteZoom.X4).zoom)
+        assertEquals(17, SatelliteShot.CARD.zoomed(SatelliteZoom.X1).zoom) // como antes
+        assertEquals(SatelliteShot.MAX_ZOOM, SatelliteShot(640, 420, 20).zoomed(SatelliteZoom.X8).zoom)
+        val url = SatelliteView.imageUrl(p, "k", "A", green, SatelliteShot.CARD.zoomed(SatelliteZoom.X4))
+        assertTrue(url.contains("zoom=19"))
+        assertNotEquals(
+            SatelliteView.cacheKey(p, "A", green, SatelliteShot.CARD.zoomed(SatelliteZoom.X1)),
+            SatelliteView.cacheKey(p, "A", green, SatelliteShot.CARD.zoomed(SatelliteZoom.X4)),
+        )
+        assertEquals(SatelliteZoom.X2, SatelliteZoom.fromId("1"))
+        assertEquals(SatelliteZoom.DEFAULT, SatelliteZoom.fromId(null))
     }
 
     @Test
