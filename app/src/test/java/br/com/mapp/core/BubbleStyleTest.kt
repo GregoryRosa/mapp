@@ -1,5 +1,6 @@
 package br.com.mapp.core
 
+import br.com.mapp.core.bubble.BubbleSize
 import br.com.mapp.core.bubble.BubbleStyle
 import br.com.mapp.core.bubble.ColorBar
 import br.com.mapp.core.bubble.SpinSpeed
@@ -23,6 +24,8 @@ class BubbleStyleTest {
             goalEnd = 0xFFFF1744.toInt(),
             spinSeconds = 3,
             goalSound = GoalSound.DING_DONG,
+            iconSize = 130,
+            textSize = 160,
         )
         assertEquals(s, BubbleStyle.decode(s.encode()))
         assertEquals(BubbleStyle(), BubbleStyle.decode(BubbleStyle().encode()))
@@ -91,6 +94,28 @@ class BubbleStyleTest {
         SpinSpeed.STEPS.forEach { assertEquals(it, SpinSpeed.secondsAt(SpinSpeed.fractionOf(it))) }
         assertEquals("Parado", SpinSpeed.label(0))
         assertEquals("1 volta a cada 5 s", SpinSpeed.label(5))
+    }
+
+    @Test fun tamanho_do_botao_e_do_texto() {
+        val d = BubbleStyle()
+        assertEquals(100, d.iconSize)
+        assertEquals(100, d.textSize)
+        assertEquals(60, BubbleSize.iconDp(100)) // um pouco maior que os 52 dp de antes
+        assertEquals(42, BubbleSize.iconDp(70))
+        assertEquals(96, BubbleSize.iconDp(160))
+        assertEquals(1.5f, BubbleSize.textScale(150), 0.001f)
+        // Barras em passos de 10%: ida e volta, pontas e padrão.
+        BubbleSize.ICON_STEPS.forEach { assertEquals(it, BubbleSize.percentAt(BubbleSize.ICON_STEPS, BubbleSize.fractionOf(BubbleSize.ICON_STEPS, it))) }
+        BubbleSize.TEXT_STEPS.forEach { assertEquals(it, BubbleSize.percentAt(BubbleSize.TEXT_STEPS, BubbleSize.fractionOf(BubbleSize.TEXT_STEPS, it))) }
+        assertEquals(70, BubbleSize.percentAt(BubbleSize.ICON_STEPS, 0.0))
+        assertEquals(160, BubbleSize.percentAt(BubbleSize.ICON_STEPS, 1.0))
+        assertEquals(200, BubbleSize.percentAt(BubbleSize.TEXT_STEPS, 1.0))
+        assertEquals("120%", BubbleSize.label(120))
+        // Configuração antiga (sem tamanho) ou valor fora dos passos fica em 100%.
+        assertEquals(100, BubbleStyle.decode("v1;spin=8").iconSize)
+        val bad = BubbleStyle.decode("v1;size=135;text=500")
+        assertEquals(100, bad.iconSize)
+        assertEquals(100, bad.textSize)
     }
 
     @Test fun som_da_meta() {

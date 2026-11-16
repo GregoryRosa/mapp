@@ -26,6 +26,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import br.com.mapp.core.bubble.BubbleSize
 import br.com.mapp.core.bubble.BubbleStyle
 import br.com.mapp.core.bubble.ColorBar
 import br.com.mapp.core.bubble.SpinSpeed
@@ -35,9 +36,11 @@ import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.core.sound.GoalSound
 import br.com.mapp.reader.ReaderStatus
+import kotlinx.coroutines.CoroutineScope
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
@@ -45,12 +48,15 @@ import kotlin.math.sin
  * Toque = abre o menu circular (botões redondos com ícone em volta do "M"); arraste = muda de lugar;
  * segurar 3 s parado (no "M" ou no ✕ do menu) = desliga o copiloto (anel vermelho enche).
  * A engrenagem do menu abre os **ajustes do próprio botão**: cores do fundo, do "M", do anel de
- * dentro (status) e do anel de fora (meta), velocidade do giro e som da meta batida.
+ * dentro (status) e do anel de fora (meta), velocidade do giro, som da meta batida e tamanho do
+ * botão e dos números em volta dele. O 📋 abre as **Atividades**: corrida atual e próxima, com os
+ * dados da notificação da corrida aceita.
  * Só mexe nas configurações do próprio MApp — nunca toca no app de corrida.
  */
 class QuickBubbleView(
     private val host: OverlayHost,
     private val actions: Actions,
+    scope: CoroutineScope,
 ) {
     interface Actions {
         fun toggleVoice()
@@ -61,8 +67,9 @@ class QuickBubbleView(
         fun startShift()
         fun pauseShift()
         fun endShift()
-        /** Conta a última oferta vista como corrida pega. */
-        fun countLastOffer()
+
+        /** Corrida atual e próxima (menu Atividades). */
+        fun activities(): RideActivities
 
         /** Marca um pin no local atual (zona para desenhar depois no editor). */
         fun markPin(type: ZoneType)
@@ -85,6 +92,12 @@ class QuickBubbleView(
     private var confirmReset = false
     private var soundPlayer: GreatSoundPlayer? = null
 
+    /** Lado do botão em px e escala dos números em volta ([BubbleSize], barras do painel ⚙). */
+    private var sizePx = dp(BubbleSize.iconDp(style.iconSize))
+    private var labelScale = BubbleSize.textScale(style.textSize)
+    /** Altura de cada linha dos números em volta do "M". */
+    private var labelLine = dp(LABEL_LINE_DP)
+
     // ------------------------------------------------------------------ bolha
 
     private val bubble = LogoBubble(context, ringBg = RING_BG).apply {
@@ -95,14 +108,14 @@ class QuickBubbleView(
     }
 
     private val bubbleParams = WindowManager.LayoutParams(
-        dp(BUBBLE_DP),
-        dp(BUBBLE_DP),
+        sizePx,
+        sizePx,
         host.type,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
         PixelFormat.TRANSLUCENT,
     ).apply {
         gravity = Gravity.TOP or Gravity.START
-        x = prefs.getInt(OverlayPrefs.KEY_BUBBLE_X, context.resources.displayMetrics.widthPixels - dp(BUBBLE_DP + 4))
+        x = prefs.getInt(OverlayPrefs.KEY_BUBBLE_X, context.resources.displayMetrics.widthPixels - sizePx - dp(4))
         y = prefs.getInt(OverlayPrefs.KEY_BUBBLE_Y, (context.resources.displayMetrics.heightPixels * 0.45).toInt())
         title = "MApp – ícone"
     }
@@ -123,15 +136,15 @@ class QuickBubbleView(
      * Contorno preto para ler em fundo claro; sem fundo e não recebe toques.
      */
     private val labelsRoot = FrameLayout(context).apply {
-        addView(kmLabel, labelParams(top = 0))
-        addView(costLabel, labelParams(top = LABEL_LINE_DP))
-        addView(grossLabel, labelParams(top = 2 * LABEL_LINE_DP + BUBBLE_DP))
+        listOf(kmLabel, costLabel, grossLabel).forEach {
+            addView(it, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(LABEL_LINE_DP)))
+        }
         visibility = View.GONE
     }
 
     private val labelsParams = WindowManager.LayoutParams(
         dp(LABEL_WIDTH_DP),
-        dp(3 * LABEL_LINE_DP + BUBBLE_DP),
+        dp(3 * LABEL_LINE_DP) + sizePx,
         host.type,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
@@ -146,8 +159,8 @@ class QuickBubbleView(
 
     private var radialAttached = false
     private val shiftButton = roundButton(NeonIcon.Kind.PLAY, NEON_YELLOW, "Jornada") { onShiftTap() }
-    private val tripButton = roundButton(NeonIcon.Kind.PLUS_ONE, NEON_CYAN, "Contar última oferta como corrida") {
-        actions.countLastOffer()
+    private val activitiesButton = roundButton(NeonIcon.Kind.LIST, NEON_CYAN, "Atividades: corrida atual e próxima") {
+        closeRadial(); openActivities()
     }
     private val settingsButton = roundButton(NeonIcon.Kind.GEAR, NEON_GREEN, "Ajustes do botão (cores, giro e som)") {
         closeRadial(); openPanel()
@@ -162,7 +175,7 @@ class QuickBubbleView(
         showPinChoices()
     }
     /** Ordem de cima para baixo no arco; o 📍 fica no meio (mais fácil de alcançar). */
-    private val radialItems = listOf(settingsButton, shiftButton, tripButton, pinButton, voiceRound, homeButton)
+    private val radialItems = listOf(settingsButton, shiftButton, activitiesButton, pinButton, voiceRound, homeButton)
 
     /** 2º passo do 📍: escolher o tipo. Um toque marca e fecha. */
     private val pinChoices = listOf(
@@ -175,13 +188,13 @@ class QuickBubbleView(
     private var radialOnRight = true
     /** ✕ no lugar do "M": toque fecha o menu; segurar 3 s desliga o copiloto (igual ao "M"). */
     private val closeButton = roundButton(
-        NeonIcon.Kind.CLOSE, WHITE, "Fechar menu (segure 3 segundos para desligar o copiloto)", sizeDp = BUBBLE_DP,
+        NeonIcon.Kind.CLOSE, WHITE, "Fechar menu (segure 3 segundos para desligar o copiloto)", sizeDp = BubbleSize.BASE_ICON_DP,
     ) { closeRadial() }
 
     @SuppressLint("ClickableViewAccessibility")
     private val radialRoot = FrameLayout(context).apply {
         (radialItems + pinChoices).forEach { addView(it, FrameLayout.LayoutParams(dp(ITEM_DP), dp(ITEM_DP))) }
-        addView(closeButton, FrameLayout.LayoutParams(dp(BUBBLE_DP), dp(BUBBLE_DP)))
+        addView(closeButton, FrameLayout.LayoutParams(sizePx, sizePx))
         // Toque fora dos botões (ou fora da janela) fecha o menu.
         setOnTouchListener { _, e ->
             if (e.actionMasked == MotionEvent.ACTION_OUTSIDE || e.actionMasked == MotionEvent.ACTION_UP) {
@@ -251,8 +264,18 @@ class QuickBubbleView(
     private val spinBar = bar(StyleBarView.Kind.SPEED, { SpinSpeed.fractionOf(it.spinSeconds) }, steps = SpinSpeed.STEPS.size) { s, f ->
         s.copy(spinSeconds = SpinSpeed.secondsAt(f))
     }
-    private val bars = listOf(backgroundBar, logoStartBar, logoEndBar, idleBar, rideBar, goalStartBar, goalEndBar, spinBar)
+    private val iconSizeBar = bar(
+        StyleBarView.Kind.SPEED, { BubbleSize.fractionOf(BubbleSize.ICON_STEPS, it.iconSize) }, steps = BubbleSize.ICON_STEPS.size,
+    ) { s, f -> s.copy(iconSize = BubbleSize.percentAt(BubbleSize.ICON_STEPS, f)) }
+    private val textSizeBar = bar(
+        StyleBarView.Kind.SPEED, { BubbleSize.fractionOf(BubbleSize.TEXT_STEPS, it.textSize) }, steps = BubbleSize.TEXT_STEPS.size,
+    ) { s, f -> s.copy(textSize = BubbleSize.percentAt(BubbleSize.TEXT_STEPS, f)) }
+    private val bars = listOf(
+        backgroundBar, logoStartBar, logoEndBar, idleBar, rideBar, goalStartBar, goalEndBar, spinBar, iconSizeBar, textSizeBar,
+    )
     private val spinLabel = text(12f, color = WHITE)
+    private val iconSizeLabel = text(12f, color = WHITE)
+    private val textSizeLabel = text(12f, color = WHITE)
 
     /** Um botão por som; tocar escolhe e já toca para ouvir. */
     private val soundChips = GoalSound.entries.associateWith { sound ->
@@ -270,7 +293,7 @@ class QuickBubbleView(
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_HORIZONTAL
-                addView(view, LinearLayout.LayoutParams(dp(BUBBLE_DP), dp(BUBBLE_DP)))
+                addView(view, LinearLayout.LayoutParams(dp(PREVIEW_DP), dp(PREVIEW_DP)))
                 addView(text(11f, color = SECONDARY).apply { text = caption; gravity = Gravity.CENTER })
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = dp(6) })
         }
@@ -297,6 +320,13 @@ class QuickBubbleView(
 
         addView(text(12f, color = SECONDARY).apply { text = "MApp ${ReaderStatus.versionOf(context)} · AJUSTES DO BOTÃO" })
         addView(previewRow, fullWidth(8))
+        addView(section("TAMANHO").apply {
+            addView(iconSizeLabel, fullWidth(8))
+            addView(iconSizeBar.view, fullWidth(2))
+            addView(textSizeLabel, fullWidth(10))
+            addView(textSizeBar.view, fullWidth(2))
+            addView(text(11f, color = SECONDARY).apply { text = "Arraste e veja no botão ao lado" }, fullWidth(4))
+        }, fullWidth(8))
         addView(section("BOTÃO").apply {
             labeled("Fundo", backgroundBar)
             labeled("Letra M · partida", logoStartBar)
@@ -345,10 +375,43 @@ class QuickBubbleView(
         title = "MApp – ajustes do botão"
     }
 
+    // ------------------------------------------------------------------ Atividades (corrida atual e próxima)
+
+    private var activitiesAttached = false
+    private val activities = ActivitiesView(context, scope, onChanged = { remeasureActivities() }) { closeActivities() }
+
+    private val activitiesRoot = ScrollView(context).apply {
+        background = GradientDrawable().apply {
+            cornerRadius = dp(16).toFloat()
+            setColor(PANEL_BG)
+        }
+        elevation = dp(8).toFloat()
+        isVerticalScrollBarEnabled = true
+        addView(activities.root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // Toque fora fecha.
+        setOnTouchListener { _, e ->
+            if (e.actionMasked == MotionEvent.ACTION_OUTSIDE) { closeActivities(); true } else false
+        }
+    }
+
+    private val activitiesParams = WindowManager.LayoutParams(
+        0,
+        WindowManager.LayoutParams.WRAP_CONTENT,
+        host.type,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+        PixelFormat.TRANSLUCENT,
+    ).apply {
+        gravity = Gravity.TOP or Gravity.START
+        title = "MApp – atividades"
+    }
+
     init {
         installDrag()
         installHold(shiftButton, shiftHold) { shift != null } // sem jornada não há o que encerrar
         installHold(closeButton, closeHold) { true }
+        layoutLabels()
         showStyle(style)
     }
 
@@ -356,6 +419,7 @@ class QuickBubbleView(
 
     fun show() {
         if (bubbleAttached) return
+        glueToEdge()
         clampBubble()
         try {
             windowManager.addView(bubble, bubbleParams)
@@ -402,9 +466,18 @@ class QuickBubbleView(
 
     private var rideOpen = false
 
+    /** Corridas mudaram (aceita, terminou, endereço localizado): atualiza o menu Atividades aberto. */
+    fun refreshActivities() {
+        if (!activitiesAttached) return
+        activities.bind(actions.activities(), activitiesParams.width)
+        remeasureActivities()
+    }
+
     fun destroy() {
         closeRadial()
         closePanel()
+        closeActivities()
+        activities.destroy()
         soundPlayer?.stop()
         soundPlayer = null
         if (labelsAttached) {
@@ -421,6 +494,7 @@ class QuickBubbleView(
 
     private fun onBubbleTap() = when {
         panelAttached -> closePanel()
+        activitiesAttached -> closeActivities()
         radialAttached -> closeRadial()
         else -> openRadial()
     }
@@ -441,7 +515,7 @@ class QuickBubbleView(
         val dm = context.resources.displayMetrics
         val size = dp(RADIAL_SIZE_DP)
         val half = size / 2
-        val bubbleHalf = dp(BUBBLE_DP) / 2
+        val bubbleHalf = sizePx / 2
         val reach = dp(RADIUS_DP + ITEM_DP / 2 + 4)
         val minY = reach - bubbleHalf
         val maxY = dm.heightPixels - reach - bubbleHalf
@@ -458,10 +532,15 @@ class QuickBubbleView(
         radialItems.forEach { it.visibility = View.VISIBLE }
         pinChoices.forEach { it.visibility = View.GONE }
         placeOnArc(radialItems, ARC_DEG)
+        // ✕ do tamanho do "M" e no mesmo lugar (segurar nele desliga, como no "M").
         (closeButton.layoutParams as FrameLayout.LayoutParams).apply {
-            leftMargin = half - dp(BUBBLE_DP) / 2
-            topMargin = half - dp(BUBBLE_DP) / 2
+            width = sizePx
+            height = sizePx
+            leftMargin = half - sizePx / 2
+            topMargin = half - sizePx / 2
         }
+        val pad = sizePx * 26 / 100
+        closeButton.setPadding(pad, pad, pad, pad)
         try {
             windowManager.addView(radialRoot, radialParams)
             radialAttached = true
@@ -509,7 +588,7 @@ class QuickBubbleView(
             val lp = v.layoutParams as FrameLayout.LayoutParams
             v.translationX = half - (lp.leftMargin + dp(ITEM_DP) / 2f)
             v.translationY = half - (lp.topMargin + dp(ITEM_DP) / 2f)
-            val targetAlpha = v.alpha // "+1" fica apagado sem jornada
+            val targetAlpha = v.alpha
             v.scaleX = 0.3f; v.scaleY = 0.3f; v.alpha = 0f
             v.animate().translationX(0f).translationY(0f).scaleX(1f).scaleY(1f).alpha(targetAlpha)
                 .setStartDelay(i * 18L).setDuration(170L).start()
@@ -533,7 +612,6 @@ class QuickBubbleView(
             running -> "Pausar jornada (segure 3 segundos para encerrar)"
             else -> "Continuar jornada (segure 3 segundos para encerrar)"
         }
-        tripButton.alpha = if (s != null) 1f else 0.4f
         val voiceOn = OverlayPrefs.isVoiceEnabled(context)
         voiceRound.setImageDrawable(NeonIcon(if (voiceOn) NeonIcon.Kind.VOICE_ON else NeonIcon.Kind.VOICE_OFF, NEON_PURPLE))
         voiceRound.contentDescription = if (voiceOn) "Voz ligada" else "Voz desligada"
@@ -577,15 +655,14 @@ class QuickBubbleView(
 
     private fun openPanel() {
         if (panelAttached) return
+        closeActivities()
         confirmReset = false
         resetButton.text = "Restaurar padrão"
         bindBars()
         showStyle(style)
         val dm = context.resources.displayMetrics
-        val width = dp(PANEL_WIDTH_DP).coerceAtMost(dm.widthPixels - dp(BUBBLE_DP + 16))
-        panelParams.width = width
-        val bubbleOnRight = bubbleParams.x + dp(BUBBLE_DP) / 2 > dm.widthPixels / 2
-        panelParams.x = if (bubbleOnRight) max(0, bubbleParams.x - width - dp(8)) else bubbleParams.x + dp(BUBBLE_DP + 8)
+        panelParams.width = dp(PANEL_WIDTH_DP).coerceAtMost(dm.widthPixels - sizePx - dp(16))
+        placePanel()
         measurePanel()
         try {
             windowManager.addView(panelRoot, panelParams)
@@ -601,6 +678,62 @@ class QuickBubbleView(
         panelAttached = false
         confirmReset = false
         showStyle(style) // prévia de um arrasto interrompido não fica no botão
+    }
+
+    /** Painel ao lado do "M", do lado de dentro da tela (acompanha o botão quando o tamanho muda). */
+    private fun placePanel() {
+        val dm = context.resources.displayMetrics
+        val width = panelParams.width
+        val bubbleOnRight = bubbleParams.x + sizePx / 2 > dm.widthPixels / 2
+        panelParams.x = if (bubbleOnRight) max(0, bubbleParams.x - width - dp(8)) else bubbleParams.x + sizePx + dp(8)
+    }
+
+    // ------------------------------------------------------------------ Atividades
+
+    private fun openActivities() {
+        if (activitiesAttached) return
+        closePanel()
+        val dm = context.resources.displayMetrics
+        val width = dp(ACTIVITIES_WIDTH_DP).coerceAtMost(dm.widthPixels - sizePx - dp(16))
+        activitiesParams.width = width
+        val bubbleOnRight = bubbleParams.x + sizePx / 2 > dm.widthPixels / 2
+        activitiesParams.x = if (bubbleOnRight) max(0, bubbleParams.x - width - dp(8)) else bubbleParams.x + sizePx + dp(8)
+        activities.bind(actions.activities(), width)
+        measureActivities()
+        try {
+            windowManager.addView(activitiesRoot, activitiesParams)
+            activitiesAttached = true
+        } catch (e: Exception) {
+            Log.w(TAG, "Não foi possível abrir as atividades", e)
+            activities.closed()
+        }
+    }
+
+    private fun closeActivities() {
+        if (!activitiesAttached) return
+        try { windowManager.removeViewImmediate(activitiesRoot) } catch (e: Exception) { Log.w(TAG, "Falha ao fechar atividades", e) }
+        activitiesAttached = false
+        activities.closed()
+    }
+
+    private fun measureActivities() {
+        val dm = context.resources.displayMetrics
+        activities.root.measure(
+            View.MeasureSpec.makeMeasureSpec(activitiesParams.width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        activitiesParams.height = activities.root.measuredHeight.coerceAtMost(dm.heightPixels - dp(48))
+        activitiesParams.y = (bubbleParams.y + sizePx / 2 - activitiesParams.height / 2)
+            .coerceIn(0, max(0, dm.heightPixels - activitiesParams.height - dp(24)))
+    }
+
+    /** Conteúdo mudou (mapa/foto chegou, corrida terminou): altura nova, mesmo lugar. */
+    private fun remeasureActivities() {
+        if (!activitiesAttached) return
+        val before = activitiesParams.height to activitiesParams.y
+        measureActivities()
+        if (before == activitiesParams.height to activitiesParams.y) return // GPS/relógio: só o texto mudou
+        try { windowManager.updateViewLayout(activitiesRoot, activitiesParams) } catch (e: Exception) { Log.w(TAG, "Falha ao atualizar atividades", e) }
     }
 
     /** Altura = conteúdo, limitada à tela (o resto rola); posição perto do ícone. */
@@ -643,7 +776,10 @@ class QuickBubbleView(
         previewRide.statusColor = s.rideRing
         previewRide.invalidate()
         paintBubble()
+        applySize(s)
         spinLabel.text = "Giro com a meta batida: " + SpinSpeed.label(s.spinSeconds)
+        iconSizeLabel.text = "Tamanho do ícone: " + BubbleSize.label(s.iconSize)
+        textSizeLabel.text = "Tamanho do texto: " + BubbleSize.label(s.textSize)
         soundChips.forEach { (sound, chip) ->
             (chip.background as? GradientDrawable)?.setColor(if (sound == s.goalSound) SELECTED_BG else BUTTON_BG)
             chip.setTextColor(if (sound == s.goalSound) SELECTED_TEXT else WHITE)
@@ -652,9 +788,42 @@ class QuickBubbleView(
 
     /** Grava [s] (vale também para o ícone recriado e para o som da meta no copiloto). */
     private fun commitStyle(s: BubbleStyle) {
+        val resized = s.iconSize != style.iconSize
         style = s
         OverlayPrefs.setBubbleStyle(context, s)
         showStyle(s)
+        if (resized) {
+            savePosition() // tamanho novo muda o x/y grudado na borda
+            // O painel só acompanha o botão ao soltar a barra: mexer a janela debaixo do dedo
+            // durante o arrasto mudaria o valor da própria barra.
+            if (panelAttached) {
+                placePanel()
+                try { windowManager.updateViewLayout(panelRoot, panelParams) } catch (e: Exception) { Log.w(TAG, "Falha ao mover painel", e) }
+            }
+        }
+    }
+
+    /**
+     * Tamanho do botão e dos números em volta ([s] salvo ou prévia do arrasto). O botão continua
+     * grudado na mesma borda e com o mesmo centro na altura.
+     */
+    private fun applySize(s: BubbleStyle) {
+        val size = dp(BubbleSize.iconDp(s.iconSize))
+        val scale = BubbleSize.textScale(s.textSize)
+        if (size == sizePx && scale == labelScale) return
+        if (size != sizePx) {
+            val centerY = bubbleParams.y + sizePx / 2
+            val onRight = bubbleParams.x + sizePx / 2 > context.resources.displayMetrics.widthPixels / 2
+            sizePx = size
+            bubbleParams.width = size
+            bubbleParams.height = size
+            bubbleParams.y = centerY - size / 2
+            glueToEdge(onRight)
+            clampBubble()
+        }
+        labelScale = scale
+        layoutLabels()
+        updateBubble()
     }
 
     private fun bindBars() {
@@ -729,7 +898,7 @@ class QuickBubbleView(
                     if (!dragging && (abs(dx) > slop || abs(dy) > slop)) {
                         dragging = true
                         bubbleHold.cancel()
-                        closePanel(); closeRadial()
+                        closePanel(); closeRadial(); closeActivities()
                     }
                     if (dragging && bubbleAttached) {
                         bubbleParams.x = startX + dx.toInt()
@@ -755,10 +924,19 @@ class QuickBubbleView(
 
     /** Gruda na borda mais próxima e salva a posição. */
     private fun snapToEdge() {
-        val w = context.resources.displayMetrics.widthPixels
-        bubbleParams.x = if (bubbleParams.x + dp(BUBBLE_DP) / 2 > w / 2) w - dp(BUBBLE_DP + 4) else dp(4)
+        glueToEdge()
         clampBubble()
         updateBubble()
+        savePosition()
+    }
+
+    /** x na borda ([onRight] = direita), com 4 dp de folga — vale para qualquer tamanho do botão. */
+    private fun glueToEdge(onRight: Boolean = bubbleParams.x + sizePx / 2 > context.resources.displayMetrics.widthPixels / 2) {
+        val w = context.resources.displayMetrics.widthPixels
+        bubbleParams.x = if (onRight) w - sizePx - dp(4) else dp(4)
+    }
+
+    private fun savePosition() {
         prefs.edit()
             .putInt(OverlayPrefs.KEY_BUBBLE_X, bubbleParams.x)
             .putInt(OverlayPrefs.KEY_BUBBLE_Y, bubbleParams.y)
@@ -767,8 +945,8 @@ class QuickBubbleView(
 
     private fun clampBubble() {
         val dm = context.resources.displayMetrics
-        bubbleParams.x = bubbleParams.x.coerceIn(0, max(0, dm.widthPixels - dp(BUBBLE_DP)))
-        bubbleParams.y = bubbleParams.y.coerceIn(0, max(0, dm.heightPixels - dp(BUBBLE_DP)))
+        bubbleParams.x = bubbleParams.x.coerceIn(0, max(0, dm.widthPixels - sizePx))
+        bubbleParams.y = bubbleParams.y.coerceIn(0, max(0, dm.heightPixels - sizePx))
     }
 
     private fun updateBubble() {
@@ -784,8 +962,23 @@ class QuickBubbleView(
 
     /** Textos centralizados com o "M" (a janela pode sair um pouco da tela; os números são curtos). */
     private fun placeLabels() {
-        labelsParams.x = bubbleParams.x + dp(BUBBLE_DP) / 2 - dp(LABEL_WIDTH_DP) / 2
-        labelsParams.y = bubbleParams.y - dp(2 * LABEL_LINE_DP)
+        labelsParams.x = bubbleParams.x + sizePx / 2 - labelsParams.width / 2
+        labelsParams.y = bubbleParams.y - 2 * labelLine
+    }
+
+    /** Tamanho da letra, das linhas e da janela dos números: km e custo em cima, bruto embaixo do "M". */
+    private fun layoutLabels() {
+        labelLine = (dp(LABEL_LINE_DP) * labelScale).roundToInt()
+        labelsParams.width = max((dp(LABEL_WIDTH_DP) * labelScale).roundToInt(), sizePx + dp(8))
+        labelsParams.height = 3 * labelLine + sizePx
+        listOf(kmLabel to 0, costLabel to labelLine, grossLabel to 2 * labelLine + sizePx).forEach { (label, top) ->
+            label.layoutParams = (label.layoutParams as FrameLayout.LayoutParams).apply {
+                height = labelLine
+                topMargin = top
+            }
+            label.setSize(LABEL_SP * density * labelScale, 3f * density * labelScale.coerceAtLeast(0.8f))
+        }
+        placeLabels()
     }
 
     private fun bindDay() {
@@ -846,11 +1039,6 @@ class QuickBubbleView(
     /** Número pequeno (tamanho fixo em dp, cabe na janela mesmo com fonte grande) com contorno preto. */
     private fun dayLabel(color: Int) = OutlineLabel(context, LABEL_SP * density, 3f * density).apply { this.color = color }
 
-    private fun labelParams(top: Int) = FrameLayout.LayoutParams(
-        ViewGroup.LayoutParams.MATCH_PARENT,
-        dp(LABEL_LINE_DP),
-    ).apply { topMargin = dp(top) }
-
     /** Botão redondo: fundo preto, anel neon e ícone da mesma cor. */
     private fun roundButton(
         kind: NeonIcon.Kind,
@@ -894,11 +1082,13 @@ class QuickBubbleView(
 
     companion object {
         private const val TAG = "MApp/Bubble"
-        private const val BUBBLE_DP = 52
+        /** Prévias do painel ⚙ (o botão de verdade segue o tamanho escolhido). */
+        private const val PREVIEW_DP = 52
         private const val LABEL_LINE_DP = 17
         private const val LABEL_SP = 13f
         private const val LABEL_WIDTH_DP = 96
         private const val PANEL_WIDTH_DP = 290
+        private const val ACTIVITIES_WIDTH_DP = 320
         private const val CONFIRM_MS = 4_000L
         /** Segurar para encerrar a jornada (▶/⏸) ou desligar o copiloto ("M" / ✕). */
         private const val HOLD_MS = 3_000L
@@ -938,7 +1128,7 @@ class QuickBubbleView(
 
 /** Ícones de traço (estilo neon) desenhados em grade 24×24 — sem arquivos de imagem. */
 private class NeonIcon(private val kind: Kind, color: Int) : Drawable() {
-    enum class Kind { PLAY, PAUSE, PLUS_ONE, GEAR, VOICE_ON, VOICE_OFF, HOME, POWER, CLOSE, PIN, WARNING, FLAME, STAR }
+    enum class Kind { PLAY, PAUSE, LIST, GEAR, VOICE_ON, VOICE_OFF, HOME, POWER, CLOSE, PIN, WARNING, FLAME, STAR }
 
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -965,11 +1155,14 @@ private class NeonIcon(private val kind: Kind, color: Int) : Drawable() {
         when (kind) {
             Kind.PLAY -> canvas.drawPath(path(7.5f, 4.5f, 7.5f, 19.5f, 19.5f, 12f, close = true), stroke)
             Kind.PAUSE -> { stroke.strokeWidth = 2.6f; canvas.drawLine(8.5f, 5f, 8.5f, 19f, stroke); canvas.drawLine(15.5f, 5f, 15.5f, 19f, stroke) }
-            Kind.PLUS_ONE -> {
-                canvas.drawLine(3f, 12f, 10f, 12f, stroke)
-                canvas.drawLine(6.5f, 8.5f, 6.5f, 15.5f, stroke)
-                fill.textSize = 15f
-                canvas.drawText("1", 16.5f, 17.5f, fill)
+            Kind.LIST -> {
+                // Atividades: prancheta com 2 linhas (corrida atual e próxima).
+                canvas.drawRoundRect(RectF(5f, 4.5f, 19f, 21f), 2.5f, 2.5f, stroke)
+                canvas.drawRoundRect(RectF(9f, 2.5f, 15f, 6.5f), 1.2f, 1.2f, stroke)
+                canvas.drawCircle(8.7f, 11.5f, 1.1f, fill)
+                canvas.drawCircle(8.7f, 16.5f, 1.1f, fill)
+                canvas.drawLine(11.5f, 11.5f, 16f, 11.5f, stroke)
+                canvas.drawLine(11.5f, 16.5f, 16f, 16.5f, stroke)
             }
             Kind.GEAR -> {
                 canvas.drawCircle(12f, 12f, 3f, stroke)
@@ -1166,6 +1359,15 @@ private class OutlineLabel(context: Context, sizePx: Float, outlinePx: Float) : 
         textSize = sizePx
         typeface = Typeface.DEFAULT_BOLD
         textAlign = Paint.Align.CENTER
+    }
+
+    /** Tamanho da letra e do contorno (barra "Tamanho do texto" do painel ⚙). */
+    fun setSize(sizePx: Float, outlinePx: Float) {
+        if (fill.textSize == sizePx && outline.strokeWidth == outlinePx) return
+        outline.textSize = sizePx
+        outline.strokeWidth = outlinePx
+        fill.textSize = sizePx
+        invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
