@@ -38,6 +38,7 @@ import br.com.mapp.core.model.ZoneHit
 import br.com.mapp.core.model.ZoneType
 import br.com.mapp.core.repo.FinanceEntry
 import br.com.mapp.core.repo.OfferRecord
+import br.com.mapp.core.shift.ActiveRides
 import br.com.mapp.core.shift.Odometer
 import br.com.mapp.core.shift.PeriodMath
 import br.com.mapp.core.shift.PeriodTotals
@@ -100,7 +101,7 @@ class OverlayService : LifecycleService() {
 
     // ---- Jornada ----
     private var costPerKm: Double = 0.0
-    /** Última oferta avaliada (para "+1 Contar última" depois que o cartão some). */
+    /** Última oferta avaliada (para o +1 do Card e o aceite automático). */
     private var lastOffer: EvaluatedOffer? = null
     /** Tipo lido em algum quadro da oferta atual (o OCR às vezes não lê o "UberX"). */
     private var lastCategory: Pair<OfferKey, String>? = null
@@ -130,6 +131,12 @@ class OverlayService : LifecycleService() {
     private val odometer = Odometer()
     /** Notificação no celular a cada corrida aceita (rota + mapa ao expandir). */
     private var rides: RideNotifier? = null
+
+    /** Oferta + tipo da corrida aceita (os dados da notificação), para o menu Atividades. */
+    private data class Accepted(val offer: EvaluatedOffer, val category: String?)
+
+    /** Corridas aceitas em andamento: atual e próxima no menu Atividades do "M". */
+    private val activeRides = ActiveRides<OfferKey, Accepted>()
 
     override fun onCreate() {
         super.onCreate()
@@ -237,7 +244,21 @@ class OverlayService : LifecycleService() {
             tripToast("Jornada encerrada: ${s.trips} corridas · lucro ${ShiftMath.money(s.profit)}")
         }
 
-        override fun countLastOffer() = countOffer(lastOffer)
+        override fun activities(): RideActivities {
+            val now = System.currentTimeMillis()
+            val inShift = ShiftTracker.current(this@OverlayService).value?.trips?.count { !it.finished } ?: 0
+            // Abertas = as N aceitas mais recentes (as corridas terminam da mais antiga para a mais nova).
+            val (current, next) = activeRides.current(maxOf(matcher.openRides, inShift), now)
+            fun ActiveRides.Ride<OfferKey, Accepted>.toActivity() = RideActivity(
+                key = key,
+                offer = data.offer,
+                category = data.category ?: categoryFor(data.offer.raw),
+                passenger = passenger,
+                onBoard = onBoard,
+                acceptedAt = acceptedAt,
+            )
+            return RideActivities(current?.toActivity(), next?.toActivity(), location?.lastKnown, zones)
+        }
 
         override fun markPin(type: ZoneType) {
             if (pinPending) return
@@ -333,6 +354,15 @@ class OverlayService : LifecycleService() {
             .take(TripMatcher.MAX_OFFERS)
             .filter { it.raw.key() !in recentOffers }
             .forEach { remember(it) }
+        // Menu Atividades depois de reabrir o copiloto: as aceitas recentes voltam (o acompanhamento
+        // restaurado diz quantas continuam abertas — ficam as mais novas).
+        records.filter { it.accepted == true }
+            .map { it.evaluated }
+            .sortedBy { it.raw.capturedAt }
+            .forEach { o ->
+                val key = o.raw.key()
+                if (activeRides.data(key) == null) activeRides.accepted(key, Accepted(o, o.raw.category), at = o.raw.capturedAt)
+            }
         if (lastOffer == null) {
             val newest = recentOffers.values.maxByOrNull { it.raw.capturedAt }
             if (newest != null && now - newest.raw.capturedAt <= LAST_OFFER_RESTORE_MS) {
@@ -379,6 +409,8 @@ class OverlayService : LifecycleService() {
         bubble?.updateShift(ShiftTracker.current(this).value)
         // Corrida aceita aberta no acompanhamento: "M" verde mesmo sem jornada aberta.
         bubble?.updateRide(matcher.openRides > 0)
+        // Corrida que terminou/começou: menu Atividades aberto atualiza.
+        bubble?.refreshActivities()
     }
 
     // ------------------------------------------------------------------ dia e meta (ícone "M")
@@ -589,8 +621,8 @@ class OverlayService : LifecycleService() {
                     countOffer(offer, auto = true)
                 } else if (match.newRide && lastOffer?.raw?.key() != countedKey) {
                     tripToast(
-                        if (event.stage == TripStage.ACCEPTED) "Vi corrida aceita, mas não li a oferta dela: toque +1 se for o caso"
-                        else "Vi passageiro a bordo, mas não li a oferta dela: toque +1 se for o caso",
+                        if (event.stage == TripStage.ACCEPTED) "Vi corrida aceita, mas não li a oferta dela: toque +1 no Card se for o caso"
+                        else "Vi passageiro a bordo, mas não li a oferta dela: marque em Ofertas → Todas se for o caso",
                     )
                 }
             }
@@ -605,7 +637,7 @@ class OverlayService : LifecycleService() {
                 if (ShiftTracker.current(this).value?.nextToFinish(event.platform) != null) {
                     finishPending(auto = true, platform = event.platform)
                 } else {
-                    tripToast("Corrida finalizada, mas não vi o aceite: toque +1 Contar última se for o caso")
+                    tripToast("Corrida finalizada, mas não vi o aceite: marque em Ofertas → Todas se for o caso")
                 }
                 acceptedSinceFinish = false
             }
@@ -668,10 +700,16 @@ class OverlayService : LifecycleService() {
         if (accepted == true && key == markedAcceptedKey) return
         markedAcceptedKey = if (accepted == true) key else null
         if (accepted == true) {
-            if (notify) rides?.accepted(key, offer, categoryFor(offer.raw), passenger, onBoard, location?.lastKnown, zones)
+            if (notify) {
+                rides?.accepted(key, offer, categoryFor(offer.raw), passenger, onBoard, location?.lastKnown, zones)
+                // Corrida em andamento: entra no menu Atividades (+1 com a corrida já terminada, não).
+                activeRides.accepted(key, Accepted(offer, categoryFor(offer.raw)), System.currentTimeMillis(), passenger, onBoard)
+            }
         } else {
             rides?.cancel(key)
+            activeRides.removed(key)
         }
+        bubble?.refreshActivities()
         lifecycleScope.launch {
             try {
                 MappApp.repos.offers.setAccepted(offer, accepted)
@@ -779,8 +817,12 @@ class OverlayService : LifecycleService() {
         } else {
             lastOffer = offer
         }
-        // Corrida já aceita que chegou completada (endereço localizado depois): atualiza a notificação.
+        // Corrida já aceita que chegou completada (endereço localizado depois): atualiza a notificação
+        // e o menu Atividades.
         rides?.updated(key, offer, categoryFor(offer.raw))
+        activeRides.data(key)?.let { old ->
+            if (activeRides.updated(key, Accepted(offer, categoryFor(offer.raw) ?: old.category))) bubble?.refreshActivities()
+        }
         if (key == dismissedKey) return // usuário fechou o cartão desta oferta
 
         val alertZones = offer.zoneHits.filter { it.zone.alertEnabled }.toSet()
@@ -850,7 +892,7 @@ class OverlayService : LifecycleService() {
             Log.w(TAG, "Sem leitor nem permissão de sobreposição; ícone e cartão não exibidos")
             return
         }
-        bubble = QuickBubbleView(next, bubbleActions).also {
+        bubble = QuickBubbleView(next, bubbleActions, lifecycleScope).also {
             it.show()
             it.updateReader(ReaderStatus.state.value)
         }

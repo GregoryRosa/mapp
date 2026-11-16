@@ -139,7 +139,7 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    if (running) "O ícone flutuante fica por cima da Uber/99/inDrive: toque nele para abrir o menu (jornada, +1, 📍, voz e ajustes do botão); segure 3 s para desligar o copiloto."
+                    if (running) "O ícone flutuante fica por cima da Uber/99/inDrive: toque nele para abrir o menu (jornada, 📋 atividades, 📍, voz e ajustes do botão); segure 3 s para desligar o copiloto."
                     else "Analise cada oferta, controle a jornada e o lucro — tudo num só app.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MappColors.TextDim,

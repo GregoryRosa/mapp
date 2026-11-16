@@ -14,8 +14,9 @@ import kotlin.math.roundToInt
  *   (leitor desligado continua cinza com "!");
  * - anel de fora (meta do dia): gradiente [goalStart] → [goalEnd]; [spinSeconds] = uma volta a cada
  *   N segundos com a meta batida (0 = parado);
- * - [goalSound]: som da meta batida.
- * O padrão é o visual original do MApp.
+ * - [goalSound]: som da meta batida;
+ * - [iconSize]/[textSize]: tamanho do botão e dos números em volta dele, em % do padrão ([BubbleSize]).
+ * O padrão é o visual original do MApp (com o botão um pouco maior: 60 dp).
  */
 data class BubbleStyle(
     val background: Int = DEFAULT_BACKGROUND,
@@ -27,6 +28,8 @@ data class BubbleStyle(
     val goalEnd: Int = LILAC,
     val spinSeconds: Int = DEFAULT_SPIN_S,
     val goalSound: GoalSound = GoalSound.DEFAULT,
+    val iconSize: Int = BubbleSize.DEFAULT,
+    val textSize: Int = BubbleSize.DEFAULT,
 ) {
     /**
      * Cores do gradiente do anel da meta, em volta do círculo (a partir do topo). Com as cores
@@ -47,6 +50,8 @@ data class BubbleStyle(
         "g2=" + hex(goalEnd),
         "spin=$spinSeconds",
         "sound=" + goalSound.id,
+        "size=$iconSize",
+        "text=$textSize",
     ).joinToString(";")
 
     companion object {
@@ -80,6 +85,8 @@ data class BubbleStyle(
                 goalEnd = color("g2", d.goalEnd),
                 spinSeconds = map["spin"]?.toIntOrNull()?.takeIf { it in SpinSpeed.STEPS } ?: d.spinSeconds,
                 goalSound = map["sound"]?.let { GoalSound.fromId(it) } ?: d.goalSound,
+                iconSize = map["size"]?.toIntOrNull()?.takeIf { it in BubbleSize.ICON_STEPS } ?: d.iconSize,
+                textSize = map["text"]?.toIntOrNull()?.takeIf { it in BubbleSize.TEXT_STEPS } ?: d.textSize,
             )
         }
 
@@ -179,4 +186,40 @@ object SpinSpeed {
     }
 
     fun label(seconds: Int): String = if (seconds <= 0) "Parado" else "1 volta a cada $seconds s"
+}
+
+/**
+ * Tamanho do botão "M" e dos números em volta dele (km, custo e bruto), nas barras do painel ⚙:
+ * porcentagem do padrão, em passos de 10%.
+ */
+object BubbleSize {
+    /** Lado do botão com 100% (antes era 52 dp fixo; agora um pouco maior). */
+    const val BASE_ICON_DP = 60
+
+    /** Letra dos números do dia com 100%. */
+    const val BASE_TEXT_SP = 13f
+
+    const val DEFAULT = 100
+
+    /** Botão: 70% (42 dp) a 160% (96 dp). */
+    val ICON_STEPS: List<Int> = (70..160 step 10).toList()
+
+    /** Números: 70% a 200%. */
+    val TEXT_STEPS: List<Int> = (70..200 step 10).toList()
+
+    fun iconDp(percent: Int): Int = (BASE_ICON_DP * percent / 100.0).roundToInt()
+
+    /** Fator de escala do texto (1.0 = 100%). */
+    fun textScale(percent: Int): Float = percent / 100f
+
+    /** Passo mais perto da posição 0..1 da barra. */
+    fun percentAt(steps: List<Int>, fraction: Double): Int =
+        steps[(fraction.coerceIn(0.0, 1.0) * (steps.size - 1)).roundToInt()]
+
+    fun fractionOf(steps: List<Int>, percent: Int): Double {
+        val i = steps.indexOf(percent).takeIf { it >= 0 } ?: steps.indexOf(DEFAULT)
+        return i.toDouble() / (steps.size - 1)
+    }
+
+    fun label(percent: Int): String = "$percent%"
 }
