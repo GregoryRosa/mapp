@@ -15,7 +15,11 @@ import android.widget.TextView
 import br.com.mapp.core.card.CardFilters
 import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.SatelliteShot
-import br.com.mapp.core.geo.StreetView
+import br.com.mapp.core.media.MediaBlock
+import br.com.mapp.core.media.MediaLayout
+import br.com.mapp.core.media.MediaPhotos
+import br.com.mapp.core.media.MediaPlaced
+import br.com.mapp.core.media.MediaSizes
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.model.Zone
@@ -54,7 +58,7 @@ data class RideActivities(
 /**
  * Conteúdo do menu **Atividades** do ícone "M": a corrida atual e a próxima (aceita durante a atual),
  * cada uma do jeito da notificação da corrida aceita aberta — título com o semáforo, busca → viagem,
- * mapa + fotos da rua de A e do destino e as linhas escolhidas em Card → Notificação.
+ * mapa + fotos de A e do destino no modelo de Card → Notificação → Mapa e fotos e as linhas escolhidas lá.
  * Mapa e fotos chegam depois (mesmo cache do Card e da notificação) e ficam guardados por corrida.
  * Só mostra — não mexe em nada da corrida.
  */
@@ -137,17 +141,12 @@ class ActivitiesView(
             background = GradientDrawable().apply { cornerRadius = dp(8).toFloat(); setColor(PHOTO_BG) }
             clipToOutline = true
         }
-        private val photoA = PhotoTile()
-        private val photoB = PhotoTile()
-        private val photoColumn = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(photoA.view, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-            addView(photoB.view, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(GAP_DP) })
-        }
-        private val media = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(map, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
-            addView(photoColumn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply { marginStart = dp(GAP_DP) })
+        private val tiles = linkedMapOf(MediaBlock.PICKUP to PhotoTile(), MediaBlock.DROPOFF to PhotoTile())
+
+        /** Quadros soltos em posições absolutas, no modelo de Card → Notificação → Mapa e fotos. */
+        private val media = FrameLayout(context).apply {
+            addView(map)
+            tiles.values.forEach { addView(it.view) }
         }
         private val note = text(11f, SECONDARY)
         private val lines = List(RideNotices.MAX_DETAILS) { text(13f, WHITE) }
@@ -156,7 +155,7 @@ class ActivitiesView(
             setPadding(dp(10), dp(8), dp(10), dp(10))
             addView(title)
             addView(summary, fullWidth(2))
-            addView(media, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(MEDIA_DP)).apply { topMargin = dp(6) })
+            addView(media, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(MediaSizes.NOTICE.single)).apply { topMargin = dp(6) })
             addView(note, fullWidth(2))
             lines.forEach { addView(it, fullWidth(3)) }
         }
@@ -202,22 +201,23 @@ class ActivitiesView(
 
             // Fotos da coleta e do destino (rua ou satélite), como em Card → Notificação, com a chave colada.
             val photosOn = layout.showPhotos && OverlayPrefs.streetViewEnabled(context)
-            val picked = if (photosOn) StreetView.pick(RideRoute.of(o)) else emptyList()
-            val targets = listOfNotNull(picked.firstOrNull(), picked.lastOrNull()).distinct()
-            photoA.bind(targets.getOrNull(0), layout.photoView)
-            photoB.bind(targets.getOrNull(1), layout.photoView)
-            photoB.view.visibility = if (targets.size > 1) View.VISIBLE else View.GONE
-            photoColumn.visibility = if (targets.isEmpty()) View.GONE else View.VISIBLE
-
+            val stops = if (photosOn) MediaPhotos.stops(RideRoute.of(o)) else emptyMap()
             // Mapa (desligado em Card → Notificação: nem desenha).
             val frame = if (text.showMap) RideNotices.frame(points.all) else null
-            val mapState = if (frame != null) mapFor(ride, points, data, frame, targets.isNotEmpty()) else null
+            val available = stops.keys + listOfNotNull(MediaBlock.MAP.takeIf { frame != null })
+            val placed = placeMedia(layout.media, available)
+            tiles.forEach { (block, tile) ->
+                val cell = placed[block]
+                place(tile.view, cell)
+                if (cell != null) tile.bind(stops[block], layout.photoView, SatelliteShot.forAspect(cell.width.toDouble() / cell.height))
+            }
+            val mapCell = placed[MediaBlock.MAP]
+            place(map, mapCell)
+            val mapState = if (frame != null && mapCell != null) mapFor(ride, points, data, frame, mapCell) else null
             val bmp = mapState?.second
             if (bmp != null) map.setImageBitmap(bmp) else map.setImageDrawable(null)
-            map.visibility = if (frame != null) View.VISIBLE else View.GONE
-            media.visibility = if (frame != null || targets.isNotEmpty()) View.VISIBLE else View.GONE
-            val waiting = frame != null && mapState == null
-            val failed = frame != null && mapState != null && bmp == null
+            val waiting = mapCell != null && mapState == null
+            val failed = mapCell != null && mapState != null && bmp == null
             val mapNote = when {
                 waiting -> "Carregando mapa…"
                 failed -> "Mapa indisponível agora (sem internet?)"
@@ -226,24 +226,58 @@ class ActivitiesView(
             note.text = mapNote.orEmpty()
             note.visibility = if (mapNote != null) View.VISIBLE else View.GONE
         }
+
+        /** Lugar (px) de cada quadro no painel; a altura da área acompanha o modelo. Vazio = sem área. */
+        private fun placeMedia(layout: MediaLayout, available: Set<MediaBlock>): Map<MediaBlock, MediaPlaced> {
+            val area = layout.arrange(available)
+            if (area == null) {
+                media.visibility = View.GONE
+                return emptyMap()
+            }
+            val sizes = MediaSizes.NOTICE
+            val heightDp = MediaLayout.height(area, sizes)
+            media.visibility = View.VISIBLE
+            val params = media.layoutParams
+            if (params.height != dp(heightDp)) {
+                params.height = dp(heightDp)
+                media.layoutParams = params
+            }
+            return MediaLayout.place(area, innerWidth(), dp(heightDp), sizes, gap = dp(sizes.gap)).associateBy { it.block }
+        }
+    }
+
+    /** Largura útil do quadro da corrida: painel menos as margens do painel e do quadro. */
+    private fun innerWidth(): Int = (widthPx - dp(2 * 12 + 2 * 10)).coerceAtLeast(dp(120))
+
+    private fun place(view: View, cell: MediaPlaced?) {
+        if (cell == null) {
+            view.visibility = View.GONE
+            return
+        }
+        view.visibility = View.VISIBLE
+        val lp = view.layoutParams as? FrameLayout.LayoutParams
+        if (lp != null && lp.width == cell.width && lp.height == cell.height && lp.leftMargin == cell.x && lp.topMargin == cell.y) return
+        view.layoutParams = FrameLayout.LayoutParams(cell.width, cell.height).apply {
+            leftMargin = cell.x
+            topMargin = cell.y
+        }
     }
 
     /**
      * Mapa da corrida: null = ainda desenhando; (assinatura, null) = não deu. Desenha uma vez por
-     * corrida e pontos (a posição de agora entra só no 1º desenho, para não refazer a cada GPS).
+     * corrida, pontos e tamanho do quadro (a posição de agora entra só no 1º desenho, para não refazer
+     * a cada GPS).
      */
     private fun mapFor(
         ride: RideActivity,
         points: RidePoints,
         data: RideActivities,
         frame: MapFrame,
-        withPhotos: Boolean,
+        cell: MediaPlaced,
     ): Pair<String, Bitmap?>? {
-        // Largura do painel menos as margens do painel e do quadro da corrida.
-        val inner = (widthPx - dp(2 * 12 + 2 * 10)).coerceAtLeast(dp(120))
-        val width = if (withPhotos) (inner - dp(GAP_DP)) / 2 else inner
-        val height = dp(MEDIA_DP)
-        val signature = "${points.pickup}|${points.dropoff}|${points.stops}|$width"
+        val width = cell.width
+        val height = cell.height
+        val signature = "${points.pickup}|${points.dropoff}|${points.stops}|${width}x$height"
         maps[ride.key]?.let { if (it.first == signature) return it }
         if (mapJobs[ride.key]?.isActive == true && maps[ride.key] == null) return null
         maps.remove(ride.key)
@@ -286,7 +320,7 @@ class ActivitiesView(
             })
         }
 
-        fun bind(stop: RouteStop?, mode: PhotoView) {
+        fun bind(stop: RouteStop?, mode: PhotoView, shot: SatelliteShot) {
             if (stop == null) return
             badge.text = stop.letter
             badge.background = GradientDrawable().apply {
@@ -295,7 +329,7 @@ class ActivitiesView(
                 setStroke(dp(1), WHITE)
             }
             val point = stop.point
-            val result = point?.let { photoFor(stop, mode) }
+            val result = point?.let { photoFor(stop, mode, shot) }
             when {
                 result is StreetViewPhotos.Result.Photo -> show(result.bitmap, result.credit, satellite = result.satellite)
                 result is StreetViewPhotos.Result.Missing -> show(null, null, result.message)
@@ -317,13 +351,13 @@ class ActivitiesView(
     }
 
     /** Foto já carregada, ou começa a carregar (null = ainda não chegou). */
-    private fun photoFor(stop: RouteStop, mode: PhotoView): StreetViewPhotos.Result? {
+    private fun photoFor(stop: RouteStop, mode: PhotoView, shot: SatelliteShot): StreetViewPhotos.Result? {
         val point = stop.point ?: return null
-        val id = "${mode.id}|${stop.letter}@${point.lat},${point.lon}"
+        val id = "${mode.id}|${shot.width}x${shot.height}|${stop.letter}@${point.lat},${point.lon}"
         photos[id]?.let { return it }
         if (photoJobs[id]?.isActive == true) return null
         photoJobs[id] = scope.launch {
-            photos[id] = StreetViewPhotos.load(context, stop, mode, SatelliteShot.STRIP)
+            photos[id] = StreetViewPhotos.load(context, stop, mode, shot)
             photoJobs.remove(id)
             rebind()
         }
@@ -356,9 +390,6 @@ class ActivitiesView(
     ).apply { topMargin = dp(topMarginDp) }
 
     private companion object {
-        /** Mesma altura do mapa da notificação. */
-        const val MEDIA_DP = 112
-        const val GAP_DP = 4
         const val TILE_TIMEOUT_MS = 10_000L
         val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
         val WHITE = 0xFFFFFFFF.toInt()

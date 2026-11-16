@@ -17,13 +17,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -96,6 +97,10 @@ import br.com.mapp.core.engine.OfferEvaluator
 import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.geo.StreetViewBudget
+import br.com.mapp.core.media.MediaBlock
+import br.com.mapp.core.media.MediaLayout
+import br.com.mapp.core.media.MediaSizes
+import br.com.mapp.core.media.MediaTemplate
 import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.model.Platform
@@ -177,6 +182,9 @@ private fun OfferCardTab() {
     val chipOrigins = remember { mutableStateMapOf<Any, Offset>() }
     var availableBounds by remember { mutableStateOf(Rect.Zero) }
     var addressAvailableBounds by remember { mutableStateOf(Rect.Zero) }
+    val mediaBounds = remember { mutableStateMapOf<MediaBlock, Rect>() }
+    var mediaTray by remember { mutableStateOf(Rect.Zero) }
+    var photoView by remember { mutableStateOf(OverlayPrefs.photoView(ctx)) }
     var rootOffset by remember { mutableStateOf(Offset.Zero) }
     val ctl = remember { DragController() }
 
@@ -201,6 +209,8 @@ private fun OfferCardTab() {
         val target = slotAt(d.pos)
         val item = d.item
         when {
+            // Quadro de Mapa e fotos: troca de lugar com o quadro onde caiu.
+            item is MediaBlock -> mediaDropped(layout.media, d, mediaBounds, mediaTray)?.let { update(layout.copy(media = it)) }
             target != null -> update(placeIn(item, target))
             d.from != null && item is CardMetric && availableBounds.contains(d.pos) -> update(layout.remove(item))
             d.from != null && item is AddressItem && addressAvailableBounds.contains(d.pos) -> update(layout.removeAddress(item))
@@ -278,7 +288,25 @@ private fun OfferCardTab() {
 
                 GreatSoundCard()
                 StopSoundCard()
-                StreetViewCard()
+                StreetViewCard(photoView) { photoView = it }
+                MediaLayoutCard(
+                    title = "Mapa e fotos",
+                    media = layout.media,
+                    sizes = MediaSizes.CARD,
+                    widthDp = CARD_MEDIA_WIDTH_DP,
+                    photoView = photoView,
+                    hint = if (OverlayPrefs.streetViewEnabled(ctx)) {
+                        "No Card: toque numa foto troca foto da rua ⇄ satélite; segure para ela ocupar a área toda. " +
+                            "O satélite vem no formato do quadro."
+                    } else {
+                        "Sem as fotos ligadas e a chave do Google (Fotos da rua e satélite, acima) só o mapa aparece: " +
+                            "ele ocupa o espaço das fotos."
+                    },
+                    ctl = ctl,
+                    cellBounds = mediaBounds,
+                    onTrayBounds = { mediaTray = it },
+                    onChange = { update(layout.copy(media = it)) },
+                )
 
                 CardLine.entries.forEach { line ->
                     SlotRow(
@@ -499,6 +527,10 @@ private fun Modifier.dragSource(ctl: DragController, item: Any, label: String, f
         )
     }
 
+/** Largura da área de mapa e fotos no Card (Card de 300 dp menos as margens) e na notificação. */
+private const val CARD_MEDIA_WIDTH_DP = 276
+private const val NOTICE_MEDIA_WIDTH_DP = 310
+
 /** Ofertas de exemplo para a prévia (avaliadas com o perfil e os custos atuais). */
 /** Corridas de exemplo das prévias do Card (abas Card de corridas e Filtros). */
 internal val CARD_SAMPLES = listOf(
@@ -637,6 +669,224 @@ private fun FontStepper(label: String, percent: Int, onChange: (Int) -> Unit) {
     }
 }
 
+// ------------------------------------------------------------------ mapa e fotos (modelos + arrastar)
+
+/** Cor de cada quadro nas miniaturas dos modelos e na etiqueta do quadro. */
+private fun blockColor(block: MediaBlock): Color = when (block) {
+    MediaBlock.MAP -> Color(0xFF5C7CFA)
+    MediaBlock.PICKUP -> Color(0xFF2E7D32)
+    MediaBlock.DROPOFF -> Color(0xFFC62828)
+}
+
+/**
+ * Editor da área de mapa e fotos (Card de corridas e Notificação): escolha um modelo pronto e, no
+ * desenho embaixo, segure e arraste um quadro para outro espaço (os dois trocam de lugar) — ou toque
+ * num e depois no outro. Quadro que o modelo não tem fica em "Fora do quadro" e pode voltar do mesmo
+ * jeito. O desenho tem a proporção real da área ([sizes], [widthDp]).
+ */
+@Composable
+private fun MediaLayoutCard(
+    title: String,
+    media: MediaLayout,
+    sizes: MediaSizes,
+    widthDp: Int,
+    photoView: PhotoView,
+    hint: String,
+    ctl: DragController,
+    cellBounds: MutableMap<MediaBlock, Rect>,
+    onTrayBounds: (Rect) -> Unit,
+    onChange: (MediaLayout) -> Unit,
+) {
+    var selected by remember { mutableStateOf<MediaBlock?>(null) }
+    fun tap(block: MediaBlock) {
+        val sel = selected
+        when {
+            sel == null -> selected = block
+            sel == block -> selected = null
+            else -> {
+                // Toque no 2º quadro: os dois trocam (do espaço ou de fora do quadro).
+                onChange(media.swap(sel, block))
+                selected = null
+            }
+        }
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text("MODELO", style = MaterialTheme.typography.labelMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                MediaTemplate.entries.forEach { t ->
+                    TemplateThumb(t, media, selected = t == media.template) {
+                        onChange(media.withTemplate(t))
+                        selected = null
+                    }
+                }
+            }
+            Text(media.template.label, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Segure e arraste um quadro para outro lugar: os dois trocam. Ou toque num e depois no outro.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            MediaBoard(
+                media = media,
+                available = MediaBlock.entries.toSet(),
+                sizes = sizes,
+                widthDp = widthDp,
+                photoView = photoView,
+                edit = MediaEdit(ctl, cellBounds, selected, ctl.drag?.item as? MediaBlock, ::tap),
+            )
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), RoundedCornerShape(12.dp))
+                    .onGloballyPositioned { onTrayBounds(it.boundsInRoot()) }
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("FORA DO QUADRO", style = MaterialTheme.typography.labelMedium)
+                if (media.hidden.isEmpty()) {
+                    Text("Os 3 estão no quadro.", style = MaterialTheme.typography.bodySmall)
+                }
+                val origins = remember { mutableStateMapOf<MediaBlock, Offset>() }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    media.hidden.forEach { block ->
+                        FilterChip(
+                            selected = selected == block,
+                            onClick = { tap(block) },
+                            label = { Text(block.label) },
+                            modifier = Modifier
+                                .onGloballyPositioned { origins[block] = it.positionInRoot() }
+                                .dragSource(ctl, block, block.short, null) { origins[block] ?: Offset.Zero },
+                        )
+                    }
+                }
+            }
+            Text(hint, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+/** Soltou um quadro arrastado: em cima de outro quadro troca os dois; em "Fora do quadro" tira (se der). */
+private fun mediaDropped(media: MediaLayout, d: Drag, cells: Map<MediaBlock, Rect>, tray: Rect): MediaLayout? {
+    val block = d.item as? MediaBlock ?: return null
+    val target = cells.entries.firstOrNull { (b, r) -> b in media.shown && r.contains(d.pos) }?.key
+    return when {
+        target != null && target != block -> media.swap(block, target)
+        target == null && tray.contains(d.pos) && block in media.shown -> media.hidden.firstOrNull()?.let { media.swap(block, it) }
+        else -> null
+    }
+}
+
+/** Estado de edição do desenho: arrastar, quadro escolhido e o que está sendo arrastado. */
+private class MediaEdit(
+    val ctl: DragController,
+    val bounds: MutableMap<MediaBlock, Rect>,
+    val selected: MediaBlock?,
+    val dragging: MediaBlock?,
+    val onTap: (MediaBlock) -> Unit,
+)
+
+/**
+ * Desenho da área de mapa e fotos no modelo [media], só com os quadros de [available], na proporção
+ * real ([widthDp] × altura de [sizes]). Com [edit]: etiqueta em cada quadro, toque e arrastar.
+ */
+@Composable
+private fun MediaBoard(
+    media: MediaLayout,
+    available: Set<MediaBlock>,
+    sizes: MediaSizes,
+    widthDp: Int,
+    photoView: PhotoView,
+    stops: Int = 0,
+    edit: MediaEdit? = null,
+) {
+    val area = media.arrange(available) ?: return
+    val heightDp = MediaLayout.height(area, sizes)
+    val placed = MediaLayout.place(area, widthDp, heightDp, sizes)
+    val colors = MaterialTheme.colorScheme
+    BoxWithConstraints(Modifier.fillMaxWidth().aspectRatio(widthDp.toFloat() / heightDp)) {
+        val f = maxWidth.value / widthDp
+        placed.forEach { p ->
+            val block = p.block
+            val shape = RoundedCornerShape(8.dp)
+            val hovered = edit?.let { e -> e.dragging != null && e.dragging != block && e.ctl.drag?.pos?.let { e.bounds[block]?.contains(it) } == true } == true
+            val chosen = edit?.selected == block
+            Box(
+                Modifier
+                    .offset(x = (p.x * f).dp, y = (p.y * f).dp)
+                    .size(width = (p.width * f).dp, height = (p.height * f).dp)
+                    .clip(shape)
+                    .then(
+                        if (edit != null) {
+                            Modifier
+                                .border(
+                                    BorderStroke(if (hovered || chosen) 3.dp else 0.dp, if (hovered || chosen) colors.primary else Color.Transparent),
+                                    shape,
+                                )
+                                .onGloballyPositioned { edit.bounds[block] = it.boundsInRoot() }
+                                .clickable { edit.onTap(block) }
+                                .dragSource(edit.ctl, block, block.short, null) { edit.bounds[block]?.topLeft ?: Offset.Zero }
+                        } else {
+                            Modifier
+                        },
+                    ),
+            ) {
+                when (block) {
+                    MediaBlock.MAP -> MapSketch(stops, Modifier.fillMaxSize())
+                    MediaBlock.PICKUP -> PhotoSketch("A", blockColor(block), photoView, Modifier.fillMaxSize())
+                    MediaBlock.DROPOFF -> PhotoSketch(('A' + stops + 1).toString(), blockColor(block), photoView, Modifier.fillMaxSize())
+                }
+                if (edit != null) {
+                    Text(
+                        block.short,
+                        Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(4.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xCC000000))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Miniatura de um modelo, com as cores dos quadros na ordem atual (mapa azul, A verde, destino vermelho). */
+@Composable
+private fun TemplateThumb(template: MediaTemplate, media: MediaLayout, selected: Boolean, onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(10.dp)
+    val shown = media.withTemplate(template)
+    Box(
+        Modifier
+            .size(width = 64.dp, height = 48.dp)
+            .clip(shape)
+            .background(if (selected) colors.primaryContainer else colors.surfaceVariant)
+            .border(BorderStroke(if (selected) 2.dp else 1.dp, if (selected) colors.primary else colors.outlineVariant), shape)
+            .clickable(onClick = onClick)
+            .padding(7.dp),
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val area = shown.arrange() ?: return@Canvas
+            val w = size.width.toInt()
+            val h = size.height.toInt()
+            MediaLayout.place(area, w, h, MediaSizes.CARD, gap = 3.dp.toPx().toInt()).forEach { p ->
+                drawRoundRect(
+                    blockColor(p.block),
+                    topLeft = Offset(p.x.toFloat(), p.y.toFloat()),
+                    size = androidx.compose.ui.geometry.Size(p.width.toFloat(), p.height.toFloat()),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx()),
+                )
+            }
+        }
+    }
+}
+
 // ------------------------------------------------------------------ submenu "Notificação"
 
 /**
@@ -654,6 +904,8 @@ private fun NoticeTab() {
     val slotBounds = remember { mutableStateMapOf<Slot, Rect>() }
     val chipOrigins = remember { mutableStateMapOf<Any, Offset>() }
     var availableBounds by remember { mutableStateOf(Rect.Zero) }
+    val mediaBounds = remember { mutableStateMapOf<MediaBlock, Rect>() }
+    var mediaTray by remember { mutableStateOf(Rect.Zero) }
     var rootOffset by remember { mutableStateOf(Offset.Zero) }
     val ctl = remember { DragController() }
     val acceptedAt = remember { System.currentTimeMillis() }
@@ -680,11 +932,16 @@ private fun NoticeTab() {
     }
     fun slotAt(pos: Offset): Slot? = slotBounds.entries.firstOrNull { it.value.contains(pos) }?.key
     ctl.onDrop = { d ->
-        val item = d.item as NoticeItem
+        val item = d.item
         val target = slotAt(d.pos)
-        when {
-            target != null -> update(layout.place(item, target.line as NoticeLine, target.index))
-            d.from != null && availableBounds.contains(d.pos) -> update(layout.remove(item))
+        if (item is MediaBlock) {
+            // Quadro de Mapa e fotos: troca de lugar com o quadro onde caiu.
+            mediaDropped(layout.media, d, mediaBounds, mediaTray)?.let { update(layout.copy(media = it)) }
+        } else if (item is NoticeItem) {
+            when {
+                target != null -> update(layout.place(item, target.line as NoticeLine, target.index))
+                d.from != null && availableBounds.contains(d.pos) -> update(layout.remove(item))
+            }
         }
         selected = null
     }
@@ -706,7 +963,7 @@ private fun NoticeTab() {
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                NotificationPreview(notice, chosen.stopPoints.size, expanded, photos = layout.showPhotos, photoView = layout.photoView) {
+                NotificationPreview(notice, chosen.stopPoints.size, expanded, photos = layout.showPhotos, photoView = layout.photoView, media = layout.media) {
                     expanded = !expanded
                 }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -751,6 +1008,21 @@ private fun NoticeTab() {
                         }
                     }
                 }
+
+                MediaLayoutCard(
+                    title = "Mapa e fotos na notificação aberta",
+                    media = layout.media,
+                    sizes = MediaSizes.NOTICE,
+                    widthDp = NOTICE_MEDIA_WIDTH_DP,
+                    photoView = layout.photoView,
+                    hint = "Vale também no menu Atividades do \"M\". Em 2 ou 3 linhas a área fica mais alta e sobra " +
+                        "menos espaço para as linhas de baixo (o Android limita a altura da notificação). " +
+                        "Mapa ou fotos desligados (acima) saem do quadro e o vizinho ocupa o espaço.",
+                    ctl = ctl,
+                    cellBounds = mediaBounds,
+                    onTrayBounds = { mediaTray = it },
+                    onChange = { update(layout.copy(media = it)) },
+                )
 
                 Text("FECHADA E ABERTA", style = MaterialTheme.typography.labelMedium)
                 NoticeLine.entries.forEach { line ->
@@ -798,12 +1070,11 @@ private fun NoticeTab() {
  * (Maps Static API). A chave do Google é colada aqui e fica só no celular (o APK é público).
  */
 @Composable
-private fun StreetViewCard() {
+private fun StreetViewCard(view: PhotoView, onView: (PhotoView) -> Unit) {
     val ctx = LocalContext.current
     var on by remember { mutableStateOf(OverlayPrefs.isStreetViewOn(ctx)) }
     var key by remember { mutableStateOf(OverlayPrefs.streetViewKey(ctx).orEmpty()) }
     var showKey by remember { mutableStateOf(false) }
-    var view by remember { mutableStateOf(OverlayPrefs.photoView(ctx)) }
     val month = remember { StreetViewBudget.monthOf(System.currentTimeMillis()) }
     val used = remember { OverlayPrefs.streetViewBudget(ctx).usedIn(month) }
     val usedSatellite = remember { OverlayPrefs.satelliteBudget(ctx).usedIn(month) }
@@ -812,7 +1083,7 @@ private fun StreetViewCard() {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SwitchRow(
                 title = "Fotos da rua e satélite",
-                subtitle = "Coleta (A) e destino (B) — e a parada, se tiver endereço — embaixo do mapa. " +
+                subtitle = "Coleta (A) e destino, no lugar escolhido em Mapa e fotos (abaixo). " +
                     "Toque numa foto para trocar entre foto da rua e satélite; segure para ampliar.",
                 checked = on,
                 onChange = { on = it; OverlayPrefs.setStreetViewOn(ctx, it) },
@@ -829,7 +1100,7 @@ private fun StreetViewCard() {
                 modifier = Modifier.fillMaxWidth(),
             )
             Text("Mostrar no Card (o toque na foto também troca)", style = MaterialTheme.typography.labelMedium)
-            PhotoViewChips(view) { view = it; OverlayPrefs.setPhotoView(ctx, it) }
+            PhotoViewChips(view) { onView(it); OverlayPrefs.setPhotoView(ctx, it) }
             Text(
                 if (key.isBlank()) {
                     "Cole a chave do Google Cloud. Ela fica só neste celular. Ative no mesmo projeto a " +
@@ -875,6 +1146,7 @@ private fun NotificationPreview(
     expanded: Boolean,
     photos: Boolean,
     photoView: PhotoView,
+    media: MediaLayout,
     onToggle: () -> Unit,
 ) {
     val dim = Color(0xFFB0B8BC)
@@ -905,17 +1177,14 @@ private fun NotificationPreview(
                 )
             }
             if (expanded) {
-                if (n.showMap || photos) {
+                // Mapa e fotos no modelo escolhido (os desligados saem e o vizinho ocupa o espaço).
+                val available = buildSet {
+                    if (n.showMap) add(MediaBlock.MAP)
+                    if (photos) addAll(listOf(MediaBlock.PICKUP, MediaBlock.DROPOFF))
+                }
+                if (available.isNotEmpty()) {
                     Spacer(Modifier.height(4.dp))
-                    Row(Modifier.fillMaxWidth().height(112.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        if (n.showMap) MapSketch(stops, Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(8.dp)))
-                        if (photos) {
-                            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                PhotoSketch("A", Color(0xFF2E7D32), photoView, Modifier.weight(1f))
-                                PhotoSketch(('A' + stops + 1).toString(), Color(0xFFC62828), photoView, Modifier.weight(1f))
-                            }
-                        }
-                    }
+                    MediaBoard(media, available, MediaSizes.NOTICE, NOTICE_MEDIA_WIDTH_DP, photoView, stops)
                 }
                 n.details.forEach {
                     Text(
