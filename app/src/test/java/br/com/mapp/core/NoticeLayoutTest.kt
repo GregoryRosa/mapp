@@ -1,5 +1,6 @@
 package br.com.mapp.core
 
+import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.notify.NoticeItem
 import br.com.mapp.core.notify.NoticeLayout
 import br.com.mapp.core.notify.NoticeLine
@@ -66,5 +67,13 @@ class NoticeLayoutTest {
         assertFalse(l.showMap)
         assertTrue(l.showPhotos) // texto salvo antes das fotos: ligado
         assertFalse(NoticeLayout.decode("v1;title=price;photos=0").showPhotos)
+        assertEquals(PhotoView.STREET, l.photoView) // texto salvo antes do satélite: foto da rua
+    }
+
+    @Test fun satelite_na_notificacao_fica_salvo() {
+        val sat = NoticeLayout.DEFAULT.copy(photoView = PhotoView.SATELLITE)
+        assertEquals(sat, NoticeLayout.decode(sat.encode()))
+        assertEquals(PhotoView.STREET, NoticeLayout.DEFAULT.photoView)
+        assertEquals(PhotoView.STREET, NoticeLayout.decode("v1;title=price;view=lixo").photoView)
     }
 }

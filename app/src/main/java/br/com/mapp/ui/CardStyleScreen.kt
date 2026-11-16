@@ -92,6 +92,7 @@ import br.com.mapp.core.card.CardLayout
 import br.com.mapp.core.card.CardLine
 import br.com.mapp.core.card.CardMetric
 import br.com.mapp.core.engine.OfferEvaluator
+import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.geo.StreetViewBudget
 import br.com.mapp.core.model.FilterProfile
@@ -695,7 +696,9 @@ private fun NoticeTab() {
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                NotificationPreview(notice, chosen.stopPoints.size, expanded, photos = layout.showPhotos) { expanded = !expanded }
+                NotificationPreview(notice, chosen.stopPoints.size, expanded, photos = layout.showPhotos, photoView = layout.photoView) {
+                    expanded = !expanded
+                }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = !expanded, onClick = { expanded = false }, label = { Text("Fechada") })
                     FilterChip(selected = expanded, onClick = { expanded = true }, label = { Text("Aberta") })
@@ -724,14 +727,18 @@ private fun NoticeTab() {
                             update(layout.copy(showMap = it))
                         }
                         SwitchRow(
-                            "Fotos da rua (A e B)",
+                            "Fotos de A e B",
                             if (OverlayPrefs.streetViewKey(ctx) != null) {
-                                "Street View da coleta e do destino ao lado do mapa — as mesmas do Card, sem gastar de novo."
+                                "Coleta e destino ao lado do mapa: foto da rua (a mesma do Card, sem gastar de novo) " +
+                                    "ou satélite (uma imagem a mais por ponto, no formato da notificação)."
                             } else {
                                 "Precisa da chave do Google: cole em Card de corridas → Fotos da rua."
                             },
                             layout.showPhotos,
                         ) { update(layout.copy(showPhotos = it)) }
+                        if (layout.showPhotos) {
+                            PhotoViewChips(layout.photoView) { update(layout.copy(photoView = it)) }
+                        }
                     }
                 }
 
@@ -777,8 +784,8 @@ private fun NoticeTab() {
 }
 
 /**
- * Fotos da rua (Street View) da coleta, paradas e destino embaixo do mapa do Card. A chave do
- * Google é colada aqui e fica só no celular (o APK é público).
+ * Fotos da coleta, paradas e destino embaixo do mapa do Card: foto da rua (Street View) ou satélite
+ * (Maps Static API). A chave do Google é colada aqui e fica só no celular (o APK é público).
  */
 @Composable
 private fun StreetViewCard() {
@@ -786,15 +793,17 @@ private fun StreetViewCard() {
     var on by remember { mutableStateOf(OverlayPrefs.isStreetViewOn(ctx)) }
     var key by remember { mutableStateOf(OverlayPrefs.streetViewKey(ctx).orEmpty()) }
     var showKey by remember { mutableStateOf(false) }
-    val used = remember {
-        OverlayPrefs.streetViewBudget(ctx).usedIn(StreetViewBudget.monthOf(System.currentTimeMillis()))
-    }
+    var view by remember { mutableStateOf(OverlayPrefs.photoView(ctx)) }
+    val month = remember { StreetViewBudget.monthOf(System.currentTimeMillis()) }
+    val used = remember { OverlayPrefs.streetViewBudget(ctx).usedIn(month) }
+    val usedSatellite = remember { OverlayPrefs.satelliteBudget(ctx).usedIn(month) }
+    val br = Locale("pt", "BR")
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SwitchRow(
-                title = "Fotos da rua (Street View)",
-                subtitle = "Foto da coleta (A) e do destino (B) — e da parada, se tiver endereço — embaixo do mapa. " +
-                    "Toque numa foto para ampliar.",
+                title = "Fotos da rua e satélite",
+                subtitle = "Coleta (A) e destino (B) — e a parada, se tiver endereço — embaixo do mapa. " +
+                    "Toque numa foto para trocar entre foto da rua e satélite; segure para ampliar.",
                 checked = on,
                 onChange = { on = it; OverlayPrefs.setStreetViewOn(ctx, it) },
             )
@@ -809,16 +818,30 @@ private fun StreetViewCard() {
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
+            Text("Mostrar no Card (o toque na foto também troca)", style = MaterialTheme.typography.labelMedium)
+            PhotoViewChips(view) { view = it; OverlayPrefs.setPhotoView(ctx, it) }
             Text(
                 if (key.isBlank()) {
-                    "Cole a chave do Google Cloud (Street View Static API). Ela fica só neste celular."
+                    "Cole a chave do Google Cloud. Ela fica só neste celular. Ative no mesmo projeto a " +
+                        "Street View Static API (foto da rua) e a Maps Static API (satélite)."
                 } else {
-                    "Fotos este mês: ${"%,d".format(Locale("pt", "BR"), used)} de " +
-                        "${"%,d".format(Locale("pt", "BR"), StreetView.LIMIT_PER_MONTH)}. " +
-                        "O Google cobra a partir de 10.000 no mês; o MApp para antes."
+                    "Este mês: ${"%,d".format(br, used)} fotos da rua e ${"%,d".format(br, usedSatellite)} " +
+                        "imagens de satélite, de ${"%,d".format(br, StreetView.LIMIT_PER_MONTH)} cada. " +
+                        "O Google cobra a partir de 10.000 de cada no mês; o MApp para antes. " +
+                        "Satélite precisa da Maps Static API ativada na mesma chave."
                 },
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+    }
+}
+
+/** Foto da rua ou satélite (Card: o modo atual — o toque na foto também troca; notificação: o que aparece). */
+@Composable
+private fun PhotoViewChips(selected: PhotoView, onSelect: (PhotoView) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        PhotoView.entries.forEach { v ->
+            FilterChip(selected = selected == v, onClick = { onSelect(v) }, label = { Text(v.label) })
         }
     }
 }
@@ -836,7 +859,14 @@ private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onChang
 
 /** Como a notificação fica no celular (fechada ou aberta), com um mapa desenhado de exemplo. */
 @Composable
-private fun NotificationPreview(n: RideNotice, stops: Int, expanded: Boolean, photos: Boolean, onToggle: () -> Unit) {
+private fun NotificationPreview(
+    n: RideNotice,
+    stops: Int,
+    expanded: Boolean,
+    photos: Boolean,
+    photoView: PhotoView,
+    onToggle: () -> Unit,
+) {
     val dim = Color(0xFFB0B8BC)
     Surface(
         shape = RoundedCornerShape(20.dp),
@@ -871,8 +901,8 @@ private fun NotificationPreview(n: RideNotice, stops: Int, expanded: Boolean, ph
                         if (n.showMap) MapSketch(stops, Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(8.dp)))
                         if (photos) {
                             Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                PhotoSketch("A", Color(0xFF2E7D32), Modifier.weight(1f))
-                                PhotoSketch(('A' + stops + 1).toString(), Color(0xFFC62828), Modifier.weight(1f))
+                                PhotoSketch("A", Color(0xFF2E7D32), photoView, Modifier.weight(1f))
+                                PhotoSketch(('A' + stops + 1).toString(), Color(0xFFC62828), photoView, Modifier.weight(1f))
                             }
                         }
                     }
@@ -891,16 +921,16 @@ private fun NotificationPreview(n: RideNotice, stops: Int, expanded: Boolean, ph
     }
 }
 
-/** Lugar da foto da rua na prévia (a de verdade vem do Street View), com a letra do mapa. */
+/** Lugar da foto na prévia (a de verdade vem do Street View ou do satélite do Google), com a letra do mapa. */
 @Composable
-private fun PhotoSketch(letter: String, color: Color, modifier: Modifier) {
+private fun PhotoSketch(letter: String, color: Color, view: PhotoView, modifier: Modifier) {
     Box(modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Color(0xFF3A4046))) {
         Box(
             Modifier.padding(4.dp).size(20.dp).clip(CircleShape).background(color),
             contentAlignment = Alignment.Center,
         ) { Text(letter, color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall) }
         Text(
-            "Foto da rua",
+            view.label,
             Modifier.align(Alignment.Center),
             color = Color(0xFFB0B8BC),
             style = MaterialTheme.typography.labelSmall,

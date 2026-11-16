@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.net.Uri
 import br.com.mapp.core.bubble.BubbleStyle
 import br.com.mapp.core.card.CardLayout
+import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.StreetViewBudget
 import br.com.mapp.core.notify.NoticeLayout
 import br.com.mapp.core.sound.GreatSound
@@ -30,6 +31,8 @@ object OverlayPrefs {
     const val KEY_STREETVIEW_ON = "streetview_on"
     const val KEY_STREETVIEW_KEY = "streetview_key"
     const val KEY_STREETVIEW_BUDGET = "streetview_budget"
+    const val KEY_SATELLITE_BUDGET = "satellite_budget"
+    const val KEY_PHOTO_VIEW = "photo_view"
     const val KEY_TRIP_MEMORY = "trip_memory"
 
     fun of(context: Context): SharedPreferences =
@@ -102,7 +105,10 @@ object OverlayPrefs {
         of(context).edit().putString(KEY_NOTICE_LAYOUT, layout.encode()).apply()
     }
 
-    /** Chave da Street View Static API colada pelo usuário (fica só no celular, fora do APK). */
+    /**
+     * Chave do Google colada pelo usuário (fica só no celular, fora do APK): Street View Static API
+     * para as fotos da rua e Maps Static API para o satélite.
+     */
     fun streetViewKey(context: Context): String? =
         of(context).getString(KEY_STREETVIEW_KEY, null)?.trim()?.takeIf { it.isNotEmpty() }
 
@@ -125,6 +131,24 @@ object OverlayPrefs {
 
     fun setStreetViewBudget(context: Context, budget: StreetViewBudget) {
         of(context).edit().putString(KEY_STREETVIEW_BUDGET, budget.encode()).apply()
+    }
+
+    /** Imagens de satélite (Maps Static API) pedidas ao Google no mês — contador separado das fotos da rua. */
+    fun satelliteBudget(context: Context): StreetViewBudget =
+        StreetViewBudget.decode(of(context).getString(KEY_SATELLITE_BUDGET, null))
+
+    fun setSatelliteBudget(context: Context, budget: StreetViewBudget) {
+        of(context).edit().putString(KEY_SATELLITE_BUDGET, budget.encode()).apply()
+    }
+
+    /**
+     * Fotos do Card: foto da rua ou satélite. Toque numa foto do Card troca (e fica salvo para as
+     * próximas corridas); também dá para escolher em Card → Card de corridas.
+     */
+    fun photoView(context: Context): PhotoView = PhotoView.fromId(of(context).getString(KEY_PHOTO_VIEW, null))
+
+    fun setPhotoView(context: Context, view: PhotoView) {
+        of(context).edit().putString(KEY_PHOTO_VIEW, view.id).apply()
     }
 
     /** Memória do aceite automático (`TripMatcher.snapshot`): ofertas recentes e corridas abertas. */
