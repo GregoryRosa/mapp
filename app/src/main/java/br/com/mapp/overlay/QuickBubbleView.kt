@@ -1574,12 +1574,16 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         val c1 = if (warning) gray else style.logoStart
         val c2 = if (warning) gray else style.logoEnd
         line.strokeWidth = 2.4f * u
+        // Em corrida as pernas param onde ficam a seta (partida) e o pin (chegada); sem corrida o "M"
+        // fica inteiro, com as duas pernas descendo até a mesma altura.
+        val leftEnd = if (riding) 17f else M_BOTTOM
+        val rightEnd = if (riding) 15f else M_BOTTOM
         path.reset()
-        path.moveTo(6.5f * u, 17f * u)
+        path.moveTo(6.5f * u, leftEnd * u)
         path.lineTo(6.5f * u, 7.5f * u)
         path.lineTo(12f * u, 13.5f * u)
         path.lineTo(17.5f * u, 7.5f * u)
-        path.lineTo(17.5f * u, 15f * u)
+        path.lineTo(17.5f * u, rightEnd * u)
         canvas.drawPath(path, line)
 
         // Seta e pin só em corrida (aceita, indo buscar ou em viagem); fora dela fica só a letra "M".
@@ -1706,6 +1710,8 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
     }
 
     private companion object {
+        /** Fim das duas pernas do "M" sem corrida (cabe dentro do anel de status, mesmo grosso). */
+        const val M_BOTTOM = 18f
         /** Seta parada na partida e pin na chegada (em 1/24 do ícone). */
         const val START_X = 6.5f
         const val START_Y = 18.0f
