@@ -19,6 +19,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import br.com.mapp.core.card.AddressItem
 import br.com.mapp.core.card.AddressRow
+import br.com.mapp.core.card.CardFilter
+import br.com.mapp.core.card.CardFilters
 import br.com.mapp.core.card.CardLayout
 import br.com.mapp.core.card.CardMetric
 import br.com.mapp.core.card.CardValues
@@ -32,7 +34,8 @@ import br.com.mapp.maps.MapViews
  * Cabeçalho colorido do cartão (cor do semáforo) com as duas linhas escolhidas em
  * "Estilo do cartão": em cima texto corrido (valor · tempo · nota), embaixo números grandes com
  * barrinha de cor e, se escolhida, a linha de endereços em texto pequeno (uma por ponto A, B, C…,
- * com a letra na cor do marcador do mini mapa). [trailing] = botões à direita da linha de cima (minimizar/fechar).
+ * com a letra na cor do marcador do mini mapa) e as etiquetas dos filtros que casaram (Card → Filtros).
+ * [trailing] = botões à direita da linha de cima (minimizar/fechar).
  * Usado pelo [OfferCardView] e pela prévia da tela de estilo.
  */
 class CardHeaderView(private val context: Context, private val trailing: List<TextView> = emptyList()) {
@@ -67,20 +70,34 @@ class CardHeaderView(private val context: Context, private val trailing: List<Te
         setPadding(0, dp(4), 0, 0)
     }
 
+    /** Etiquetas dos filtros que casaram (Card → Filtros), cada uma na cor do filtro. */
+    private val tagsRow = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(0, dp(6), 0, 0)
+    }
+
     val view: LinearLayout = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(12), dp(4), if (trailing.isEmpty()) dp(12) else dp(4), dp(8))
         addView(topRow, LinearLayout.LayoutParams(MATCH, WRAP))
         addView(bottomRow, LinearLayout.LayoutParams(MATCH, WRAP))
         addView(addressBox, LinearLayout.LayoutParams(MATCH, WRAP))
+        addView(tagsRow, LinearLayout.LayoutParams(MATCH, WRAP))
     }
 
-    fun bind(o: EvaluatedOffer, profile: FilterProfile?, layout: CardLayout) {
-        // Corrida com parada no caminho: Card roxo (as barrinhas de cada item continuam com o semáforo).
+    /**
+     * [filters] = filtros do usuário que casaram com a oferta, na ordem da lista (`CardFilters.matching`):
+     * o 1º que pinta dá a cor do fundo; todos aparecem como etiqueta.
+     */
+    fun bind(o: EvaluatedOffer, profile: FilterProfile?, layout: CardLayout, filters: List<CardFilter> = emptyList()) {
+        // Cor do fundo: filtro do usuário > corrida com parada (roxo) > semáforo. As barrinhas de cada
+        // item continuam com o semáforo.
         val withStop = RideRoute.stopCount(o.raw) > 0
-        val darkText = !withStop && o.signal == Signal.YELLOW
+        val paint = CardFilters.paintColor(filters)
+        val darkText = if (paint != null) CardFilters.darkText(paint) else !withStop && o.signal == Signal.YELLOW
         val fg = if (darkText) DARK_TEXT else WHITE
-        view.background = ColorDrawable(if (withStop) STOP_PURPLE else signalColor(o.signal))
+        view.background = ColorDrawable(paint ?: if (withStop) STOP_PURPLE else signalColor(o.signal))
         trailing.forEach { it.setTextColor(fg) }
 
         platformChip.visibility = if (layout.showPlatform) View.VISIBLE else View.GONE
@@ -111,6 +128,43 @@ class CardHeaderView(private val context: Context, private val trailing: List<Te
         val rows = CardValues.addressRows(o, layout.address)
         addressBox.visibility = if (rows.isEmpty()) View.GONE else View.VISIBLE
         rows.forEach { addressBox.addView(addressRow(it, fg, layout.addressFont / 100f), LinearLayout.LayoutParams(MATCH, WRAP)) }
+
+        bindTags(filters, fg)
+    }
+
+    /** Até [MAX_TAGS] etiquetas ("Área de risco", "Aeroporto"…) e "+2" para as que não couberam. */
+    private fun bindTags(filters: List<CardFilter>, fg: Int) {
+        tagsRow.removeAllViews()
+        tagsRow.visibility = if (filters.isEmpty()) View.GONE else View.VISIBLE
+        filters.take(MAX_TAGS).forEach { f ->
+            val tag = TextView(context).apply {
+                text = f.displayName
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(if (CardFilters.darkText(f.color)) DARK_TEXT else WHITE)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                maxWidth = dp(if (filters.size == 1) 260 else 120)
+                setPadding(dp(8), dp(2), dp(8), dp(2))
+                // Borda na cor do texto do Card: a etiqueta aparece mesmo quando é ela que pinta o fundo.
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(10).toFloat()
+                    setColor(f.color)
+                    setStroke(dp(1), fg)
+                }
+            }
+            tagsRow.addView(tag, LinearLayout.LayoutParams(WRAP, WRAP).apply { marginEnd = dp(6) })
+        }
+        if (filters.size > MAX_TAGS) {
+            tagsRow.addView(
+                TextView(context).apply {
+                    text = "+${filters.size - MAX_TAGS}"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(fg)
+                },
+            )
+        }
     }
 
     /**
@@ -218,6 +272,8 @@ class CardHeaderView(private val context: Context, private val trailing: List<Te
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         /** Letras da linha de endereços (100%). */
         private const val ADDRESS_SP = 12f
+        /** Etiquetas de filtro que cabem numa linha do Card. */
+        private const val MAX_TAGS = 2
         val WHITE = 0xFFFFFFFF.toInt()
         val DARK_TEXT = 0xFF212121.toInt()
         private val RED_BG = 0xFFC62828.toInt()

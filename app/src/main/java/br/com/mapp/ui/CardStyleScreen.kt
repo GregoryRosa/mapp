@@ -88,6 +88,7 @@ import androidx.core.content.IntentCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.com.mapp.MappApp
 import br.com.mapp.core.card.AddressItem
+import br.com.mapp.core.card.CardFilters
 import br.com.mapp.core.card.CardLayout
 import br.com.mapp.core.card.CardLine
 import br.com.mapp.core.card.CardMetric
@@ -137,8 +138,9 @@ private class DragController {
 }
 
 /**
- * Menu "Card" com dois submenus: **Card de corridas** (cabeçalho do cartão da oferta, igual ao
- * Rota PRO) e **Notificação** (o que aparece na notificação da corrida aceita). Nos dois: toque num
+ * Menu "Card" com três submenus: **Card de corridas** (cabeçalho do cartão da oferta, igual ao Rota PRO),
+ * **Notificação** (o que aparece na notificação da corrida aceita) e **Filtros** (cor e etiqueta
+ * quando a corrida casa com uma regra do usuário — [CardFiltersTab]). Nos dois primeiros: toque num
  * item disponível e depois num espaço; toque num item colocado para tirar; ou segure e arraste
  * (também entre espaços, para trocar de lugar). Salva na hora.
  */
@@ -150,9 +152,14 @@ fun CardStyleScreen(onBack: () -> Unit) {
             TabRow(selectedTabIndex = tab, containerColor = Color.Transparent) {
                 Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Card de corridas") })
                 Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Notificação") })
+                Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("Filtros") })
             }
             Box(Modifier.fillMaxWidth().weight(1f)) {
-                if (tab == 0) OfferCardTab() else NoticeTab()
+                when (tab) {
+                    0 -> OfferCardTab()
+                    1 -> NoticeTab()
+                    else -> CardFiltersTab()
+                }
             }
         }
     }
@@ -175,7 +182,9 @@ private fun OfferCardTab() {
 
     val profile by remember { MappApp.repos.profiles.active() }.collectAsStateWithLifecycle(FilterProfile())
     val cost by remember { MappApp.repos.vehicle.config() }.collectAsStateWithLifecycle(VehicleCostConfig())
-    val offer = remember(sample, profile, cost) { OfferEvaluator.evaluate(SAMPLES[sample].second, profile, cost) }
+    val offer = remember(sample, profile, cost) { OfferEvaluator.evaluate(CARD_SAMPLES[sample].second, profile, cost) }
+    // Filtros da aba Filtros: a prévia mostra a cor e a etiqueta quando a corrida de exemplo casa.
+    val filters = remember { OverlayPrefs.cardFilters(ctx) }
 
     fun update(l: CardLayout) {
         layout = l
@@ -226,10 +235,10 @@ private fun OfferCardTab() {
                 AndroidView(
                     factory = { header.view },
                     modifier = Modifier.width(300.dp).clip(RoundedCornerShape(14.dp)),
-                    update = { header.bind(offer, profile, layout) },
+                    update = { header.bind(offer, profile, layout, CardFilters.matching(filters, offer)) },
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SAMPLES.forEachIndexed { i, (label, _) ->
+                    CARD_SAMPLES.forEachIndexed { i, (label, _) ->
                         FilterChip(selected = sample == i, onClick = { sample = i }, label = { Text(label) })
                     }
                 }
@@ -491,7 +500,8 @@ private fun Modifier.dragSource(ctl: DragController, item: Any, label: String, f
     }
 
 /** Ofertas de exemplo para a prévia (avaliadas com o perfil e os custos atuais). */
-private val SAMPLES = listOf(
+/** Corridas de exemplo das prévias do Card (abas Card de corridas e Filtros). */
+internal val CARD_SAMPLES = listOf(
     "Curta" to RawOffer(
         Platform.UBER, 8.43, tripKm = 2.7, tripMin = 5, pickupKm = 1.6, pickupMin = 4, passengerRating = 4.92,
         pickupAddress = "Rua Augusta, 1200", dropoffAddress = "Av. Paulista, 900",
