@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -132,9 +133,9 @@ fun MappTheme(content: @Composable () -> Unit) {
 }
 
 /**
- * Logo do MApp: um "M" desenhado como rota (linha contínua) com ponto de partida e pin de chegada,
- * em gradiente verde-água → lilás sobre um círculo escuro. Mesmo desenho do ícone flutuante e do
- * ícone do celular (grade 24×24).
+ * Logo do MApp: um "M" desenhado como rota (linha contínua, gradiente verde-água → lilás) com uma
+ * **seta** na partida (o carro) e o **pin vermelho** de chegada (80% do pin do ícone flutuante), sobre
+ * um círculo escuro. Mesmo desenho do ícone do celular e do ícone flutuante em corrida (grade 24×24).
  */
 @Composable
 fun MappLogo(size: Dp, modifier: Modifier = Modifier, withBackground: Boolean = true) {
@@ -163,11 +164,43 @@ fun MappLogo(size: Dp, modifier: Modifier = Modifier, withBackground: Boolean = 
             lineTo(17.5f * u, 15f * u)
         }
         drawPath(path, brush, style = Stroke(width = 2.4f * u, cap = StrokeCap.Round, join = StrokeJoin.Round))
-        // partida (anel) e chegada (ponto cheio)
-        drawCircle(MappColors.Teal, radius = 1.6f * u, center = Offset(6.5f * u, 17.6f * u), style = Stroke(width = 1.1f * u))
-        drawCircle(MappColors.Lilac, radius = 1.9f * u, center = Offset(17.5f * u, 17.2f * u))
+
+        // Partida: seta (o carro) virada para cima, com contorno escuro para destacar da linha.
+        val arrow = Path().apply {
+            moveTo(6.5f * u, 16f * u)
+            lineTo(4.9f * u, 19.6f * u)
+            lineTo(6.5f * u, 18.7f * u)
+            lineTo(8.1f * u, 19.6f * u)
+            close()
+        }
+        drawPath(arrow, MappColors.Navy, style = Stroke(width = 0.9f * u, join = StrokeJoin.Round))
+        drawPath(arrow, MappColors.Teal)
+
+        // Chegada: pin vermelho (como o destino nos mapas) com bolinha branca, a 80% do pin do ícone
+        // flutuante; a ponta fica no mesmo lugar e a cabeça cobre o fim do "M".
+        val r = LOGO_PIN_R * u
+        val headY = LOGO_PIN_HEAD_Y * u
+        val tipY = LOGO_PIN_TIP_Y * u
+        val x = 17.5f * u
+        val phi = kotlin.math.acos(r / (tipY - headY))
+        val deg = Math.toDegrees(phi.toDouble()).toFloat()
+        val pin = Path().apply {
+            moveTo(x, tipY)
+            lineTo(x - r * kotlin.math.sin(phi), headY + r * kotlin.math.cos(phi))
+            arcTo(Rect(x - r, headY - r, x + r, headY + r), 90f + deg, 360f - 2 * deg, false)
+            close()
+        }
+        drawPath(pin, MappColors.Navy, style = Stroke(width = 0.6f * u, join = StrokeJoin.Round))
+        drawPath(pin, PinRed)
+        drawCircle(Color.White, radius = 0.8f * u, center = Offset(x, headY))
     }
 }
+
+/** Pin da logo (grade 24×24): 80% do pin do ícone flutuante (raio 2,5 → 2,0; ponta fixa em 19,7). */
+private const val LOGO_PIN_R = 2.0f
+private const val LOGO_PIN_TIP_Y = 19.7f
+private const val LOGO_PIN_HEAD_Y = 19.7f - 4.4f * 0.8f
+private val PinRed = Color(0xFFE53935)
 
 /** Cartão de "vidro" com borda clara, como os blocos do print de referência. */
 @Composable

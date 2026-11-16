@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Logo do MApp: "M" em forma de rota com partida (anel) e chegada (ponto).
-     Mesmo desenho de ui/MappLogo e do ícone flutuante (grade 24×24, aqui ×2,5 + 24 de margem). -->
+<!-- Logo do MApp: "M" em forma de rota com seta na partida (o carro) e pin vermelho na chegada
+     (80% do pin do ícone flutuante). Mesmo desenho de ui/MappLogo e do ícone flutuante em corrida
+     (grade 24×24, aqui ×2,5 + 24 de margem). -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
@@ -23,13 +24,28 @@
                     android:endColor="#FFB59CFF" />
             </aapt:attr>
         </path>
+        <!-- Partida: seta virada para cima, contorno escuro por baixo. -->
         <path
-            android:pathData="M4.9,17.6 a1.6,1.6 0 1,0 3.2,0 a1.6,1.6 0 1,0 -3.2,0"
-            android:strokeWidth="1.1"
-            android:strokeColor="#FF5EE6D8"
+            android:pathData="M6.5,16 L4.9,19.6 L6.5,18.7 L8.1,19.6 Z"
+            android:strokeWidth="0.9"
+            android:strokeColor="#FF07141B"
+            android:strokeLineJoin="round"
             android:fillColor="#00000000" />
         <path
-            android:pathData="M15.6,17.2 a1.9,1.9 0 1,0 3.8,0 a1.9,1.9 0 1,0 -3.8,0"
-            android:fillColor="#FFB59CFF" />
+            android:pathData="M6.5,16 L4.9,19.6 L6.5,18.7 L8.1,19.6 Z"
+            android:fillColor="#FF5EE6D8" />
+        <!-- Chegada: pin vermelho com bolinha branca. -->
+        <path
+            android:pathData="M17.5,19.70 L15.854,17.316 A2.0,2.0 0 1,1 19.146,17.316 Z"
+            android:strokeWidth="0.6"
+            android:strokeColor="#FF07141B"
+            android:strokeLineJoin="round"
+            android:fillColor="#00000000" />
+        <path
+            android:pathData="M17.5,19.70 L15.854,17.316 A2.0,2.0 0 1,1 19.146,17.316 Z"
+            android:fillColor="#FFE53935" />
+        <path
+            android:pathData="M16.7,16.18 a0.8,0.8 0 1,0 1.6,0 a0.8,0.8 0 1,0 -1.6,0"
+            android:fillColor="#FFFFFFFF" />
     </group>
 </vector>
