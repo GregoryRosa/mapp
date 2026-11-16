@@ -12,6 +12,8 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import br.com.mapp.core.geo.PhotoView
+import br.com.mapp.core.geo.SatelliteShot
 import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.GeoPoint
@@ -195,12 +197,12 @@ class ActivitiesView(
                 tv.visibility = if (line != null) View.VISIBLE else View.GONE
             }
 
-            // Fotos da rua: coleta e destino, ligadas em Card → Notificação e com a chave colada.
+            // Fotos da coleta e do destino (rua ou satélite), como em Card → Notificação, com a chave colada.
             val photosOn = layout.showPhotos && OverlayPrefs.streetViewEnabled(context)
             val picked = if (photosOn) StreetView.pick(RideRoute.of(o)) else emptyList()
             val targets = listOfNotNull(picked.firstOrNull(), picked.lastOrNull()).distinct()
-            photoA.bind(targets.getOrNull(0))
-            photoB.bind(targets.getOrNull(1))
+            photoA.bind(targets.getOrNull(0), layout.photoView)
+            photoB.bind(targets.getOrNull(1), layout.photoView)
             photoB.view.visibility = if (targets.size > 1) View.VISIBLE else View.GONE
             photoColumn.visibility = if (targets.isEmpty()) View.GONE else View.VISIBLE
 
@@ -254,7 +256,7 @@ class ActivitiesView(
         return null
     }
 
-    // ------------------------------------------------------------------ foto da rua
+    // ------------------------------------------------------------------ foto da rua / satélite
 
     private inner class PhotoTile {
         private val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
@@ -281,7 +283,7 @@ class ActivitiesView(
             })
         }
 
-        fun bind(stop: RouteStop?) {
+        fun bind(stop: RouteStop?, mode: PhotoView) {
             if (stop == null) return
             badge.text = stop.letter
             badge.background = GradientDrawable().apply {
@@ -290,17 +292,19 @@ class ActivitiesView(
                 setStroke(dp(1), WHITE)
             }
             val point = stop.point
-            val result = point?.let { photoFor(stop.letter, it) }
+            val result = point?.let { photoFor(stop, mode) }
             when {
-                result is StreetViewPhotos.Result.Photo -> show(result.bitmap, result.credit)
+                result is StreetViewPhotos.Result.Photo -> show(result.bitmap, result.credit, satellite = result.satellite)
                 result is StreetViewPhotos.Result.Missing -> show(null, null, result.message)
-                point != null -> show(null, null, "Carregando foto…")
+                point != null -> show(null, null, if (mode == PhotoView.SATELLITE) "Carregando satélite…" else "Carregando foto…")
                 stop.address != null -> show(null, null, "Localizando endereço…")
                 else -> show(null, null, "Endereço não lido")
             }
         }
 
-        private fun show(bmp: Bitmap?, creditText: String?, msg: String? = null) {
+        /** Satélite inteiro (sem cortar o logo/créditos do Google); foto da rua preenche o quadro. */
+        private fun show(bmp: Bitmap?, creditText: String?, msg: String? = null, satellite: Boolean = false) {
+            image.scaleType = if (satellite) ImageView.ScaleType.FIT_CENTER else ImageView.ScaleType.CENTER_CROP
             if (bmp != null) image.setImageBitmap(bmp) else image.setImageDrawable(null)
             credit.text = creditText.orEmpty()
             credit.visibility = if (creditText.isNullOrEmpty()) View.GONE else View.VISIBLE
@@ -310,12 +314,13 @@ class ActivitiesView(
     }
 
     /** Foto já carregada, ou começa a carregar (null = ainda não chegou). */
-    private fun photoFor(letter: String, point: GeoPoint): StreetViewPhotos.Result? {
-        val id = "$letter@${point.lat},${point.lon}"
+    private fun photoFor(stop: RouteStop, mode: PhotoView): StreetViewPhotos.Result? {
+        val point = stop.point ?: return null
+        val id = "${mode.id}|${stop.letter}@${point.lat},${point.lon}"
         photos[id]?.let { return it }
         if (photoJobs[id]?.isActive == true) return null
         photoJobs[id] = scope.launch {
-            photos[id] = StreetViewPhotos.load(context, point)
+            photos[id] = StreetViewPhotos.load(context, stop, mode, SatelliteShot.STRIP)
             photoJobs.remove(id)
             rebind()
         }

@@ -5,9 +5,14 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
 import android.util.LruCache
+import br.com.mapp.core.geo.PhotoView
+import br.com.mapp.core.geo.SatelliteShot
+import br.com.mapp.core.geo.SatelliteView
 import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.geo.StreetViewBudget
 import br.com.mapp.core.model.GeoPoint
+import br.com.mapp.core.route.RouteStop
+import br.com.mapp.maps.MapViews
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -16,22 +21,30 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Busca as fotos da rua do Card (Street View). Só manda ao Google a coordenada do ponto e a chave
- * colada pelo usuário em Card → Card de corridas. Fotos ficam só na memória (cache pequeno).
+ * Busca as fotos dos pontos da corrida: foto da rua (Street View) ou vista de cima (satélite, Maps
+ * Static API). Só manda ao Google a coordenada do ponto (e a letra/cor do marcador, no satélite) e a
+ * chave colada pelo usuário em Card → Card de corridas. Imagens ficam só na memória (cache pequeno).
  */
 object StreetViewPhotos {
     private const val TAG = "MApp/StreetView"
     private const val TIMEOUT_MS = 6_000
 
     sealed interface Result {
-        data class Photo(val bitmap: Bitmap, val credit: String) : Result
+        /**
+         * [satellite] = vista de cima: o logo e os créditos do Google estão dentro da imagem, então
+         * ela aparece inteira (sem recorte) e sem o crédito desenhado por cima ([credit] vazio).
+         */
+        data class Photo(val bitmap: Bitmap, val credit: String, val satellite: Boolean = false) : Result
 
         /** [retry] = falha passageira (rede, chave): tenta de novo no próximo desenho do Card. */
         data class Missing(val message: String, val retry: Boolean = false) : Result
     }
 
-    /** ~8 MB de fotos (≈ 8 fotos de 640×420); "sem foto aqui" também fica guardado. */
-    private val cache = object : LruCache<String, Result>(8 * 1024 * 1024) {
+    /**
+     * ~12 MB de imagens (≈ 11 de 640×420: os 3 pontos de uma corrida nos dois modos e mais algumas);
+     * "sem foto aqui" também fica guardado.
+     */
+    private val cache = object : LruCache<String, Result>(12 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Result): Int =
             if (value is Result.Photo) value.bitmap.byteCount else 1
     }
@@ -40,6 +53,18 @@ object StreetViewPhotos {
 
     fun cached(point: GeoPoint): Result? = cache.get(StreetView.cacheKey(point))
 
+    /**
+     * Imagem já na memória do ponto [stop] no modo [view] (null = ainda não buscada). [shot] = tamanho
+     * do satélite (Card ou faixa da notificação/Atividades).
+     */
+    fun cached(stop: RouteStop, view: PhotoView, shot: SatelliteShot = SatelliteShot.CARD): Result? {
+        val point = stop.point ?: return null
+        return when (view) {
+            PhotoView.STREET -> cached(point)
+            PhotoView.SATELLITE -> cache.get(satelliteKey(stop, point, shot))
+        }
+    }
+
     suspend fun load(context: Context, point: GeoPoint): Result {
         val key = OverlayPrefs.streetViewKey(context)
             ?: return Result.Missing("Cole a chave do Google em Card", retry = true)
@@ -47,6 +72,73 @@ object StreetViewPhotos {
         val result = withContext(Dispatchers.IO) { fetch(context.applicationContext, point, key) }
         if (!(result is Result.Missing && result.retry)) cache.put(StreetView.cacheKey(point), result)
         return result
+    }
+
+    /** Foto da rua ou vista de cima do ponto [stop] (com a letra e a cor dele no marcador do satélite). */
+    suspend fun load(
+        context: Context,
+        stop: RouteStop,
+        view: PhotoView,
+        shot: SatelliteShot = SatelliteShot.CARD,
+    ): Result {
+        val point = stop.point ?: return Result.Missing("Endereço não lido", retry = true)
+        if (view == PhotoView.STREET) return load(context, point)
+        val key = OverlayPrefs.streetViewKey(context)
+            ?: return Result.Missing("Cole a chave do Google em Card", retry = true)
+        val id = satelliteKey(stop, point, shot)
+        cache.get(id)?.let { return it }
+        val color = MapViews.colorOf(stop.kind)
+        val result = withContext(Dispatchers.IO) { fetchSatellite(context.applicationContext, point, stop.letter, color, key, shot) }
+        if (!(result is Result.Missing && result.retry)) cache.put(id, result)
+        return result
+    }
+
+    private fun satelliteKey(stop: RouteStop, point: GeoPoint, shot: SatelliteShot) =
+        SatelliteView.cacheKey(point, stop.letter, MapViews.colorOf(stop.kind), shot)
+
+    /**
+     * Vista de cima: uma chamada só (não há consulta grátis antes). Conta no limite do mês do
+     * satélite só quando a imagem chega (pedido recusado pelo Google não é cobrado).
+     */
+    private fun fetchSatellite(
+        context: Context,
+        point: GeoPoint,
+        letter: String,
+        color: Int,
+        key: String,
+        shot: SatelliteShot,
+    ): Result {
+        val month = StreetViewBudget.monthOf(System.currentTimeMillis())
+        synchronized(budgetLock) {
+            if (!OverlayPrefs.satelliteBudget(context).canSpend(month, SatelliteView.LIMIT_PER_MONTH)) {
+                return Result.Missing("Limite de satélite do mês", retry = true)
+            }
+        }
+        return try {
+            val (code, bytes) = get(SatelliteView.imageUrl(point, key, letter, color, shot))
+            when (code) {
+                200 -> {
+                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        ?: return Result.Missing("Satélite indisponível", retry = true)
+                    synchronized(budgetLock) {
+                        OverlayPrefs.setSatelliteBudget(context, OverlayPrefs.satelliteBudget(context).spend(month))
+                    }
+                    Result.Photo(bitmap, credit = "", satellite = true)
+                }
+                // Chave sem a Maps Static API ativada (ou restrita a outras APIs).
+                403 -> {
+                    Log.w(TAG, "Satélite recusado: ${bytes.decodeToString().take(200)}")
+                    Result.Missing("Ative a Maps Static API na chave", retry = true)
+                }
+                429 -> Result.Missing("Cota do Google esgotada", retry = true)
+                else -> {
+                    Log.w(TAG, "Satélite HTTP $code: ${bytes.decodeToString().take(200)}")
+                    Result.Missing("Satélite indisponível", retry = true)
+                }
+            }
+        } catch (e: IOException) {
+            Result.Missing("Sem internet", retry = true)
+        }
     }
 
     private fun fetch(context: Context, point: GeoPoint, key: String): Result {

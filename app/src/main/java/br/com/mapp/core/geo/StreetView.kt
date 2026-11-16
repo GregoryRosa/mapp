@@ -74,12 +74,15 @@ object StreetView {
     private fun enc(s: String) = URLEncoder.encode(s.trim(), "UTF-8")
 }
 
-/** Fotos pedidas ao Google no mês [month] ("2026-11"): o contador zera quando o mês vira. */
+/**
+ * Imagens pedidas ao Google no mês [month] ("2026-11"): o contador zera quando o mês vira. Um
+ * contador para as fotos da rua e outro para o satélite ([SatelliteView.LIMIT_PER_MONTH]).
+ */
 data class StreetViewBudget(val month: String = "", val used: Int = 0) {
 
     fun usedIn(month: String): Int = if (month == this.month) used else 0
 
-    fun canSpend(month: String): Boolean = usedIn(month) < StreetView.LIMIT_PER_MONTH
+    fun canSpend(month: String, limit: Int = StreetView.LIMIT_PER_MONTH): Boolean = usedIn(month) < limit
 
     fun spend(month: String): StreetViewBudget = StreetViewBudget(month, usedIn(month) + 1)
 

@@ -18,6 +18,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
@@ -43,7 +44,8 @@ import kotlin.math.max
 /**
  * Cartão flutuante (View tradicional, sem XML/Compose): cabeçalho na cor do semáforo com as
  * informações escolhidas em "Estilo do cartão" ([CardHeaderView]), alertas de zona, mini mapa e fotos
- * da rua (Street View) da coleta, paradas e destino. Arrastável pela barra de título; não bloqueia toques fora dele.
+ * da coleta, paradas e destino — foto da rua (Street View) ou satélite: toque troca, segurar amplia.
+ * Arrastável pela barra de título; não bloqueia toques fora dele.
  * Reutilizável: [dismiss] só tira da tela; [destroy] libera o mapa.
  */
 class OfferCardView(
@@ -89,6 +91,14 @@ class OfferCardView(
                 renderPhotos()
                 applyMinimized()
             }
+            // Escolhido em Card → Card de corridas (o toque na foto já trocou aqui mesmo).
+            OverlayPrefs.KEY_PHOTO_VIEW -> {
+                val view = OverlayPrefs.photoView(context)
+                if (view != photoView) {
+                    photoView = view
+                    if (attached && !minimized) renderPhotos()
+                }
+            }
         }
     }
 
@@ -102,7 +112,7 @@ class OfferCardView(
         setDestroyMode(false)
     }
 
-    // ---- Fotos da rua (Street View): A, B… lado a lado embaixo do mapa; toque amplia ----
+    // ---- Fotos dos pontos: A, B… lado a lado embaixo do mapa; toque = rua ⇄ satélite, segurar = amplia ----
     private val photosRow = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         visibility = View.GONE
@@ -110,6 +120,9 @@ class OfferCardView(
     private val photoCells = LinkedHashMap<String, PhotoCell>()
     private var zoomedLetter: String? = null
     private var photosOfferId: Any? = null
+
+    /** Foto da rua ou satélite (todas as fotos juntas; fica salvo para as próximas corridas). */
+    private var photoView = OverlayPrefs.photoView(context)
 
     private val body = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -303,11 +316,21 @@ class OfferCardView(
                 photoCells[stop.letter] = cell
             }
         }
-        stops.forEach { photoCells[it.letter]?.bind(it) }
+        stops.forEach { photoCells[it.letter]?.bind(it, photoView) }
         photosRow.visibility = if (stops.isEmpty()) View.GONE else View.VISIBLE
     }
 
-    /** Toque numa foto: ela ocupa a largura toda (as outras somem); outro toque volta. */
+    /**
+     * Toque numa foto: todas trocam entre foto da rua e satélite (A e B sempre no mesmo modo, para
+     * comparar). A escolha fica salva para as próximas corridas.
+     */
+    private fun togglePhotoView() {
+        photoView = photoView.other()
+        OverlayPrefs.setPhotoView(context, photoView)
+        renderPhotos()
+    }
+
+    /** Segurar uma foto: ela ocupa a largura toda (as outras somem); segurar de novo volta. */
     private fun toggleZoom(letter: String) {
         zoomedLetter = if (zoomedLetter == letter) null else letter
         val zoom = zoomedLetter
@@ -328,7 +351,10 @@ class OfferCardView(
         }
     }
 
-    /** Uma foto: letra do mapa no canto (mesma cor do marcador), crédito e data embaixo. */
+    /**
+     * Uma foto: letra do mapa no canto (mesma cor do marcador), crédito e data embaixo e, no canto
+     * de cima, o modo que o toque mostra. Satélite aparece inteiro (logo e créditos do Google na imagem).
+     */
     private inner class PhotoCell(stop: RouteStop) {
         private val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
         private val status = text(11f, color = SECONDARY).apply {
@@ -339,6 +365,11 @@ class OfferCardView(
             setShadowLayer(3f, 0f, 0f, 0xFF000000.toInt())
             setPadding(dp(4), 0, dp(4), dp(2))
         }
+        /** O que o toque mostra ("⇄ satélite" / "⇄ rua"), no canto de cima (os de baixo são do Google). */
+        private val modeHint = text(9f, color = 0xEEFFFFFF.toInt()).apply {
+            setShadowLayer(3f, 0f, 0f, 0xFF000000.toInt())
+            setPadding(dp(4), dp(2), dp(4), 0)
+        }
         private val badge = text(12f, bold = true).apply {
             text = stop.letter
             gravity = Gravity.CENTER
@@ -348,37 +379,44 @@ class OfferCardView(
                 setStroke(dp(1), 0xFFFFFFFF.toInt())
             }
         }
+        private val title = MapViews.titleOf(stop)
         val view = FrameLayout(context).apply {
             background = GradientDrawable().apply {
                 setColor(PHOTO_BG)
                 cornerRadius = 10f * density
             }
             clipToOutline = true
-            contentDescription = "Foto da rua: ${MapViews.titleOf(stop)}"
             addView(image, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(status, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
             addView(credit, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.END))
+            addView(modeHint, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END))
             addView(badge, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.TOP or Gravity.START).apply { setMargins(dp(4), dp(4), 0, 0) })
-            setOnClickListener { toggleZoom(stop.letter) }
+            setOnClickListener { togglePhotoView() }
+            setOnLongClickListener {
+                toggleZoom(stop.letter)
+                true
+            }
         }
         private var loadedId: String? = null
         private var job: Job? = null
 
-        fun bind(stop: RouteStop) {
+        fun bind(stop: RouteStop, mode: PhotoView) {
+            modeHint.text = "⇄ ${if (mode == PhotoView.STREET) "satélite" else "rua"}"
+            view.contentDescription = "${mode.label}: $title. Toque para ver ${mode.other().label.lowercase()}; segure para ampliar."
             val point = stop.point
             if (point == null) {
                 reset()
                 showMissing(if (stop.address != null) "Localizando endereço…" else "Endereço não lido")
                 return
             }
-            val id = StreetView.cacheKey(point)
+            val id = "${mode.id}|${StreetView.cacheKey(point)}"
             if (id == loadedId) return
             reset()
             loadedId = id
-            StreetViewPhotos.cached(point)?.let { show(it); return }
-            showMissing("Carregando foto…")
+            StreetViewPhotos.cached(stop, mode)?.let { show(it); return }
+            showMissing(if (mode == PhotoView.SATELLITE) "Carregando satélite…" else "Carregando foto…")
             job = scope.launch {
-                val result = StreetViewPhotos.load(context, point)
+                val result = StreetViewPhotos.load(context, stop, mode)
                 if (loadedId != id) return@launch
                 show(result)
                 // Falha passageira (rede, chave): tenta de novo no próximo desenho do Card.
@@ -395,10 +433,12 @@ class OfferCardView(
         private fun show(result: StreetViewPhotos.Result) {
             when (result) {
                 is StreetViewPhotos.Result.Photo -> {
+                    // Satélite inteiro (sem cortar o logo/créditos do Google); foto da rua preenche o quadro.
+                    image.scaleType = if (result.satellite) ImageView.ScaleType.FIT_CENTER else ImageView.ScaleType.CENTER_CROP
                     image.setImageBitmap(result.bitmap)
                     status.visibility = View.GONE
                     credit.text = result.credit
-                    credit.visibility = View.VISIBLE
+                    credit.visibility = if (result.credit.isEmpty()) View.GONE else View.VISIBLE
                 }
                 is StreetViewPhotos.Result.Missing -> showMissing(result.message)
             }

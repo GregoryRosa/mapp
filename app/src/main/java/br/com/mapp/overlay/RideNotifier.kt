@@ -10,6 +10,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.Build
 import android.util.Log
@@ -20,6 +21,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import br.com.mapp.R
+import br.com.mapp.core.geo.PhotoView
+import br.com.mapp.core.geo.SatelliteShot
 import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.GeoPoint
@@ -69,6 +72,7 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
 
     /** Fotos da rua: coleta e destino (letras do mapa) e o quadro pronto de cada uma. */
     private var photoTargets: List<RouteStop> = emptyList()
+    private var photoMode = PhotoView.STREET
     private val photoTiles = HashMap<String, Bitmap>()
     private var photoJob: Job? = null
     private var photoVersion = 0
@@ -166,16 +170,20 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
     }
 
     /**
-     * Fotos da rua da coleta e do destino (as mesmas do Card: [StreetViewPhotos] guarda na memória,
-     * então normalmente não pede nada ao Google de novo). Ligadas em Card → Notificação e com a chave colada.
+     * Fotos da coleta e do destino — foto da rua ou satélite, como escolhido em Card → Notificação
+     * (as mesmas do Card: [StreetViewPhotos] guarda na memória, então normalmente não pede nada ao
+     * Google de novo). Ligadas em Card → Notificação e com a chave colada.
      */
     private fun refreshPhotos(force: Boolean) {
         val o = offer ?: return
-        val on = OverlayPrefs.noticeLayout(context).showPhotos && OverlayPrefs.streetViewEnabled(context)
+        val layout = OverlayPrefs.noticeLayout(context)
+        val on = layout.showPhotos && OverlayPrefs.streetViewEnabled(context)
         val picked = if (on) StreetView.pick(RideRoute.of(o)) else emptyList()
         val targets = listOfNotNull(picked.firstOrNull(), picked.lastOrNull()).distinct()
-        if (!force && targets == photoTargets) return
+        val mode = layout.photoView
+        if (!force && targets == photoTargets && mode == photoMode) return
         photoTargets = targets
+        photoMode = mode
         photoJob?.cancel()
         photoTiles.clear()
         photoVersion++
@@ -183,7 +191,7 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
         val (w, h) = photoTileSize()
         targets.forEach { stop ->
             val msg = when {
-                stop.point != null -> "Carregando foto…"
+                stop.point != null -> if (mode == PhotoView.SATELLITE) "Carregando satélite…" else "Carregando foto…"
                 stop.address != null -> "Localizando endereço…"
                 else -> "Endereço não lido"
             }
@@ -192,8 +200,8 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
         val forKey = key
         photoJob = scope.launch {
             targets.forEach { stop ->
-                val point = stop.point ?: return@forEach
-                val result = StreetViewPhotos.load(context, point)
+                if (stop.point == null) return@forEach
+                val result = StreetViewPhotos.load(context, stop, mode, SatelliteShot.STRIP)
                 if (forKey != key) return@launch
                 photoTiles[stop.letter] = when (result) {
                     is StreetViewPhotos.Result.Photo -> photoTile(stop, result, w, h)
@@ -218,11 +226,25 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
         return (widthDp * scale).toInt().coerceAtLeast(1) to (heightDp * scale).toInt().coerceAtLeast(1)
     }
 
-    /** Foto cortada no tamanho do quadro (centro, onde fica a fachada) + letra e crédito desenhados. */
+    /**
+     * Foto da rua cortada no tamanho do quadro (centro, onde fica a fachada) + letra e crédito
+     * desenhados. Satélite: imagem inteira, sem corte e sem crédito por cima (o logo e os créditos do
+     * Google estão dentro dela).
+     */
     private fun photoTile(stop: RouteStop, photo: StreetViewPhotos.Result.Photo, w: Int, h: Int): Bitmap {
         val out = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565)
         val canvas = Canvas(out)
         val src = photo.bitmap
+        if (photo.satellite) {
+            canvas.drawColor(PHOTO_BG)
+            val fit = minOf(w.toFloat() / src.width, h.toFloat() / src.height)
+            val dw = src.width * fit
+            val dh = src.height * fit
+            val dest = RectF((w - dw) / 2f, (h - dh) / 2f, (w + dw) / 2f, (h + dh) / 2f)
+            canvas.drawBitmap(src, null, dest, Paint(Paint.FILTER_BITMAP_FLAG))
+            drawBadge(canvas, stop, h)
+            return out
+        }
         val scale = maxOf(w.toFloat() / src.width, h.toFloat() / src.height)
         val cw = (w / scale).toInt().coerceIn(1, src.width)
         val ch = (h / scale).toInt().coerceIn(1, src.height)

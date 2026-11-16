@@ -1,5 +1,7 @@
 package br.com.mapp.core.notify
 
+import br.com.mapp.core.geo.PhotoView
+
 /** Informações que podem ir para a notificação da corrida aceita (menu Card → Notificação). */
 enum class NoticeItem(val id: String, val label: String) {
     KIND("kind", "Tipo (UberX…)"),
@@ -42,14 +44,15 @@ enum class NoticeLine(val id: String, val label: String, val slots: Int, val exp
  * O que aparece em cada linha da notificação da corrida aceita, sem repetir item (igual ao
  * [br.com.mapp.core.card.CardLayout]). Listas sem buracos: a posição é a ordem na lista.
  * [headline] = "Corrida aceita" no começo do título; [showMap] = mapa na notificação aberta;
- * [showPhotos] = fotos da rua (Street View) da coleta e do destino ao lado do mapa (precisam da
- * chave do Google colada em Card → Card de corridas).
+ * [showPhotos] = fotos da coleta e do destino ao lado do mapa (precisam da chave do Google colada em
+ * Card → Card de corridas); [photoView] = foto da rua (Street View) ou vista de cima (satélite).
  */
 data class NoticeLayout(
     val lines: Map<NoticeLine, List<NoticeItem>>,
     val headline: Boolean = true,
     val showMap: Boolean = true,
     val showPhotos: Boolean = true,
+    val photoView: PhotoView = PhotoView.STREET,
 ) {
     fun line(line: NoticeLine): List<NoticeItem> = lines[line].orEmpty()
 
@@ -95,6 +98,7 @@ data class NoticeLayout(
         append(";headline=").append(if (headline) 1 else 0)
         append(";map=").append(if (showMap) 1 else 0)
         append(";photos=").append(if (showPhotos) 1 else 0)
+        append(";view=").append(photoView.id)
     }
 
     companion object {
@@ -136,6 +140,7 @@ data class NoticeLayout(
                 headline = map["headline"] != "0",
                 showMap = map["map"] != "0",
                 showPhotos = map["photos"] != "0",
+                photoView = PhotoView.fromId(map["view"]),
             )
         }
     }
