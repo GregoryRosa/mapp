@@ -1465,6 +1465,7 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
     private val posA = FloatArray(2)
     private val posB = FloatArray(2)
     private val arc = RectF()
+    private val pinOval = RectF()
     private var shaderSide = 0f
     private var shaderWarning = false
 
@@ -1569,7 +1570,7 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         path.lineTo(17.5f * u, 15f * u)
         canvas.drawPath(path, line)
 
-        drawPin(canvas, u, c2)
+        drawPin(canvas, u)
         if (riding && !warning) {
             drawMovingArrow(canvas, u, c1, c2)
         } else {
@@ -1586,22 +1587,36 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         }
     }
 
-    /** Pin de chegada (gota com furo) no fim do "M". */
-    private fun drawPin(canvas: Canvas, u: Float, color: Int) {
+    /**
+     * Pin de chegada no fim do "M", como o destino nos mapas: gota **vermelha** com bolinha branca e
+     * contorno escuro — não segue as cores do logo, para não sumir no gradiente (cinza com o leitor
+     * desligado). A ponta para antes do anel de status, mesmo grosso.
+     */
+    private fun drawPin(canvas: Canvas, u: Float) {
         val x = PIN_X * u
-        val y = PIN_Y * u
-        val r = 1.9f * u
+        val y = PIN_HEAD_Y * u
+        val r = PIN_R * u
+        val tip = PIN_TIP_Y * u
+        // Lados retos da ponta tangentes à cabeça.
+        val phi = kotlin.math.acos(r / (tip - y))
+        val sx = r * sin(phi)
+        val sy = r * cos(phi)
+        val deg = Math.toDegrees(phi.toDouble()).toFloat()
+        pinOval.set(x - r, y - r, x + r, y + r)
         pin.reset()
-        pin.addCircle(x, y, r, android.graphics.Path.Direction.CW)
-        pin.moveTo(x - r * 0.82f, y + r * 0.58f)
-        pin.lineTo(x, y + 3.4f * u)
-        pin.lineTo(x + r * 0.82f, y + r * 0.58f)
+        pin.moveTo(x, tip)
+        pin.lineTo(x - sx, y + sy)
+        pin.arcTo(pinOval, 90f + deg, 360f - 2 * deg, false)
         pin.close()
+        outline.color = ringBg
+        outline.alpha = 255
+        outline.strokeWidth = 0.7f * u
+        canvas.drawPath(pin, outline)
         dot.style = Paint.Style.FILL
-        dot.color = color
+        dot.color = if (warning) gray else PIN_RED
         canvas.drawPath(pin, dot)
-        dot.color = ringBg
-        canvas.drawCircle(x, y, 0.75f * u, dot)
+        dot.color = WHITE_DOT
+        canvas.drawCircle(x, y, 1.0f * u, dot)
     }
 
     /** Seta de navegação (o carro) com a ponta virada para [degrees]; contorno escuro para destacar da linha. */
@@ -1641,7 +1656,7 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
             travel.lineTo(6.5f * u, 7.5f * u)
             travel.lineTo(12f * u, 13.5f * u)
             travel.lineTo(17.5f * u, 7.5f * u)
-            travel.lineTo(PIN_X * u, (PIN_Y - 0.6f) * u)
+            travel.lineTo(PIN_X * u, PIN_HEAD_Y * u)
             travelMeasure.setPath(travel, false)
             travelLength = travelMeasure.length
         }
@@ -1674,7 +1689,13 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         const val START_X = 6.5f
         const val START_Y = 18.0f
         const val PIN_X = 17.5f
-        const val PIN_Y = 16.5f
+        /** Pin vermelho: centro da cabeça (onde o "M" termina), raio e ponta. */
+        const val PIN_HEAD_Y = 15.3f
+        const val PIN_R = 2.5f
+        const val PIN_TIP_Y = 19.7f
+        /** Vermelho do destino (um tom mais vivo que o do mapa, para destacar no fundo escuro). */
+        val PIN_RED: Int = 0xFFE53935.toInt()
+        val WHITE_DOT: Int = 0xFFFFFFFF.toInt()
         /** Em corrida: uma volta da seta pelo "M" e quanto dela é aparecer/sumir. */
         const val TRAVEL_MS = 3_000L
         const val FADE_IN = 0.08f
