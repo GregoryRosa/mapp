@@ -343,10 +343,10 @@ object CardValues {
     }
 
     private fun perKm(o: EvaluatedOffer) = o.metrics.perKm
-    private fun perMin(o: EvaluatedOffer) = o.metrics.totalMin?.takeIf { it > 0 }?.let { o.raw.price / it }
-    private fun netPerHour(o: EvaluatedOffer) =
+    internal fun perMin(o: EvaluatedOffer) = o.metrics.totalMin?.takeIf { it > 0 }?.let { o.raw.price / it }
+    internal fun netPerHour(o: EvaluatedOffer) =
         o.metrics.netProfit?.let { net -> o.metrics.totalMin?.takeIf { it > 0 }?.let { net / it * 60.0 } }
-    private fun netPercent(o: EvaluatedOffer) =
+    internal fun netPercent(o: EvaluatedOffer) =
         o.metrics.netProfit?.let { net -> o.raw.price.takeIf { it > 0 }?.let { net / it * 100.0 } }
 
     private fun pickup(o: EvaluatedOffer): String {

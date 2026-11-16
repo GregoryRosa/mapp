@@ -18,6 +18,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import br.com.mapp.core.card.CardFilters
 import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.model.EvaluatedOffer
@@ -85,7 +86,8 @@ class OfferCardView(
     /** Muda o estilo na tela do app: o cartão aberto já mostra o novo. */
     private val layoutListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when (key) {
-            OverlayPrefs.KEY_CARD_LAYOUT -> offer?.let { headerView.bind(it, profile, OverlayPrefs.cardLayout(context)) }
+            // Estilo ou filtros mudados na tela do app: o Card aberto já mostra.
+            OverlayPrefs.KEY_CARD_LAYOUT, OverlayPrefs.KEY_CARD_FILTERS -> offer?.let { bindHeader(it) }
             OverlayPrefs.KEY_STREETVIEW_ON, OverlayPrefs.KEY_STREETVIEW_KEY -> if (attached && !minimized) {
                 photoCells.values.forEach { it.reset() }
                 renderPhotos()
@@ -239,11 +241,17 @@ class OfferCardView(
     // ---------------------------------------------------------------------
 
     private fun bind(o: EvaluatedOffer) {
-        headerView.bind(o, profile, OverlayPrefs.cardLayout(context))
+        bindHeader(o)
         bindReasons(o)
         if (!minimized) renderPhotos()
         applyMinimized()
         if (!minimized) renderMap()
+    }
+
+    /** Cabeçalho com o estilo salvo e os filtros do usuário que casam com a oferta (cor + etiquetas). */
+    private fun bindHeader(o: EvaluatedOffer) {
+        val matched = CardFilters.matching(OverlayPrefs.cardFilters(context), o)
+        headerView.bind(o, profile, OverlayPrefs.cardLayout(context), matched)
     }
 
     private fun bindReasons(o: EvaluatedOffer) {

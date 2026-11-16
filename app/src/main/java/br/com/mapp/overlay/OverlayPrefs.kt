@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.net.Uri
 import br.com.mapp.core.bubble.BubbleStyle
+import br.com.mapp.core.card.CardFilter
+import br.com.mapp.core.card.CardFilters
 import br.com.mapp.core.card.CardLayout
 import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.StreetViewBudget
@@ -21,6 +23,7 @@ object OverlayPrefs {
     const val KEY_BUBBLE_X = "bubble_x"
     const val KEY_BUBBLE_Y = "bubble_y"
     const val KEY_CARD_LAYOUT = "card_layout"
+    const val KEY_CARD_FILTERS = "card_filters"
     const val KEY_GREAT_SOUND = "great_sound"
     const val KEY_GREAT_SOUND_URI = "great_sound_uri"
     const val KEY_STOP_SOUND = "stop_sound"
@@ -50,6 +53,13 @@ object OverlayPrefs {
 
     fun setCardLayout(context: Context, layout: CardLayout) {
         of(context).edit().putString(KEY_CARD_LAYOUT, layout.encode()).apply()
+    }
+
+    /** Filtros do Card (menu Card → Filtros): cor e etiqueta quando a corrida casa; ordem = prioridade da cor. */
+    fun cardFilters(context: Context): List<CardFilter> = CardFilters.decode(of(context).getString(KEY_CARD_FILTERS, null))
+
+    fun setCardFilters(context: Context, filters: List<CardFilter>) {
+        of(context).edit().putString(KEY_CARD_FILTERS, CardFilters.encode(filters)).apply()
     }
 
     /** Som de corrida ótima (tudo verde no Card); padrão: [GreatSound.DEFAULT]. */

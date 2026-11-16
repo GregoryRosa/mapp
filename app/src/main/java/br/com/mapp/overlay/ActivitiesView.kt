@@ -12,6 +12,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import br.com.mapp.core.card.CardFilters
 import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.SatelliteShot
 import br.com.mapp.core.geo.StreetView
@@ -188,8 +189,10 @@ class ActivitiesView(
             box.background = GradientDrawable().apply {
                 cornerRadius = dp(12).toFloat()
                 setColor(SECTION_BG)
-                // Corrida com parada: borda roxa, igual à cor da notificação.
-                if (text.hasStops) setStroke(dp(2), CardHeaderView.STOP_PURPLE)
+                // Borda na cor da notificação: filtro do Card que pinta, ou roxo na corrida com parada.
+                val filterColor = CardFilters.paintColor(CardFilters.matching(OverlayPrefs.cardFilters(context), o))
+                val border = filterColor ?: if (text.hasStops) CardHeaderView.STOP_PURPLE else null
+                if (border != null) setStroke(dp(2), border)
             }
             lines.forEachIndexed { i, tv ->
                 val line = text.details.getOrNull(i)

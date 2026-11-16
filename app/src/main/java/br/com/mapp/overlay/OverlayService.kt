@@ -21,6 +21,7 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import br.com.mapp.MappApp
 import br.com.mapp.core.bus.OfferBus
+import br.com.mapp.core.card.CardFilters
 import br.com.mapp.core.card.CardValues
 import br.com.mapp.core.route.RideRoute
 import br.com.mapp.core.sound.OfferSound
@@ -98,6 +99,9 @@ class OverlayService : LifecycleService() {
     private var shownKey: OfferKey? = null
     private var dismissedKey: OfferKey? = null
     private var announcedZones: Set<ZoneHit> = emptySet()
+
+    /** Nomes de filtros do Card já ditos pela voz nesta oferta (filtro que casa depois é dito uma vez). */
+    private var announcedFilters: Set<String> = emptySet()
 
     // ---- Jornada ----
     private var costPerKm: Double = 0.0
@@ -829,17 +833,26 @@ class OverlayService : LifecycleService() {
         val great = CardValues.allGreen(offer, activeProfile, OverlayPrefs.cardLayout(this))
         val hasStops = RideRoute.stopCount(offer.raw) > 0
         val stopSound = OverlayPrefs.stopSound(this)
+        // Filtros do Card (Card → Filtros) que casam e têm "falar o nome".
+        val spokenFilters = CardFilters.spoken(CardFilters.matching(OverlayPrefs.cardFilters(this), offer))
         if (key != shownKey) {
             shownKey = key
             announcedZones = alertZones
+            announcedFilters = spokenFilters.toSet()
             // Um som antes da voz: aviso de parada (se ligado) ou, tudo verde, som de corrida ótima.
             val soundMs = when (OfferSounds.pick(hasStops, great, stopSound)) {
                 OfferSound.STOP -> playStopAlert(key)
                 OfferSound.GREAT -> playGreat(key)
                 null -> 0L
             }
-            voice?.announce(offer, soundMs)
+            voice?.announce(offer, soundMs, spokenFilters)
         } else {
+            // Filtro que só casou agora (endereço ou número lido noutro quadro): diz só o que é novo.
+            val freshFilters = spokenFilters.filter { it !in announcedFilters }
+            if (freshFilters.isNotEmpty()) {
+                announcedFilters = announcedFilters + freshFilters
+                voice?.announceFilters(freshFilters)
+            }
             if (!announcedZones.containsAll(alertZones)) {
                 // Zonas chegam na 2ª etapa (depois da geocodificação): avisa só o que é novo.
                 val fresh = alertZones - announcedZones

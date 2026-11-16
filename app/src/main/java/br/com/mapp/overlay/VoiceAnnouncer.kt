@@ -37,15 +37,24 @@ class VoiceAnnouncer(context: Context) : TextToSpeech.OnInitListener {
         ready = true
     }
 
-    /** [delayMs] = espera antes de falar (som de corrida ótima tocando). */
-    fun announce(offer: EvaluatedOffer, delayMs: Long = 0) {
+    /**
+     * [delayMs] = espera antes de falar (som de corrida ótima tocando). [filters] = nomes dos filtros
+     * do Card que casaram e têm "falar o nome" (Card → Filtros).
+     */
+    fun announce(offer: EvaluatedOffer, delayMs: Long = 0, filters: List<String> = emptyList()) {
         if (!ready || !OverlayPrefs.isVoiceEnabled(appContext)) return
         if (delayMs > 0) {
             tts.playSilentUtterance(delayMs, TextToSpeech.QUEUE_FLUSH, "$UTTERANCE_ID-pausa")
-            tts.speak(phrase(offer), TextToSpeech.QUEUE_ADD, null, UTTERANCE_ID)
+            tts.speak(phrase(offer, filters), TextToSpeech.QUEUE_ADD, null, UTTERANCE_ID)
         } else {
-            tts.speak(phrase(offer), TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
+            tts.speak(phrase(offer, filters), TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
         }
+    }
+
+    /** Filtro que só casou depois do 1º aviso (endereço lido noutro quadro): entra na fila, não corta a fala. */
+    fun announceFilters(names: List<String>) {
+        if (names.isEmpty() || !ready || !OverlayPrefs.isVoiceEnabled(appContext)) return
+        tts.speak(names.joinToString(". ", postfix = "."), TextToSpeech.QUEUE_ADD, null, "$UTTERANCE_ID-filtro")
     }
 
     /** Alerta de zona que só ficou conhecido depois do 1º aviso (entra na fila, não corta a fala). */
@@ -60,7 +69,7 @@ class VoiceAnnouncer(context: Context) : TextToSpeech.OnInitListener {
         tts.shutdown()
     }
 
-    private fun phrase(offer: EvaluatedOffer): String = buildString {
+    private fun phrase(offer: EvaluatedOffer, filters: List<String>): String = buildString {
         append(
             when (offer.signal) {
                 Signal.GREEN -> "Verde"
@@ -77,6 +86,7 @@ class VoiceAnnouncer(context: Context) : TextToSpeech.OnInitListener {
         append('.')
         // Parada no caminho ("1 parada" no cartão da Uber).
         RideRoute.stopsLabel(offer.raw)?.let { append(" Com ").append(it).append('.') }
+        filters.forEach { append(' ').append(it).append('.') }
         appendZones(offer.zoneHits)
     }
 

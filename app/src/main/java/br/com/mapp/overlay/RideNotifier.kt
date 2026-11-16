@@ -21,6 +21,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import br.com.mapp.R
+import br.com.mapp.core.card.CardFilters
 import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.SatelliteShot
 import br.com.mapp.core.geo.StreetView
@@ -379,9 +380,11 @@ class RideNotifier(context: Context, private val scope: CoroutineScope) {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val expectedMin = o.metrics.totalMin ?: DEFAULT_RIDE_MIN
+        // Cor da notificação: a do filtro do Card que pinta (Card → Filtros) > roxo da parada > MApp.
+        val filterColor = CardFilters.paintColor(CardFilters.matching(OverlayPrefs.cardFilters(context), o))
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_map)
-            .setColor(if (text.hasStops) CardHeaderView.STOP_PURPLE else MAPP_TEAL)
+            .setColor(filterColor ?: if (text.hasStops) CardHeaderView.STOP_PURPLE else MAPP_TEAL)
             .setContentTitle(text.title)
             .setContentText(text.summary)
             .setStyle(NotificationCompat.DecoratedCustomViewStyle())
