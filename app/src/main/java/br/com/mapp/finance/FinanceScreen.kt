@@ -2,6 +2,8 @@
 
 package br.com.mapp.finance
 
+import br.com.mapp.ui.Routes
+import br.com.mapp.ui.SupportTab
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -93,6 +95,7 @@ private enum class FinanceTab(val label: String, val icon: ImageVector) {
 fun FinanceScreen(onBack: () -> Unit) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var showGoals by remember { mutableStateOf(false) }
+    SupportTab(Routes.FINANCE, FinanceTab.entries[tab].label)
     Scaffold(
         topBar = {
             BackTopBar("Financeiro", onBack) {

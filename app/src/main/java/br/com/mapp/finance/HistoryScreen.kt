@@ -2,6 +2,8 @@
 
 package br.com.mapp.finance
 
+import br.com.mapp.ui.Routes
+import br.com.mapp.ui.SupportTab
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -70,6 +72,7 @@ fun HistoryScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     // 0 = Aceitas hoje (padrão: o que importa na jornada), 1 = Todas as ofertas.
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    SupportTab(Routes.HISTORY, if (tab == 0) "Aceitas hoje" else "Todas")
     val now = rememberNow()
     val openShift by remember { ShiftTracker.current(context) }.collectAsStateWithLifecycle()
     // "Aceitas hoje" = dia de trabalho (jornada aberta depois da meia-noite continua no dia em que começou).
