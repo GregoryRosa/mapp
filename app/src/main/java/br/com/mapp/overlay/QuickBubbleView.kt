@@ -35,6 +35,7 @@ import br.com.mapp.core.model.ZoneType
 import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.core.sound.GoalSound
+import br.com.mapp.core.status.ReaderCheck
 import br.com.mapp.reader.ReaderStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlin.math.abs
@@ -73,6 +74,9 @@ class QuickBubbleView(
 
         /** Marca um pin no local atual (zona para desenhar depois no editor). */
         fun markPin(type: ZoneType)
+
+        /** Aviso na tela por [durationMs] (explica o "!" do ícone). */
+        fun notice(message: String, durationMs: Long)
     }
 
     private val context: Context = host.context
@@ -505,7 +509,17 @@ class QuickBubbleView(
         panelAttached -> closePanel()
         activitiesAttached -> closeActivities()
         radialAttached -> closeRadial()
-        else -> openRadial()
+        else -> {
+            explainWarning()
+            openRadial()
+        }
+    }
+
+    /** Com o "!" cinza, o toque no "M" diz o que está errado e como resolver (o mesmo texto da tela inicial). */
+    private fun explainWarning() {
+        if (reader.connected) return
+        val text = ReaderCheck.notice(ReaderStatus.problem(context, reader)) ?: return
+        actions.notice(text, WARNING_MS)
     }
 
     private fun onShiftTap() {
@@ -1100,6 +1114,8 @@ class QuickBubbleView(
         private const val PANEL_WIDTH_DP = 290
         private const val ACTIVITIES_WIDTH_DP = 320
         private const val CONFIRM_MS = 4_000L
+        /** Aviso do "!": texto longo, com tempo para ler. */
+        private const val WARNING_MS = 10_000L
         /** Segurar para encerrar a jornada (▶/⏸) ou desligar o copiloto ("M" / ✕). */
         private const val HOLD_MS = 3_000L
         /** No "M" e no ✕ o anel vermelho só aparece depois disso (toque comum não pisca). */
