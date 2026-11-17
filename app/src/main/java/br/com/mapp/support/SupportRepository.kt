@@ -33,6 +33,11 @@ import kotlinx.coroutines.flow.flowOf
  * dono) entra com e-mail e senha; as regras do Firestore (README) só deixam esse e-mail ler os
  * chamados dos outros e escrever como suporte.
  *
+ * **Duas sessões separadas:** o painel usa uma segunda instância do Firebase ([ADMIN_APP]), com
+ * login e banco próprios. O dono também é motorista e usa o app no mesmo celular — se o login do
+ * painel usasse a sessão padrão, ele substituiria o anônimo, e ao sair do painel o app criaria um
+ * anônimo novo: os chamados do motorista "sumiam" (continuavam no banco, mas de outro uid).
+ *
  * Sem `app/google-services.json` o app compila e roda normalmente: o chat aparece desligado, com o
  * e-mail de contato no lugar ([available]).
  */
@@ -43,28 +48,53 @@ object SupportRepository {
     private const val MESSAGES = "messages"
     private const val MAX_TICKETS = 200L
 
+    /** Nome da instância do Firebase do painel (sessão do dono, separada da do motorista). */
+    private const val ADMIN_APP = "mapp-suporte"
+
     private val _signedIn = MutableStateFlow(false)
 
-    /** Já existe sessão (anônima ou do suporte). */
+    /** Já existe a sessão anônima do motorista. */
     val signedIn: StateFlow<Boolean> = _signedIn.asStateFlow()
 
     private val _owner = MutableStateFlow(false)
 
-    /** A sessão atual é a do dono (libera o painel de chamados e o app sem assinatura). */
+    /** O dono está logado no painel (libera o painel de chamados e o app sem assinatura). */
     val owner: StateFlow<Boolean> = _owner.asStateFlow()
 
     private var configured = false
+    private var appContext: Context? = null
+    private var adminApp: FirebaseApp? = null
 
     /** O Firebase está configurado neste APK? (precisa do `google-services.json`). */
     fun available(ctx: Context): Boolean {
         if (configured) return true
-        configured = FirebaseApp.getApps(ctx.applicationContext).isNotEmpty()
+        val app = ctx.applicationContext
+        appContext = app
+        configured = FirebaseApp.getApps(app).any { it.name == FirebaseApp.DEFAULT_APP_NAME }
         return configured
     }
 
+    /** Sessão do motorista (instância padrão). */
     private fun auth(): FirebaseAuth = FirebaseAuth.getInstance()
 
     private fun db(): FirebaseFirestore = FirebaseFirestore.getInstance()
+
+    /** Sessão do painel: mesma configuração, instância própria (login guardado à parte). */
+    private fun admin(): FirebaseApp {
+        adminApp?.let { return it }
+        val ctx = requireNotNull(appContext) { "SupportRepository.available() não foi chamado" }
+        val app = FirebaseApp.getApps(ctx).firstOrNull { it.name == ADMIN_APP }
+            ?: FirebaseApp.initializeApp(ctx, FirebaseApp.getInstance().options, ADMIN_APP)
+        adminApp = app
+        return app
+    }
+
+    private fun adminAuth(): FirebaseAuth = FirebaseAuth.getInstance(admin())
+
+    private fun adminDb(): FirebaseFirestore = FirebaseFirestore.getInstance(admin())
+
+    /** Banco certo para quem escreve: o suporte pelo painel, o motorista pela sessão dele. */
+    private fun dbFor(asSupport: Boolean): FirebaseFirestore = if (asSupport) adminDb() else db()
 
     private fun uid(): String? = auth().currentUser?.uid
 
@@ -74,17 +104,18 @@ object SupportRepository {
      */
     fun ensureSession(ctx: Context, onError: (String) -> Unit = {}) {
         if (!available(ctx)) return
+        // O login do painel fica guardado na instância dele: volta sozinho ao reabrir o app.
+        _owner.value = isOwnerEmail(adminAuth().currentUser?.email)
         val user = auth().currentUser
-        if (user != null) {
+        if (user != null && user.isAnonymous) {
             _signedIn.value = true
-            _owner.value = isOwnerEmail(user.email)
             return
         }
+        // Versões 0.3.141–0.3.143 entravam no painel pela sessão do motorista: quem ficou com ela
+        // logada volta a ter uma sessão anônima de motorista.
+        if (user != null) auth().signOut()
         auth().signInAnonymously()
-            .addOnSuccessListener {
-                _signedIn.value = true
-                _owner.value = false
-            }
+            .addOnSuccessListener { _signedIn.value = true }
             .addOnFailureListener { e ->
                 Log.w(TAG, "login anônimo", e)
                 onError(
@@ -107,10 +138,9 @@ object SupportRepository {
             onDone("Esta conta não é a do suporte.")
             return
         }
-        auth().signInWithEmailAndPassword(email.trim(), password)
+        adminAuth().signInWithEmailAndPassword(email.trim(), password)
             .addOnSuccessListener {
-                _signedIn.value = true
-                _owner.value = isOwnerEmail(auth().currentUser?.email)
+                _owner.value = isOwnerEmail(adminAuth().currentUser?.email)
                 onDone(null)
             }
             .addOnFailureListener { e ->
@@ -119,13 +149,11 @@ object SupportRepository {
             }
     }
 
-    /** Sai da conta do suporte e volta para a sessão anônima. */
-    fun signOutOwner(ctx: Context) {
+    /** Sai do painel. A sessão de motorista deste celular não muda. */
+    fun signOutOwner() {
         if (!configured) return
-        auth().signOut()
+        adminAuth().signOut()
         _owner.value = false
-        _signedIn.value = false
-        ensureSession(ctx)
     }
 
     /**
@@ -178,7 +206,7 @@ object SupportRepository {
         if (!configured) return
         val text = SupportRules.clean(message) ?: return
         val now = System.currentTimeMillis()
-        val ticket = db().collection(TICKETS).document(ticketId)
+        val ticket = dbFor(fromSupport).collection(TICKETS).document(ticketId)
         ticket.collection(MESSAGES).document().set(messageData(text, fromSupport, now))
             .addOnFailureListener { e ->
                 Log.w(TAG, "enviar", e)
@@ -211,7 +239,7 @@ object SupportRepository {
     /** Painel: marcar resolvido ou reabrir. */
     fun setStatus(ticketId: String, status: TicketStatus) {
         if (!configured) return
-        db().collection(TICKETS).document(ticketId).update(
+        adminDb().collection(TICKETS).document(ticketId).update(
             mapOf(
                 "status" to status.name,
                 "updatedAt" to System.currentTimeMillis(),
@@ -229,8 +257,8 @@ object SupportRepository {
 
     /** Todos os chamados (só o dono consegue ler, pelas regras do Firestore). */
     fun allTickets(ctx: Context): Flow<List<Ticket>> {
-        if (!available(ctx)) return flowOf(emptyList())
-        return tickets(db().collection(TICKETS).limit(MAX_TICKETS))
+        if (!available(ctx) || !_owner.value) return flowOf(emptyList())
+        return tickets(adminDb().collection(TICKETS).limit(MAX_TICKETS))
     }
 
     private fun tickets(query: Query): Flow<List<Ticket>> = callbackFlow {
@@ -244,11 +272,11 @@ object SupportRepository {
         awaitClose { reg.remove() }
     }
 
-    /** Mensagens de um chamado, em ordem de envio (tempo real). */
-    fun messages(ctx: Context, ticketId: String): Flow<List<SupportMessage>> {
+    /** Mensagens de um chamado, em ordem de envio (tempo real). [asSupport] = aberto pelo painel. */
+    fun messages(ctx: Context, ticketId: String, asSupport: Boolean): Flow<List<SupportMessage>> {
         if (!available(ctx)) return flowOf(emptyList())
         return callbackFlow {
-            val reg = db().collection(TICKETS).document(ticketId).collection(MESSAGES)
+            val reg = dbFor(asSupport).collection(TICKETS).document(ticketId).collection(MESSAGES)
                 .orderBy("at", Query.Direction.ASCENDING)
                 .addSnapshotListener { snap, error ->
                     if (error != null) {

@@ -92,7 +92,7 @@ fun AdminScreen(onBack: () -> Unit) {
         topBar = {
             BackTopBar("Painel de chamados", onBack) {
                 if (owner) {
-                    TextButton(onClick = { SupportRepository.signOutOwner(ctx) }) {
+                    TextButton(onClick = { SupportRepository.signOutOwner() }) {
                         Text("Sair", color = MappColors.TextDim)
                     }
                 }

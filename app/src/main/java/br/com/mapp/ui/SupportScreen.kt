@@ -275,7 +275,7 @@ internal fun ChatScreen(
 ) {
     val ctx = LocalContext.current
     val messages by remember(ticketId) {
-        SupportRepository.messages(ctx, ticketId)
+        SupportRepository.messages(ctx, ticketId, asSupport = fromSupport)
     }.collectAsStateWithLifecycle(emptyList())
     var text by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
