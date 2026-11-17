@@ -45,11 +45,13 @@ class SatelliteViewTest {
 
     @Test
     fun `zoom do satelite soma ao zoom do formato`() {
-        assertEquals(SatelliteZoom.X4, SatelliteZoom.DEFAULT)
-        assertEquals(19, SatelliteShot.CARD.zoomed(SatelliteZoom.DEFAULT).zoom) // ~175 m no Card
+        assertEquals(SatelliteZoom.X8, SatelliteZoom.DEFAULT)
+        assertEquals(20, SatelliteShot.CARD.zoomed(SatelliteZoom.DEFAULT).zoom) // ~90 m no Card
+        assertEquals(19, SatelliteShot.STRIP.zoomed(SatelliteZoom.DEFAULT).zoom)
         assertEquals(18, SatelliteShot.STRIP.zoomed(SatelliteZoom.X4).zoom)
+        assertEquals(21, SatelliteShot.CARD.zoomed(SatelliteZoom.X16).zoom) // máximo da API
         assertEquals(17, SatelliteShot.CARD.zoomed(SatelliteZoom.X1).zoom) // como antes
-        assertEquals(SatelliteShot.MAX_ZOOM, SatelliteShot(640, 420, 20).zoomed(SatelliteZoom.X8).zoom)
+        assertEquals(SatelliteShot.MAX_ZOOM, SatelliteShot(640, 420, 20).zoomed(SatelliteZoom.X16).zoom)
         val url = SatelliteView.imageUrl(p, "k", "A", green, SatelliteShot.CARD.zoomed(SatelliteZoom.X4))
         assertTrue(url.contains("zoom=19"))
         assertNotEquals(

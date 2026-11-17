@@ -1117,7 +1117,8 @@ private fun StreetViewCard(view: PhotoView, onView: (PhotoView) -> Unit) {
             }
             Text(
                 "Mais zoom = vista de cima mais perto do ponto (1× = como era antes, ~700 m de largura; " +
-                    "4× ≈ 175 m). Em alguns lugares o Google não tem satélite em 8× e a imagem vem cinza.",
+                    "4× ≈ 175 m; 8× ≈ 90 m, a rua e as casas em volta). Em alguns lugares o Google não tem " +
+                    "satélite tão perto (16×) e a imagem vem cinza: aí escolha menos zoom.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Text("Zoom da foto da rua", style = MaterialTheme.typography.labelMedium)

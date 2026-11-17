@@ -155,7 +155,7 @@ object OverlayPrefs {
         of(context).edit().putString(KEY_SATELLITE_BUDGET, budget.encode()).apply()
     }
 
-    /** Zoom do satélite (padrão 4× = zoom 19 no Card; 1× = como era antes). */
+    /** Zoom do satélite (padrão 8× = zoom 20 no Card, ~90 m; 1× = como era antes). */
     fun satelliteZoom(context: Context): SatelliteZoom =
         SatelliteZoom.fromId(of(context).getString(KEY_SATELLITE_ZOOM, null))
 
