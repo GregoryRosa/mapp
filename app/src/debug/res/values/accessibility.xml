@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Só o APK de teste das Releases do GitHub (build debug): ver res/xml/accessibility_config.xml. -->
+<resources>
+    <bool name="is_accessibility_tool">true</bool>
+</resources>

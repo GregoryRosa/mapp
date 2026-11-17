@@ -2,17 +2,21 @@
 <!-- Somente leitura: NÃO adicionar canPerformGestures (proibido automatizar aceite/recusa).
      canTakeScreenshot: a Uber não entrega o cartão da oferta como texto; o leitor captura a imagem da
      janela do app de corrida e reconhece o texto no aparelho (reader/ScreenOcr). Nada é salvo.
-     isAccessibilityTool=false: o MApp NÃO é ferramenta de acessibilidade — ele usa a API para a sua
-     função principal (ler a oferta de corrida). Declarar "true" seria declaração falsa ao Google e
-     dá suspensão do app e da conta de desenvolvedor. Por isso o aviso destacado com aceite
-     (ui/ConsentScreen) e a declaração de Acessibilidade no Play Console (README → Play Console). -->
+     isAccessibilityTool vem de @bool/is_accessibility_tool, por tipo de build:
+       - debug (APK de teste das Releases do GitHub, o que o dono usa no celular): true — decisão do
+         dono em 17/11/2026, depois que as ofertas pararam de ser reconhecidas com false. No Android 14+
+         telas marcadas como sensíveis só chegam a serviços declarados como ferramenta.
+       - release (AAB da Play Store): false — o MApp NÃO é ferramenta de acessibilidade; "true" na loja
+         seria declaração falsa ao Google (suspensão do app e da conta de desenvolvedor). Por isso o
+         aviso destacado com aceite (ui/ConsentScreen) e a declaração no Play Console (README → 6.4/6.5).
+     Valores em src/main/res/values/accessibility.xml (false) e src/debug/res/values/accessibility.xml (true). -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
     android:canRetrieveWindowContent="true"
     android:canTakeScreenshot="true"
-    android:isAccessibilityTool="false"
+    android:isAccessibilityTool="@bool/is_accessibility_tool"
     android:description="@string/accessibility_description"
     android:notificationTimeout="150"
     android:packageNames="com.ubercab.driver,com.app99.driver,sinet.startup.inDriver" />
