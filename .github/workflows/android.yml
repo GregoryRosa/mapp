@@ -4,6 +4,8 @@ on:
   push:
     branches: [ main ]
   pull_request:
+  # Botão "Run workflow" na aba Actions: gera o AAB de novo sem precisar de commit.
+  workflow_dispatch:
 
 permissions:
   contents: write
