@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MApp – Política de Privacidade</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0 auto; padding: 32px 20px 72px; max-width: 760px;
+    background: #07141b; color: #e6f2f4;
+    font: 16px/1.65 -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  h1 { font-size: 1.7rem; margin: 0 0 4px; }
+  h2 { font-size: 1.15rem; margin: 32px 0 8px; color: #5ee6d8; }
+  .sub { color: #9fb8bf; margin: 0 0 28px; font-size: .95rem; }
+  ul { padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  strong { color: #fff; }
+  a { color: #7fd8ea; }
+  .box {
+    border: 1px solid #2f5a66; border-radius: 14px; padding: 14px 18px;
+    background: #0b1a21; margin: 22px 0;
+  }
+  footer { margin-top: 40px; color: #9fb8bf; font-size: .9rem; }
+</style>
+</head>
+<body>
+
+<h1>Política de Privacidade do MApp</h1>
+<p class="sub">Última atualização: 17 de novembro de 2026</p>
+
+<p>
+  O <strong>MApp</strong> é um copiloto para motoristas de aplicativo. Ele lê a oferta de corrida que
+  aparece na tela do app de corrida (Uber, 99 e inDrive), calcula R$/km, R$/hora e lucro e mostra isso
+  num card por cima do app. Esta política explica, em português claro, o que o MApp faz com os seus dados.
+</p>
+
+<div class="box">
+  <strong>Resumo:</strong> os seus dados ficam no seu celular. O MApp não tem cadastro, não tem anúncio,
+  não usa ferramenta de análise de comportamento e não vende nem compartilha dados com ninguém. Só sai do
+  aparelho o que você escrever no chat de suporte.
+</div>
+
+<h2>Quem é o responsável</h2>
+<p>
+  O MApp é desenvolvido e mantido por um desenvolvedor individual. Contato para qualquer assunto desta
+  política, inclusive pedido de exclusão de dados:
+  <a href="mailto:gregoryrosa@gmail.com">gregoryrosa@gmail.com</a>.
+</p>
+
+<h2>Serviço de Acessibilidade: por que o MApp pede e o que ele faz</h2>
+<p>
+  Para mostrar a análise no momento em que a corrida chega, o MApp usa o serviço de Acessibilidade do
+  Android. Com essa permissão, e <strong>somente nos apps Uber, 99 e inDrive</strong>, o MApp:
+</p>
+<ul>
+  <li>lê o texto da tela para encontrar valor, distância, tempo e endereços da oferta;</li>
+  <li>quando o app de corrida não entrega a oferta como texto, captura a imagem daquela janela e
+      reconhece o texto <strong>dentro do próprio celular</strong>, com um modelo que já vem instalado
+      no app;</li>
+  <li>desenha o card e o botão flutuante por cima do app de corrida.</li>
+</ul>
+<p>
+  O que o MApp <strong>não</strong> faz: não toca na tela por você (nunca aceita nem recusa corrida),
+  não lê nenhum outro app do celular, não grava nem envia as imagens da tela — elas existem apenas na
+  memória, por instantes, durante o reconhecimento do texto, e são descartadas em seguida.
+</p>
+<p>
+  O aviso sobre esse uso aparece na primeira abertura do app e só continua depois do seu aceite
+  explícito. Você pode desligar o serviço a qualquer momento em Configurações → Acessibilidade.
+</p>
+
+<h2>Dados que ficam no seu celular</h2>
+<p>Guardados apenas no aparelho, no armazenamento privado do app:</p>
+<ul>
+  <li>ofertas lidas, corridas, jornadas, ganhos, gastos, metas e relatórios;</li>
+  <li>custos do veículo, perfis de filtro, zonas desenhadas e pins;</li>
+  <li>preferências de aparência (card, notificação, botão flutuante);</li>
+  <li>localização do GPS, usada <strong>em tempo real</strong> para o mini mapa, para avisar se a
+      coleta ou o destino caem numa zona marcada por você e para somar os km da jornada. O trajeto
+      não é enviado a servidor nenhum.</li>
+</ul>
+<p>
+  Desinstalar o app apaga todos esses dados. Não existe cópia em nuvem feita pelo MApp.
+</p>
+
+<h2>O que sai do celular</h2>
+<ul>
+  <li>
+    <strong>Mapas (OpenStreetMap).</strong> Para desenhar o mini mapa, o app baixa as imagens de mapa
+    dos servidores do OpenStreetMap. Isso envia a região consultada, como em qualquer app de mapa.
+  </li>
+  <li>
+    <strong>Endereços (Android).</strong> Para transformar o endereço da oferta em coordenada, o MApp
+    usa o serviço de geocodificação do próprio Android, do fabricante do seu celular.
+  </li>
+  <li>
+    <strong>Foto da rua e satélite (opcional).</strong> Só funciona se você colar a <em>sua</em> chave
+    das APIs do Google dentro do app. Nesse caso, a coordenada da coleta, das paradas e do destino é
+    enviada ao Google para trazer a imagem. Sem a chave, nada é enviado.
+  </li>
+  <li>
+    <strong>Chat de suporte.</strong> Quando você abre um chamado, são enviadas e guardadas: as
+    mensagens que você escreve, a versão do MApp, o modelo do celular, a versão do Android, se o
+    leitor está ligado e se a assinatura está ativa. Nenhuma corrida, endereço, valor ou localização
+    vai junto. O chat usa o Google Cloud Firestore como servidor, com <strong>login anônimo</strong>:
+    você não cria conta e não informa e-mail, nome ou telefone.
+  </li>
+  <li>
+    <strong>Assinatura.</strong> O pagamento é processado pela Google Play. O MApp não recebe, não vê e
+    não guarda dados de cartão: ele só pergunta ao Google se existe assinatura ativa neste aparelho.
+  </li>
+</ul>
+
+<h2>Por quanto tempo os dados do suporte ficam guardados</h2>
+<p>
+  As mensagens de um chamado ficam guardadas enquanto forem úteis para resolver o problema e, no
+  máximo, por 24 meses. Você pode pedir a exclusão a qualquer momento pelo e-mail acima ou pelo próprio
+  chat: basta dizer que quer o chamado apagado.
+</p>
+
+<h2>Com quem os dados são compartilhados</h2>
+<p>
+  Com ninguém, para fim nenhum de publicidade, perfil de consumo ou venda. Os únicos terceiros
+  envolvidos são os provedores de infraestrutura citados acima (Google, para o chat, a loja e as
+  imagens opcionais; OpenStreetMap, para o mapa), que atuam como operadores do serviço.
+</p>
+
+<h2>Segurança</h2>
+<p>
+  O tráfego com o servidor do chat é criptografado (HTTPS). Só a conta de suporte do desenvolvedor
+  consegue ler os chamados, e cada motorista só consegue ler o próprio — isso é imposto pelas regras de
+  segurança do servidor, não apenas pelo app.
+</p>
+
+<h2>Crianças</h2>
+<p>
+  O MApp é destinado a motoristas profissionais maiores de 18 anos e não é direcionado a crianças.
+</p>
+
+<h2>Seus direitos (LGPD)</h2>
+<p>
+  Você pode pedir confirmação do tratamento, acesso, correção, anonimização, portabilidade ou exclusão
+  dos dados do suporte, além de revogar o consentimento do serviço de Acessibilidade (desligando-o nas
+  Configurações do Android). Para exercer qualquer um desses direitos, escreva para
+  <a href="mailto:gregoryrosa@gmail.com">gregoryrosa@gmail.com</a>.
+</p>
+
+<h2>Mudanças nesta política</h2>
+<p>
+  Se algo mudar, esta página é atualizada e a data no topo muda junto. Mudança relevante é avisada
+  dentro do app.
+</p>
+
+<footer>MApp · Copiloto para motoristas de aplicativo</footer>
+
+</body>
+</html>

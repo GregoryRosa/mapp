@@ -11,6 +11,14 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # Configurados em Settings → Secrets and variables → Actions. Sem eles o build continua:
+      # sai o APK de teste de sempre, sem chat de suporte e sem o AAB da loja.
+      GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+      MAPP_KEYSTORE_BASE64: ${{ secrets.MAPP_KEYSTORE_BASE64 }}
+      MAPP_KEYSTORE_PASSWORD: ${{ secrets.MAPP_KEYSTORE_PASSWORD }}
+      MAPP_KEY_ALIAS: ${{ secrets.MAPP_KEY_ALIAS }}
+      MAPP_KEY_PASSWORD: ${{ secrets.MAPP_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v5
@@ -18,6 +26,12 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v5
+
+      # O google-services.json não fica no repositório (que é público): vem do secret.
+      - name: Configuração do Firebase (chat de suporte)
+        if: env.GOOGLE_SERVICES_JSON != ''
+        run: printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+
       - name: Testes unitários
         run: ./gradlew :app:testDebugUnitTest
       - name: Gerar APK debug
@@ -26,15 +40,31 @@ jobs:
         with:
           name: mapp-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+
+      # AAB assinado com a chave de upload, pronto para enviar ao Play Console.
+      - name: Preparar chave de upload
+        if: env.MAPP_KEYSTORE_BASE64 != ''
+        run: |
+          printf '%s' "$MAPP_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          echo "MAPP_KEYSTORE_PATH=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+      - name: Gerar AAB para o Play
+        if: env.MAPP_KEYSTORE_BASE64 != ''
+        run: ./gradlew :app:bundleRelease
+      - uses: actions/upload-artifact@v5
+        if: env.MAPP_KEYSTORE_BASE64 != ''
+        with:
+          name: mapp-play-aab
+          path: app/build/outputs/bundle/release/*.aab
+
       # Publica o APK numa release "ultima-versao" para baixar direto no celular.
       - name: Publicar APK na release
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # A versão (0.2.<nº desta execução>) vem do próprio APK: é a mesma que aparece na tela inicial do app.
+          # A versão (0.3.<nº desta execução>) vem do próprio APK: é a mesma que aparece na tela inicial do app.
           VERSION=$(jq -r '.elements[0].versionName // empty' app/build/outputs/apk/debug/output-metadata.json 2>/dev/null || true)
-          VERSION=${VERSION:-0.2.$GITHUB_RUN_NUMBER}
+          VERSION=${VERSION:-0.3.$GITHUB_RUN_NUMBER}
           cp app/build/outputs/apk/debug/app-debug.apk "MApp-$VERSION.apk"
           gh release delete ultima-versao --yes --cleanup-tag || true
           gh release create ultima-versao "MApp-$VERSION.apk" \

@@ -7,3 +7,7 @@ local.properties
 captures/
 .externalNativeBuild/
 .cxx/
+
+# Configuração do Firebase e chave de publicação: ficam fora do repositório (que é público).
+app/google-services.json
+*.jks
