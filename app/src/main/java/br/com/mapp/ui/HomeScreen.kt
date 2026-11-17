@@ -1,6 +1,8 @@
 package br.com.mapp.ui
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -234,6 +236,27 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                         )
                     }
                 }
+            }
+
+            // Diagnóstico do leitor. O cartão da oferta da Uber só é lido pela IMAGEM da tela (OCR):
+            // quando essa leitura falha, nada aparece e o resto do app parece normal (as telas de
+            // corrida aceita/finalizada continuam vindo pelo texto). Estas linhas dizem em que passo
+            // parou e o botão copia o relatório completo (`ReaderStatus.report`) para colar na conversa.
+            GlassCard {
+                Text("Leitor de ofertas", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(6.dp))
+                ReaderStatus.lines(reader, running).forEach { line ->
+                    Text(line, style = MaterialTheme.typography.bodySmall, color = MappColors.TextDim)
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = {
+                        val report = ReaderStatus.report(ctx)
+                        ctx.getSystemService(ClipboardManager::class.java)
+                            ?.setPrimaryClip(ClipData.newPlainText("MApp", report))
+                        Toast.makeText(ctx, "Diagnóstico do leitor copiado: é só colar", Toast.LENGTH_LONG).show()
+                    },
+                ) { Text("Copiar diagnóstico") }
             }
 
             Text(
