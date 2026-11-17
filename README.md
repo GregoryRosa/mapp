@@ -65,7 +65,7 @@ app/src/main/java/br/com/mapp/
 ├── core/        # Domínio puro (sem Android): modelos, motor de avaliação, geometria
 ├── reader/      # AccessibilityService: texto da tela + OCR da imagem (ScreenOcr) + parsers por plataforma
 ├── overlay/     # Serviço de janela flutuante: cartão semáforo + mini mapa
-├── maps/        # Editor de zonas, geocodificação, utilidades osmdroid
+├── maps/        # Editor de zonas, mapa de calor, geocodificação, utilidades osmdroid
 ├── data/        # Room: entidades, DAOs, repositórios
 ├── finance/     # Telas de ganhos/gastos/metas e relatórios
 ├── billing/     # Play Billing: consulta a assinatura e guarda o último "sim" do Play
@@ -242,7 +242,7 @@ Enquanto o app não estiver num canal de teste com a sua conta dentro, o Play re
 ## 7. Roadmap
 
 - **Fase 1 – MVP:** R1–R6, testes de parser com textos reais de ofertas.
-- **Fase 2:** histórico, relatórios, mapa de calor das melhores regiões, CSV.
+- **Fase 2:** histórico, relatórios, ~~mapa de calor das melhores regiões~~ (feito: aba Zonas → Mapa de calor), CSV.
 - **Fase 3:** ~~jornada (cronômetro)~~ (feito: monitor de jornada), manutenção por odômetro, backup em nuvem.
 
 **Calibração:** quando uma corrida não for reconhecida, mande print da tela; cada texto real vira um caso de teste antes de mexer no parser. (O botão "Copiar diagnóstico" foi retirado; o relatório `ReaderStatus.report` continua no código.) 99 e inDrive ainda não foram testados no celular.
@@ -326,6 +326,8 @@ Enquanto o app não estiver num canal de teste com a sua conta dentro, o Play re
 | 17/11/2026 | **Chamado sumia para o motorista depois da resposta.** Testando os dois papéis no mesmo celular, o login do painel (e-mail/senha) substituía o login anônimo do motorista; ao sair do painel o app criava outro anônimo, e os chamados do anterior ficavam órfãos. Agora o painel usa uma **segunda instância do Firebase** (`mapp-suporte`), com login e banco próprios: entrar e sair do painel não mexe na sessão de motorista do aparelho. Quem ficou logado no painel pela sessão de motorista (0.3.141–0.3.143) volta a ter uma sessão anônima. Chamados abertos antes da correção continuam no painel, mas o motorista que os abriu não os vê mais (o anônimo antigo não pode ser recuperado). |
 | 17/11/2026 | **Chamado diz em que tela foi aberto.** O toque no botão de suporte guarda a tela e a aba em que o motorista estava (`ui/SupportOrigin`; as telas com abas avisam a aba por `SupportTab`: Financeiro, Ofertas, Card) e o chamado leva isso no campo `screen` e na 1ª linha do diagnóstico ("Tela: Financeiro → Relatórios"). No painel aparece "📍 Aberto em: …" na lista e no topo da conversa; aberto pela tela de assinatura vem como "Tela de assinatura". Nomes em `core/support/ScreenNames` (testes em `SupportRulesTest`). |
 | 17/11/2026 | **Tamanho e cor da seta do "M".** No painel ⚙ do ícone flutuante: barra **Tamanho da seta** na seção Tamanho (60–160%, passos de 10%; a base fica no lugar e a seta cresce para cima, como o pin) e barra **Seta (carro, em corrida)** na seção Botão, para a cor. Sem mexer na cor, a seta continua acompanhando o gradiente do "M" (verde-água → lilás no caminho); *Restaurar padrão* volta a isso. Como a seta só aparece em corrida, as mudanças aparecem na prévia "Em corrida" do painel (`BubbleStyle.arrowSize/arrowColor`, `BubbleSize.ARROW_STEPS/arrowScale`; testes em `BubbleStyleTest`). |
+
+| 17/11/2026 | **Mapa de calor nas Zonas.** A tela *Zonas* agora tem duas abas: **Minhas zonas** (o editor de sempre) e **Mapa de calor**, que desenha zonas sozinho a partir do histórico de ofertas do aparelho. A cidade é dividida em quadradinhos (**o lado muda com o zoom**: ~2 km de longe, 100 m de perto) e cada oferta cai num quadradinho pela coordenada da **coleta** (ou do **destino**, no filtro); o quadradinho ganha cor pela métrica escolhida nos botões de cima — **Chamadas, R$/km, R$/h, Lucro, Valor e Modalidade** (esta com a cor fixa de cada tipo). Quadradinho com menos de **3 ofertas não pinta** (uma corrida sortuda não vira zona de ouro) e quadradinhos quentes que se tocam viram uma **zona detectada**: contorno no mapa, nome do bairro (Geocoder do sistema) e a linha com chamadas, R$/km, R$/h e aceitas. Tocar na zona (no mapa ou na lista) mostra todos os números e **Salvar como zona** cria uma zona de verdade, com o polígono do contorno, o tipo sugerido (alta demanda para chamadas) e o alerta de voz. **Filtros:** período (7/30/90 dias ou tudo), faixa de horário (vira a meia-noite), app, modalidade, coleta/destino e a chave **Todas / Só aceitas**. As zonas desenhadas à mão continuam por cima, para comparar. É o mapa do próprio motorista — mostra onde **ele** recebeu chamadas — e o rodapé diz quantas ofertas entraram e quantas ficaram de fora por não ter endereço localizado. Regras em `core/heat/` (testes em `HeatMapTest`), camada em `maps/HeatOverlay`, tela em `maps/HeatMapTab`. **Ainda sem build nem teste no celular.** |
 
 **Pendências conhecidas:**
 - **Nada deste commit foi compilado nem testado:** o ambiente onde ele foi escrito não tem Android SDK nem acesso ao Maven do Google. O CI (build + 2 suítes novas de teste) é a primeira conferência — rode-o antes de subir qualquer coisa para a loja.

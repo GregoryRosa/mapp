@@ -33,7 +33,7 @@ import br.com.mapp.finance.FinanceScreen
 import br.com.mapp.finance.HistoryScreen
 import br.com.mapp.finance.ProfilesScreen
 import br.com.mapp.finance.rememberNow
-import br.com.mapp.maps.ZoneEditorScreen
+import br.com.mapp.maps.ZonesScreen
 import br.com.mapp.support.SupportRepository
 
 /** Rotas do app. Cada tela recebe apenas onBack; dados via MappApp.repos. */
@@ -156,7 +156,7 @@ private fun MappNavHost(nav: NavHostController) {
         composable(Routes.FINANCE) { FinanceScreen(onBack = back) }
         composable(Routes.HISTORY) { HistoryScreen(onBack = back) }
         composable(Routes.PROFILES) { ProfilesScreen(onBack = back) }
-        composable(Routes.ZONES) { ZoneEditorScreen(onBack = back) }
+        composable(Routes.ZONES) { ZonesScreen(onBack = back) }
         composable(Routes.CARD_STYLE) { CardStyleScreen(onBack = back) }
         composable(Routes.SHIFTS) { ShiftHistoryScreen(onBack = back) }
         composable(Routes.SUPPORT) {
