@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -29,6 +30,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -76,9 +78,13 @@ import br.com.mapp.core.heat.HeatZones
 import br.com.mapp.core.heat.HexMath
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.Zone
+import br.com.mapp.core.repo.OfferRecord
 import br.com.mapp.finance.Format
 import br.com.mapp.ui.MappColors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
+import kotlinx.coroutines.withContext
 
 /**
  * Aba **Mapa de calor** da tela Zonas.
@@ -112,15 +118,20 @@ internal fun HeatMapTab() {
     }.collectAsStateWithLifecycle(initialValue = emptyList())
     val myZones by remember { repos.zones.all() }.collectAsStateWithLifecycle(initialValue = emptyList())
 
-    val points = remember(records, filter.spot) {
-        records.mapNotNull { HeatPoints.of(it.evaluated, it.accepted, filter.spot) }
+    // A conta da grade roda fora da thread da tela: com o histórico grande (milhares de ofertas) ela
+    // levaria um tempo visível a cada zoom, e a tela travaria junto.
+    var heat by remember { mutableStateOf(HeatState()) }
+    var working by remember { mutableStateOf(false) }
+    LaunchedEffect(records, filter, zoom) {
+        working = true
+        heat = withContext(Dispatchers.Default) { computeHeat(records, filter, zoom, now) }
+        working = false
     }
-    val shown = remember(points, filter) { HeatPoints.filter(points, filter, now) }
-    val grid = remember(shown, zoom) { HeatGrid.build(shown, zoom) }
-    val scale = remember(grid, filter.metric) { HeatScale.of(grid.cells, filter.metric) }
-    val detected = remember(grid, scale, filter.metric) { HeatZones.of(grid, scale, filter.metric) }
-    val categories = remember(points) { HeatPoints.categories(points) }
-    val categoryColors = remember(categories) { HeatPalette.categoryColors(categories) }
+    val grid = heat.grid
+    val scale = heat.scale
+    val detected = heat.zones
+    val categories = heat.categories
+    val categoryColors = heat.categoryColors
 
     // Nome do bairro de cada zona (Geocoder do sistema, melhor esforço).
     val names = remember { mutableStateMapOf<String, String>() }
@@ -184,13 +195,13 @@ internal fun HeatMapTab() {
         }
     }
 
-    LaunchedEffect(points.size) {
+    LaunchedEffect(grid.cells.size) {
         if (framed) return@LaunchedEffect
-        if (points.isNotEmpty()) {
-            MapViews.frame(mapView, points.map { it.point })
+        if (grid.cells.isNotEmpty()) {
+            MapViews.frame(mapView, grid.cells.map { it.center })
             zoom = mapView.zoomLevelDouble
             framed = true
-        } else {
+        } else if (!working) {
             LocationProvider.get(ctx).current()?.let { MapViews.centerOn(mapView, it) }
         }
     }
@@ -202,6 +213,13 @@ internal fun HeatMapTab() {
             onOpen = { showFilters = true },
             onSet = { filter = filter.copy(set = it) },
         )
+        if (working) {
+            LinearProgressIndicator(
+                Modifier.fillMaxWidth().height(2.dp),
+                color = MappColors.Teal,
+                trackColor = Color.Transparent,
+            )
+        }
         Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
             AndroidView(
                 factory = { mapView },
@@ -244,7 +262,7 @@ internal fun HeatMapTab() {
         Surface(color = MappColors.Navy) {
             Column(Modifier.fillMaxWidth()) {
                 Text(
-                    footer(grid, detected.size, points.size, records.size),
+                    footer(grid, detected.size, heat.located, records.size),
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MappColors.TextDim,
@@ -252,7 +270,7 @@ internal fun HeatMapTab() {
                 HorizontalDivider()
                 if (detected.isEmpty()) {
                     Text(
-                        emptyMessage(points.size, grid.cells.size),
+                        if (working) "Montando o mapa…" else emptyMessage(heat.located, grid.cells.size),
                         modifier = Modifier.padding(16.dp),
                         style = MaterialTheme.typography.bodyMedium,
                     )
@@ -321,6 +339,46 @@ internal fun HeatMapTab() {
             },
         )
     }
+}
+
+/** Tudo o que a conta da grade devolve de uma vez (ela roda fora da thread da tela). */
+private data class HeatState(
+    val grid: HeatMap = HeatMap.EMPTY,
+    val scale: HeatScale? = null,
+    val zones: List<HeatZone> = emptyList(),
+    val categories: List<String> = emptyList(),
+    val categoryColors: Map<String, Long> = emptyMap(),
+    /** Ofertas do período com coordenada (as outras não entram no mapa). */
+    val located: Int = 0,
+)
+
+/**
+ * Histórico → grade de hexágonos → zonas. Roda em [Dispatchers.Default]; os `yield()` deixam o
+ * trabalho ser cancelado quando o motorista mexe no zoom ou nos filtros antes de terminar.
+ */
+private suspend fun computeHeat(
+    records: List<OfferRecord>,
+    filter: HeatFilter,
+    zoom: Double,
+    now: Long,
+): HeatState {
+    val points = records.mapNotNull { HeatPoints.of(it.evaluated, it.accepted, filter.spot) }
+    yield()
+    val shown = HeatPoints.filter(points, filter, now)
+    yield()
+    val grid = HeatGrid.build(shown, zoom)
+    yield()
+    val scale = HeatScale.of(grid.cells, filter.metric)
+    val zones = HeatZones.of(grid, scale, filter.metric)
+    val categories = HeatPoints.categories(points)
+    return HeatState(
+        grid = grid,
+        scale = scale,
+        zones = zones,
+        categories = categories,
+        categoryColors = HeatPalette.categoryColors(categories),
+        located = points.size,
+    )
 }
 
 /** Botões de métrica: o que o mapa pinta. */

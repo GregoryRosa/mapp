@@ -26,6 +26,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -64,7 +65,8 @@ import br.com.mapp.core.shift.ShiftTrip
 import br.com.mapp.overlay.ShiftTracker
 import kotlinx.coroutines.launch
 
-private const val HISTORY_LIMIT = 200
+/** Ofertas que a aba "Todas" mostra de cara; o botão "Carregar mais" vai somando outro tanto. */
+private const val HISTORY_PAGE = 100
 
 @Composable
 fun HistoryScreen(onBack: () -> Unit) {
@@ -79,7 +81,9 @@ fun HistoryScreen(onBack: () -> Unit) {
     val today = ReportMath.workDay(openShift?.startedAt, now)
     val todayOffers by remember(today) { repos.offers.between(today.from, today.to) }
         .collectAsStateWithLifecycle(initialValue = emptyList())
-    val offers by remember { repos.offers.recent(HISTORY_LIMIT) }
+    // A lista começa curta (a tela fica leve) e cresce quando o motorista pede mais.
+    var limit by rememberSaveable { mutableIntStateOf(HISTORY_PAGE) }
+    val offers by remember(limit) { repos.offers.recent(limit) }
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val accepted = remember(todayOffers) { ReportMath.accepted(todayOffers) }
     // Resumo do dia com a mesma conta da tela inicial e de Ganhos e gastos (km do GPS, tempo da jornada).
@@ -155,8 +159,9 @@ fun HistoryScreen(onBack: () -> Unit) {
                 } else {
                     item {
                         Text(
-                            "Últimas ${offers.size} ofertas (máx. $HISTORY_LIMIT). Toque para ver os motivos e marcar se aceitou. " +
-                                "Arraste para a esquerda para excluir.",
+                            "Últimas ${offers.size} ofertas. Toque para ver os motivos e marcar se aceitou. " +
+                                "Arraste para a esquerda para excluir. (O mapa de calor usa todas as ofertas " +
+                                "gravadas, não só estas.)",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -168,6 +173,15 @@ fun HistoryScreen(onBack: () -> Unit) {
                         }
                     } else {
                         OfferCard(r, onToggleAccepted = { toggle(r) })
+                    }
+                }
+                // Veio o tanto que foi pedido: pode haver mais guardado.
+                if (tab == 1 && offers.size >= limit) {
+                    item {
+                        OutlinedButton(
+                            onClick = { limit += HISTORY_PAGE },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Carregar mais $HISTORY_PAGE") }
                     }
                 }
             }
