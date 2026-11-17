@@ -9,6 +9,8 @@ import br.com.mapp.core.card.CardFilters
 import br.com.mapp.core.card.CardLayout
 import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.StreetViewBudget
+import br.com.mapp.core.geo.SatelliteZoom
+import br.com.mapp.core.geo.StreetZoom
 import br.com.mapp.core.notify.NoticeLayout
 import br.com.mapp.core.sound.GreatSound
 import br.com.mapp.core.sound.OfferSounds
@@ -36,6 +38,8 @@ object OverlayPrefs {
     const val KEY_STREETVIEW_BUDGET = "streetview_budget"
     const val KEY_SATELLITE_BUDGET = "satellite_budget"
     const val KEY_PHOTO_VIEW = "photo_view"
+    const val KEY_STREET_ZOOM = "street_zoom"
+    const val KEY_SATELLITE_ZOOM = "satellite_zoom"
     const val KEY_TRIP_MEMORY = "trip_memory"
 
     fun of(context: Context): SharedPreferences =
@@ -149,6 +153,21 @@ object OverlayPrefs {
 
     fun setSatelliteBudget(context: Context, budget: StreetViewBudget) {
         of(context).edit().putString(KEY_SATELLITE_BUDGET, budget.encode()).apply()
+    }
+
+    /** Zoom do satélite (padrão 4× = zoom 19 no Card; 1× = como era antes). */
+    fun satelliteZoom(context: Context): SatelliteZoom =
+        SatelliteZoom.fromId(of(context).getString(KEY_SATELLITE_ZOOM, null))
+
+    fun setSatelliteZoom(context: Context, zoom: SatelliteZoom) {
+        of(context).edit().putString(KEY_SATELLITE_ZOOM, zoom.id).apply()
+    }
+
+    /** Zoom das fotos da rua (padrão 1× = campo de visão de antes). */
+    fun streetZoom(context: Context): StreetZoom = StreetZoom.fromId(of(context).getString(KEY_STREET_ZOOM, null))
+
+    fun setStreetZoom(context: Context, zoom: StreetZoom) {
+        of(context).edit().putString(KEY_STREET_ZOOM, zoom.id).apply()
     }
 
     /**

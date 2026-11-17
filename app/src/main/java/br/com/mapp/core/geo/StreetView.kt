@@ -8,6 +8,9 @@ import java.time.Instant
 import java.time.YearMonth
 import java.time.ZoneId
 import java.util.Locale
+import kotlin.math.atan
+import kotlin.math.roundToInt
+import kotlin.math.tan
 
 /**
  * Fotos da rua (Google Street View Static API) dos pontos da corrida, embaixo do mini mapa do Card.
@@ -38,12 +41,28 @@ object StreetView {
      * Sem `heading`: o Google vira a câmera da foto mais próxima para o ponto pedido.
      * `return_error_code`: sem foto devolve erro em vez da imagem cinza "sem imagens".
      */
-    fun imageUrl(point: GeoPoint, key: String): String =
+    fun imageUrl(point: GeoPoint, key: String, zoom: StreetZoom = StreetZoom.DEFAULT): String =
         "$HOST?size=${WIDTH}x$HEIGHT&location=${coord(point)}&radius=$RADIUS_M&source=outdoor" +
-            "&fov=80&pitch=0&return_error_code=true&key=${enc(key)}"
+            "&fov=${zoom.fov}&pitch=0&return_error_code=true&key=${enc(key)}"
+
+    /** Campo de visão da foto sem zoom (1×), em graus — o que o MApp pedia antes do zoom. */
+    const val BASE_FOV = 80
+
+    /**
+     * Campo de visão (`fov`, 10–120° na API) para o zoom [factor]: a mesma conta de uma câmera
+     * (metade da largura vista ÷ zoom). 2× ≈ 46°: a fachada aparece com o dobro do tamanho.
+     */
+    fun fovFor(factor: Double): Int {
+        val half = Math.toRadians(BASE_FOV / 2.0)
+        val fov = Math.toDegrees(2 * atan(tan(half) / factor.coerceAtLeast(0.1)))
+        return fov.roundToInt().coerceIn(10, 120)
+    }
 
     /** Pontos a menos de ~1 m (5 casas decimais) usam a mesma foto. */
     fun cacheKey(point: GeoPoint): String = coord(point)
+
+    /** A foto muda com o ponto e com o zoom pedido. */
+    fun cacheKey(point: GeoPoint, zoom: StreetZoom): String = "z${zoom.id}:${coord(point)}"
 
     /**
      * Quais pontos ganham foto, na ordem do trajeto: coleta e destino sempre; paradas só se têm
@@ -72,6 +91,27 @@ object StreetView {
     private fun coord(p: GeoPoint) = String.format(Locale.US, "%.5f,%.5f", p.lat, p.lon)
 
     private fun enc(s: String) = URLEncoder.encode(s.trim(), "UTF-8")
+}
+
+/**
+ * Zoom das fotos da rua (Card → Card de corridas → Fotos da rua e satélite): menos campo de visão
+ * pedido ao Google, a fachada do ponto fica maior no quadro pequeno do Card. [X1] = como era antes (padrão).
+ */
+enum class StreetZoom(val id: String, val label: String, val factor: Double) {
+    X1("1", "1×", 1.0),
+    X1_5("1.5", "1,5×", 1.5),
+    X2("2", "2×", 2.0),
+    X2_5("2.5", "2,5×", 2.5),
+    X3("3", "3×", 3.0);
+
+    val fov: Int get() = StreetView.fovFor(factor)
+
+    companion object {
+        /** Padrão = como era antes (a foto da rua já estava boa; o zoom fica para quem quiser). */
+        val DEFAULT = X1
+
+        fun fromId(id: String?): StreetZoom = entries.firstOrNull { it.id == id } ?: DEFAULT
+    }
 }
 
 /**

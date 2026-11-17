@@ -2,6 +2,7 @@ package br.com.mapp.core
 
 import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.geo.StreetViewBudget
+import br.com.mapp.core.geo.StreetZoom
 import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.route.RouteStop
 import br.com.mapp.core.route.StopKind
@@ -29,6 +30,26 @@ class StreetViewTest {
         assertTrue(img.contains("location=-30.07123,-51.11988"))
         assertTrue(img.contains("return_error_code=true"))
         assertFalse(img.contains("heading="))
+    }
+
+    @Test
+    fun `zoom diminui o campo de visao da foto`() {
+        assertEquals(80, StreetZoom.X1.fov) // como era antes
+        assertEquals(58, StreetZoom.X1_5.fov)
+        assertEquals(46, StreetZoom.X2.fov)
+        assertEquals(31, StreetZoom.X3.fov)
+        assertEquals(StreetZoom.X1, StreetZoom.DEFAULT) // padrão = como antes
+        assertTrue(StreetView.imageUrl(p, "abc").contains("fov=80&"))
+        assertTrue(StreetView.imageUrl(p, "abc", StreetZoom.X2).contains("fov=46&"))
+        assertEquals(StreetZoom.X2_5, StreetZoom.fromId("2.5"))
+        assertEquals(StreetZoom.DEFAULT, StreetZoom.fromId(null))
+        assertEquals(StreetZoom.DEFAULT, StreetZoom.fromId("lixo"))
+    }
+
+    @Test
+    fun `zoom diferente nao usa a mesma foto`() {
+        assertFalse(StreetView.cacheKey(p, StreetZoom.X1) == StreetView.cacheKey(p, StreetZoom.X2))
+        assertEquals(StreetView.cacheKey(p, StreetZoom.X2), StreetView.cacheKey(GeoPoint(-30.0712349, -51.1198801), StreetZoom.X2))
     }
 
     @Test
