@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -54,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -206,6 +206,9 @@ internal fun HeatMapTab() {
         }
     }
 
+    // Bairro repetido ganha número, senão a lista fica com dois "Centro Histórico" iguais.
+    val labels = zoneLabels(detected, names)
+
     Column(Modifier.fillMaxSize()) {
         MetricChips(filter.metric) { filter = filter.copy(metric = it) }
         FilterChips(
@@ -213,14 +216,20 @@ internal fun HeatMapTab() {
             onOpen = { showFilters = true },
             onSet = { filter = filter.copy(set = it) },
         )
-        if (working) {
-            LinearProgressIndicator(
-                Modifier.fillMaxWidth().height(2.dp),
-                color = MappColors.Teal,
-                trackColor = Color.Transparent,
-            )
+        // A faixa fica sempre aqui, mesmo parada: se ela entrasse e saísse do layout, o mapa inteiro
+        // subia e descia 2 dp a cada conta.
+        Box(Modifier.fillMaxWidth().height(2.dp)) {
+            if (working) {
+                LinearProgressIndicator(
+                    Modifier.fillMaxSize(),
+                    color = MappColors.Teal,
+                    trackColor = Color.Transparent,
+                )
+            }
         }
-        Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
+        // Mapa e lista dividem a tela em proporção fixa: mudar o nº de zonas (ou o tamanho do
+        // rodapé) não mexe mais no tamanho do mapa, que é o que fazia a tela tremer no zoom.
+        Box(Modifier.fillMaxWidth().weight(MAP_WEIGHT).clipToBounds()) {
             AndroidView(
                 factory = { mapView },
                 modifier = Modifier.fillMaxSize(),
@@ -259,13 +268,17 @@ internal fun HeatMapTab() {
             }
         }
 
-        Surface(color = MappColors.Navy) {
-            Column(Modifier.fillMaxWidth()) {
+        Surface(color = MappColors.Navy, modifier = Modifier.fillMaxWidth().weight(LIST_WEIGHT)) {
+            Column(Modifier.fillMaxSize()) {
                 Text(
                     footer(grid, detected.size, heat.located, records.size),
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MappColors.TextDim,
+                    // Sempre 2 linhas: o texto encolhendo também empurrava a lista.
+                    minLines = 2,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 HorizontalDivider()
                 if (detected.isEmpty()) {
@@ -280,11 +293,11 @@ internal fun HeatMapTab() {
                         modifier = Modifier.padding(start = 16.dp, top = 8.dp),
                         style = MaterialTheme.typography.titleSmall,
                     )
-                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 220.dp)) {
+                    LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                         itemsIndexed(detected) { index, zone ->
                             ZoneRow(
                                 zone = zone,
-                                name = zoneName(zone, names[zoneKey(zone)], index),
+                                name = labels.getOrElse(index) { "Zona ${index + 1}" },
                                 metric = filter.metric,
                                 onClick = {
                                     highlighted = zone
@@ -314,7 +327,7 @@ internal fun HeatMapTab() {
     selected?.let { zone ->
         ZoneDetailsDialog(
             zone = zone,
-            name = zoneName(zone, names[zoneKey(zone)], detected.indexOf(zone)),
+            name = labelOf(zone, detected, labels),
             onDismiss = { selected = null },
             onSave = {
                 selected = null
@@ -324,7 +337,7 @@ internal fun HeatMapTab() {
     }
 
     toSave?.let { zone ->
-        val suggested = zoneName(zone, names[zoneKey(zone)], detected.indexOf(zone))
+        val suggested = labelOf(zone, detected, labels)
         SaveZoneDialog(
             initialName = suggested,
             initialType = zone.suggestedType,
@@ -640,6 +653,10 @@ private fun HeatFilterDialog(
     )
 }
 
+/** Quanto da tela fica com o mapa e quanto com a lista (proporção fixa: nada de pular). */
+private const val MAP_WEIGHT = 1.35f
+private const val LIST_WEIGHT = 1f
+
 private val HOUR_PRESETS: List<Pair<String, HeatHours?>> = listOf(
     "Todo dia" to null,
     "05h–11h" to HeatHours(5, 11),
@@ -654,9 +671,25 @@ private fun zoneKey(zone: HeatZone): String {
     return "$lat,$lon,${zone.cells.size}"
 }
 
-/** Nome do bairro quando o Geocoder acha; senão "Zona 1", "Zona 2"… */
-private fun zoneName(zone: HeatZone, found: String?, index: Int): String =
-    found?.takeIf { it.isNotBlank() } ?: "Zona ${if (index >= 0) index + 1 else zone.cells.size}"
+/**
+ * Nome de cada zona, na ordem da lista: o bairro que o Geocoder achou e, quando ele não acha,
+ * "Zona 1", "Zona 2"… Bairro que se repete ganha número ("Centro Histórico 2"), porque duas manchas
+ * vizinhas caem no mesmo bairro.
+ */
+private fun zoneLabels(zones: List<HeatZone>, names: Map<String, String>): List<String> {
+    val used = HashMap<String, Int>()
+    return zones.mapIndexed { index, zone ->
+        val base = names[zoneKey(zone)]?.takeIf { it.isNotBlank() } ?: "Zona ${index + 1}"
+        val n = (used[base] ?: 0) + 1
+        used[base] = n
+        if (n == 1) base else "$base $n"
+    }
+}
+
+private fun labelOf(zone: HeatZone, zones: List<HeatZone>, labels: List<String>): String {
+    val i = zones.indexOf(zone)
+    return labels.getOrElse(i) { "Zona ${if (i >= 0) i + 1 else zone.cells.size}" }
+}
 
 private fun zoneNumbers(zone: HeatZone): String = buildString {
     append("${zone.count} chamada(s)")
