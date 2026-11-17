@@ -1,6 +1,7 @@
 package br.com.mapp.core
 
 import br.com.mapp.core.support.DeviceReport
+import br.com.mapp.core.support.ScreenNames
 import br.com.mapp.core.support.SupportRules
 import br.com.mapp.core.support.Ticket
 import br.com.mapp.core.support.TicketKind
@@ -106,5 +107,30 @@ class SupportRulesTest {
         assertTrue(t.contains("sem conexão"))
         assertTrue(t.contains("ligado"))
         assertTrue(t.contains("ativa"))
+    }
+
+    @Test fun tela_do_chamado_em_portugues_com_a_aba() {
+        assertEquals("Tela inicial", ScreenNames.of("home"))
+        assertEquals("Financeiro → Relatórios", ScreenNames.of("finance", "Relatórios"))
+        assertEquals("Card → Filtros", ScreenNames.of("card_style", "Filtros"))
+        assertEquals("Tela de assinatura", ScreenNames.of(ScreenNames.PAYWALL))
+    }
+
+    @Test fun tela_sem_aba_ou_desconhecida_nao_quebra() {
+        assertEquals("Zonas", ScreenNames.of("zones", "  "))
+        assertEquals("rota_nova", ScreenNames.of("rota_nova"))
+        assertEquals("Desconhecida", ScreenNames.of(null))
+    }
+
+    @Test fun diagnostico_comeca_pela_tela() {
+        val t = DeviceReport.text(
+            appVersion = "0.3.9", androidVersion = "14", model = "Moto G",
+            readerConnected = true, copilotRunning = false, subscription = "allowed",
+            screen = "Financeiro → Relatórios",
+        )
+        assertTrue(t.startsWith("Tela: Financeiro → Relatórios\n"))
+        // Sem tela, o diagnóstico fica como antes.
+        val sem = DeviceReport.text("0.3.9", "14", "Moto G", true, false, "allowed")
+        assertTrue(sem.startsWith("MApp 0.3.9"))
     }
 }

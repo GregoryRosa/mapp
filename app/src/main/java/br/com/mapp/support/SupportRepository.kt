@@ -164,6 +164,7 @@ object SupportRepository {
         kind: TicketKind,
         message: String,
         device: String,
+        screen: String,
         onDone: (String?, String?) -> Unit,
     ) {
         if (!configured) {
@@ -194,6 +195,7 @@ object SupportRepository {
             "unreadForUser" to false,
             "waitingSupport" to true,
             "device" to device,
+            "screen" to screen,
         )
         doc.set(data)
             .addOnFailureListener { e -> Log.w(TAG, "abrir chamado", e) }
@@ -311,6 +313,7 @@ object SupportRepository {
         unreadForUser = d.getBoolean("unreadForUser") ?: false,
         waitingSupport = d.getBoolean("waitingSupport") ?: true,
         device = d.getString("device").orEmpty(),
+        screen = d.getString("screen").orEmpty(),
     )
 
     private fun kindOf(name: String?): TicketKind =

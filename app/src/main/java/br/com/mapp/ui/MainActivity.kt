@@ -28,6 +28,7 @@ import br.com.mapp.Gate
 import br.com.mapp.billing.EntitlementStore
 import br.com.mapp.billing.PlayBilling
 import br.com.mapp.core.billing.AccessRules
+import br.com.mapp.core.support.ScreenNames
 import br.com.mapp.finance.FinanceScreen
 import br.com.mapp.finance.HistoryScreen
 import br.com.mapp.finance.ProfilesScreen
@@ -117,7 +118,10 @@ private fun MappGate() {
             else -> PaywallScreen(
                 access = access,
                 entitlement = entitlement,
-                onSupport = { screen = Routes.SUPPORT },
+                onSupport = {
+                    SupportOrigin.capture(ScreenNames.PAYWALL)
+                    screen = Routes.SUPPORT
+                },
                 onAdmin = { screen = Routes.ADMIN },
             )
         }
@@ -136,7 +140,10 @@ private fun MappShell() {
         val entry by nav.currentBackStackEntryAsState()
         val route = entry?.destination?.route
         if (route != Routes.SUPPORT && route != Routes.ADMIN) {
-            SupportFab { nav.navigate(Routes.SUPPORT) }
+            SupportFab {
+                SupportOrigin.capture(route)
+                nav.navigate(Routes.SUPPORT)
+            }
         }
     }
 }

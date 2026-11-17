@@ -154,6 +154,7 @@ private class DragController {
 @Composable
 fun CardStyleScreen(onBack: () -> Unit) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    SupportTab(Routes.CARD_STYLE, listOf("Card de corridas", "Notificação", "Filtros")[tab])
     Scaffold(topBar = { BackTopBar("Card", onBack) }) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
             TabRow(selectedTabIndex = tab, containerColor = Color.Transparent) {

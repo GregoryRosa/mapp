@@ -94,6 +94,8 @@ data class Ticket(
     val waitingSupport: Boolean = true,
     /** Diagnóstico do aparelho, anexado quando o chamado é aberto (versão, celular, Android). */
     val device: String = "",
+    /** Tela (e aba) em que o motorista tocou no botão de suporte — ver [ScreenNames]. */
+    val screen: String = "",
 )
 
 /** Uma mensagem do chamado. */
@@ -121,10 +123,41 @@ object DeviceReport {
         readerConnected: Boolean,
         copilotRunning: Boolean,
         subscription: String,
+        screen: String = "",
     ): String = buildString {
+        if (screen.isNotBlank()) append("Tela: ").append(screen).append('\n')
         append("MApp $appVersion · Android $androidVersion · $model")
         append("\nLeitor: ").append(if (readerConnected) "conectado" else "sem conexão")
         append(" · Copiloto: ").append(if (copilotRunning) "ligado" else "parado")
         append(" · Assinatura: ").append(subscription)
+    }
+}
+
+/**
+ * Nome, em português, da tela em que o motorista abriu o suporte — vai junto do chamado para eu
+ * saber onde o problema aconteceu sem precisar perguntar. [route] é a rota de navegação
+ * (`ui/Routes`); [tab] é a aba aberta dentro dela, quando a tela tem abas.
+ */
+object ScreenNames {
+
+    /** Fora do app principal (sem rota): aberto na tela de assinatura. */
+    const val PAYWALL = "paywall"
+
+    private val names = mapOf(
+        "home" to "Tela inicial",
+        "finance" to "Financeiro",
+        "history" to "Ofertas",
+        "profiles" to "Perfis",
+        "zones" to "Zonas",
+        "card_style" to "Card",
+        "shifts" to "Jornadas",
+        PAYWALL to "Tela de assinatura",
+    )
+
+    /** "Financeiro → Relatórios"; rota desconhecida aparece como veio (melhor que nada). */
+    fun of(route: String?, tab: String? = null): String {
+        val base = route?.let { names[it] ?: it }?.takeIf { it.isNotBlank() } ?: return "Desconhecida"
+        val t = tab?.trim().orEmpty()
+        return if (t.isEmpty()) base else "$base → $t"
     }
 }

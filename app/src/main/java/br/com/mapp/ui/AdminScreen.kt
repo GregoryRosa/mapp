@@ -63,7 +63,11 @@ fun AdminScreen(onBack: () -> Unit) {
     if (current != null) {
         ChatScreen(
             title = "Chamado · " + SupportRules.label(current.status),
-            subject = current.subject + " · " + current.device,
+            subject = listOfNotNull(
+                current.subject,
+                current.screen.takeIf { it.isNotBlank() }?.let { "📍 Aberto em: $it" },
+                current.device.takeIf { it.isNotBlank() },
+            ).joinToString("\n"),
             ticketId = current.id,
             fromSupport = true,
             onBack = { open = null },

@@ -134,7 +134,7 @@ fun SupportScreen(onBack: () -> Unit, onAdmin: () -> Unit) {
 
             NewTicketCard(
                 onSend = { kind, text ->
-                    SupportRepository.open(kind, text, deviceLine(ctx)) { id, err ->
+                    SupportRepository.open(kind, text, deviceLine(ctx), SupportOrigin.screen) { id, err ->
                         error = err
                         if (id != null) open = id
                     }
@@ -153,7 +153,8 @@ fun SupportScreen(onBack: () -> Unit, onAdmin: () -> Unit) {
             }
 
             Text(
-                "O que eu recebo junto do chamado: versão do MApp, modelo do celular, versão do Android, " +
+                "O que eu recebo junto do chamado: a tela em que você tocou no botão de suporte, versão do " +
+                    "MApp, modelo do celular, versão do Android, " +
                     "se o leitor está ligado e se a assinatura está ativa. Nenhuma corrida, endereço, valor " +
                     "ou localização é enviado.",
                 style = MaterialTheme.typography.bodySmall,
@@ -253,6 +254,15 @@ internal fun TicketRow(t: Ticket, showUid: Boolean, onClick: () -> Unit) {
             color = MappColors.TextDim,
             maxLines = 1,
         )
+        if (showUid && t.screen.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "📍 Aberto em: ${t.screen}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MappColors.Teal,
+                maxLines = 1,
+            )
+        }
         if (showUid && t.device.isNotBlank()) {
             Spacer(Modifier.height(4.dp))
             Text(t.device, style = MaterialTheme.typography.labelSmall, color = MappColors.Periwinkle, maxLines = 2)
@@ -297,7 +307,7 @@ internal fun ChatScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MappColors.TextDim,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                maxLines = 2,
+                maxLines = 6,
             )
             LazyColumn(
                 state = listState,
@@ -401,5 +411,6 @@ internal fun deviceLine(ctx: android.content.Context): String {
         readerConnected = ReaderStatus.state.value.connected,
         copilotRunning = OverlayService.running.value,
         subscription = access.name.lowercase(),
+        screen = SupportOrigin.screen,
     )
 }

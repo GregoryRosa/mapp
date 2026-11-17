@@ -15,6 +15,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -25,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import br.com.mapp.core.support.ScreenNames
 import br.com.mapp.core.support.SupportRules
 import br.com.mapp.support.SupportRepository
 import kotlinx.coroutines.flow.flowOf
@@ -83,4 +85,33 @@ fun BoxScope.SupportFab(onOpen: () -> Unit) {
             }
         }
     }
+}
+
+/**
+ * De onde o motorista abriu o suporte. A tela é guardada **no toque do botão** (não quando o
+ * chamado é enviado), porque o botão leva para a tela de suporte e aí a "tela atual" já é outra.
+ * As telas com abas avisam a aba aberta por [SupportTab].
+ */
+object SupportOrigin {
+    private val tabs = mutableMapOf<String, String>()
+
+    /** Tela em que o botão foi tocado, já com nome em português ("Financeiro → Relatórios"). */
+    @Volatile var screen: String = ""
+        private set
+
+    fun setTab(route: String, tab: String) {
+        synchronized(tabs) { tabs[route] = tab }
+    }
+
+    /** Chamado no toque do botão de suporte. */
+    fun capture(route: String?) {
+        val tab = route?.let { synchronized(tabs) { tabs[it] } }
+        screen = ScreenNames.of(route, tab)
+    }
+}
+
+/** Tela com abas: registra a aba aberta, para o chamado dizer "Financeiro → Relatórios". */
+@Composable
+fun SupportTab(route: String, tab: String) {
+    LaunchedEffect(route, tab) { SupportOrigin.setTab(route, tab) }
 }
