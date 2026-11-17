@@ -97,14 +97,24 @@ class HeatMapTest {
         assertEquals(3, recent.size)
         assertEquals(4, HeatPoints.filter(points, HeatFilter(period = HeatPeriod.ALL), now, zone).size)
 
-        val uber = HeatPoints.filter(points, HeatFilter(platforms = setOf(Platform.UBER)), now, zone)
+        val all = HeatPeriod.ALL
+        val uber = HeatPoints.filter(points, HeatFilter(period = all, platforms = setOf(Platform.UBER)), now, zone)
         assertEquals(3, uber.size)
 
-        val uberX = HeatPoints.filter(points, HeatFilter(categories = setOf("UberX")), now, zone)
+        val uberX = HeatPoints.filter(points, HeatFilter(period = all, categories = setOf("UberX")), now, zone)
         assertEquals(2, uberX.size)
 
-        val accepted = HeatPoints.filter(points, HeatFilter(set = HeatSet.ACCEPTED), now, zone)
+        val accepted = HeatPoints.filter(points, HeatFilter(period = all, set = HeatSet.ACCEPTED), now, zone)
         assertEquals(1, accepted.size)
+
+        // Os filtros somam: Uber dentro dos 30 dias deixa de fora a oferta de 50 dias atrás.
+        val recentUber = HeatPoints.filter(
+            points,
+            HeatFilter(period = HeatPeriod.DAYS_30, platforms = setOf(Platform.UBER)),
+            now,
+            zone,
+        )
+        assertEquals(2, recentUber.size)
     }
 
     @Test fun faixa_de_horario_vira_a_meia_noite() {
