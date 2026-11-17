@@ -31,7 +31,7 @@ data class SatelliteShot(val width: Int, val height: Int, val zoom: Int) {
     fun zoomed(z: SatelliteZoom): SatelliteShot = copy(zoom = (zoom + z.levels).coerceAtMost(MAX_ZOOM))
 
     companion object {
-        /** Zoom máximo da Maps Static API (em muitos lugares o satélite só tem imagem até 19–20). */
+        /** Zoom máximo da Maps Static API (em alguns lugares o satélite só tem imagem até 19–20). */
         const val MAX_ZOOM = 21
 
         /** Zoom 17: ~700 m de largura — a quadra e o entorno do ponto. */
@@ -62,16 +62,18 @@ data class SatelliteShot(val width: Int, val height: Int, val zoom: Int) {
 /**
  * Zoom do satélite (Card → Card de corridas → Fotos da rua e satélite), somado ao zoom de cada
  * formato ([SatelliteShot]): cada passo do Google dobra o tamanho. [X1] = como era antes (Card no
- * zoom 17, ~700 m de largura); padrão [X4] = zoom 19 no Card (~175 m: a quadra e as casas do ponto).
+ * zoom 17, ~700 m de largura); padrão [X8] = zoom 20 no Card (~90 m: a rua e as casas em volta do
+ * ponto). [X16] = zoom 21, o máximo da API (nem todo lugar tem imagem tão perto).
  */
 enum class SatelliteZoom(val id: String, val label: String, val levels: Int) {
     X1("0", "1×", 0),
     X2("1", "2×", 1),
     X4("2", "4×", 2),
-    X8("3", "8×", 3);
+    X8("3", "8×", 3),
+    X16("4", "16×", 4);
 
     companion object {
-        val DEFAULT = X4
+        val DEFAULT = X8
 
         fun fromId(id: String?): SatelliteZoom = entries.firstOrNull { it.id == id } ?: DEFAULT
     }
