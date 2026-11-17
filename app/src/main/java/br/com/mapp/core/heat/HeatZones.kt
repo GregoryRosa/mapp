@@ -2,9 +2,11 @@ package br.com.mapp.core.heat
 
 import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.model.ZoneType
+import kotlin.math.abs
+import kotlin.math.round
 
 /**
- * Zona que o mapa desenhou sozinho: quadradinhos quentes que se tocam, juntos num polígono.
+ * Zona que o mapa desenhou sozinho: hexágonos quentes que se tocam, juntos num polígono.
  * [polygon] já está pronto para salvar como [br.com.mapp.core.model.Zone] (sem repetir o 1º ponto).
  */
 data class HeatZone(
@@ -16,21 +18,21 @@ data class HeatZone(
     val count: Int get() = cells.sumOf { it.count }
     val accepted: Int get() = cells.sumOf { it.accepted }
 
-    /** Média de uma métrica na zona, pesada pelo nº de ofertas de cada quadradinho. */
+    /** Média de uma métrica na zona, pesada pela densidade de cada hexágono. */
     fun avg(of: HeatMetric): Double? {
         var sum = 0.0
-        var weight = 0
+        var weight = 0.0
         cells.forEach { c ->
             val v = c.value(of) ?: return@forEach
             if (of == HeatMetric.CALLS || of == HeatMetric.CATEGORY) {
                 sum += v
-                weight += 1
+                weight += 1.0
             } else {
-                sum += v * c.count
-                weight += c.count
+                sum += v * c.weight
+                weight += c.weight
             }
         }
-        return if (weight == 0) null else sum / weight
+        return if (weight <= 0.0) null else sum / weight
     }
 
     /** Valor da métrica que criou a zona (é por ele que a lista é ordenada). */
@@ -55,16 +57,19 @@ data class HeatZone(
 }
 
 /**
- * Junta os quadradinhos quentes em zonas e traça o contorno da união.
+ * Junta os hexágonos quentes em zonas e traça o contorno da união.
  *
- * O contorno é o caminho que sobra quando os lados compartilhados entre dois quadradinhos se
- * cancelam (as arestas de cada quadradinho são orientadas no sentido anti-horário, então o lado
- * comum aparece duas vezes em sentidos opostos).
+ * O contorno é o caminho que sobra quando os lados compartilhados entre dois hexágonos se cancelam:
+ * as arestas de cada hexágono são orientadas no sentido anti-horário, então o lado comum aparece
+ * duas vezes, em sentidos opostos.
  */
 object HeatZones {
 
     /** Máximo de zonas na lista (as mais quentes primeiro). */
     const val MAX_ZONES = 12
+
+    /** Canto da grade, arredondado para os hexágonos vizinhos acharem o mesmo ponto. */
+    data class Corner(val ix: Long, val iy: Long)
 
     fun of(
         map: HeatMap,
@@ -89,24 +94,24 @@ object HeatZones {
             .take(maxZones)
     }
 
-    /** Grupos de quadradinhos que se tocam pelos lados (canto a canto não junta). */
+    /** Grupos de hexágonos que dividem um lado. */
     fun blobs(cells: List<HeatCell>): List<List<HeatCell>> {
         val byKey = HashMap<Long, HeatCell>(cells.size * 2)
-        cells.forEach { byKey[key(it.x, it.y)] = it }
+        cells.forEach { byKey[it.key] = it }
         val seen = HashSet<Long>()
         val out = ArrayList<List<HeatCell>>()
         cells.forEach { start ->
-            val startKey = key(start.x, start.y)
-            if (startKey in seen) return@forEach
+            if (start.key in seen) return@forEach
             val group = ArrayList<HeatCell>()
             val queue = ArrayDeque<Long>()
-            queue.addLast(startKey)
-            seen.add(startKey)
+            queue.addLast(start.key)
+            seen.add(start.key)
             while (queue.isNotEmpty()) {
                 val k = queue.removeFirst()
                 val cell = byKey[k] ?: continue
                 group.add(cell)
-                neighbours(cell.x, cell.y).forEach { n ->
+                HexMath.NEIGHBORS.forEach { (dq, dr) ->
+                    val n = HexMath.key(cell.q + dq, cell.r + dr)
                     if (n !in seen && byKey.containsKey(n)) {
                         seen.add(n)
                         queue.addLast(n)
@@ -119,173 +124,184 @@ object HeatZones {
     }
 
     /**
-     * Contorno da união dos quadradinhos, no sentido anti-horário, sem repetir o 1º ponto.
-     * Se algo der errado no caminho, cai no retângulo que cobre o grupo (nunca devolve lixo).
+     * Contorno da união dos hexágonos, no sentido anti-horário, sem repetir o 1º ponto.
+     * Se o caminho não fechar, cai na caixa que cobre o grupo (nunca devolve lixo).
      */
     fun outline(cells: List<HeatCell>, map: HeatMap): List<GeoPoint> {
-        val corners = trace(cells)
-        val points = corners.map { map.corner(it.x, it.y) }
+        val ring = trace(cells, map.sizeMeters)
+        val points = ring.map { map.plane.geo(it.x, it.y) }
         return if (points.size >= 3) points else boundingBox(cells, map)
     }
 
     /**
      * Um grupo pode encostar em si mesmo só pelo canto (dois blocos ligados por um caminho longo).
      * O contorno de um caminho só não dá conta disso, então o grupo vira mais de uma zona, cada uma
-     * com o seu contorno fechado e os quadradinhos que estão dentro dele.
+     * com o seu contorno fechado e os hexágonos que estão dentro dele.
      */
     fun split(cells: List<HeatCell>, map: HeatMap): List<Pair<List<HeatCell>, List<GeoPoint>>> {
         val out = ArrayList<Pair<List<HeatCell>, List<GeoPoint>>>()
         var remaining = cells
         var guard = cells.size + 2
         while (remaining.isNotEmpty() && guard-- > 0) {
-            val ring = trace(remaining)
+            val ring = trace(remaining, map.sizeMeters)
             if (ring.size < 3) {
                 out.add(remaining to boundingBox(remaining, map))
                 break
             }
-            val inside = remaining.filter { isInside(ring, it) }
+            val inside = remaining.filter { isInside(ring, HexMath.center(it.q, it.r, map.sizeMeters)) }
             if (inside.isEmpty()) {
                 out.add(remaining to boundingBox(remaining, map))
                 break
             }
-            out.add(inside to ring.map { map.corner(it.x, it.y) })
-            val used = inside.map { key(it.x, it.y) }.toHashSet()
-            remaining = remaining.filter { key(it.x, it.y) !in used }
+            out.add(inside to ring.map { map.plane.geo(it.x, it.y) })
+            val used = inside.map { it.key }.toHashSet()
+            remaining = remaining.filter { it.key !in used }
         }
         return out
     }
 
-    /** O centro do quadradinho cai dentro do contorno? (raio para a esquerda) */
-    private fun isInside(ring: List<Corner>, cell: HeatCell): Boolean {
-        val px = cell.x + 0.5
-        val py = cell.y + 0.5
-        var hit = false
-        for (i in ring.indices) {
-            val a = ring[i]
-            val b = ring[(i + 1) % ring.size]
-            if ((a.y > py) != (b.y > py)) {
-                val t = (py - a.y) / (b.y - a.y).toDouble()
-                val x = a.x + t * (b.x - a.x)
-                if (px < x) hit = !hit
-            }
-        }
-        return hit
-    }
-
-    /** Retângulo que cobre todos os quadradinhos do grupo. */
+    /** Caixa que cobre todos os hexágonos do grupo (reserva). */
     fun boundingBox(cells: List<HeatCell>, map: HeatMap): List<GeoPoint> {
         if (cells.isEmpty()) return emptyList()
-        val minX = cells.minOf { it.x }
-        val maxX = cells.maxOf { it.x } + 1
-        val minY = cells.minOf { it.y }
-        val maxY = cells.maxOf { it.y } + 1
+        val corners = cells.flatMap { HexMath.corners(it.q, it.r, map.sizeMeters) }
+        val minX = corners.minOf { it.x }
+        val maxX = corners.maxOf { it.x }
+        val minY = corners.minOf { it.y }
+        val maxY = corners.maxOf { it.y }
         return listOf(
-            map.corner(minX, minY),
-            map.corner(maxX, minY),
-            map.corner(maxX, maxY),
-            map.corner(minX, maxY),
+            map.plane.geo(minX, minY),
+            map.plane.geo(maxX, minY),
+            map.plane.geo(maxX, maxY),
+            map.plane.geo(minX, maxY),
         )
     }
 
-    private fun center(cells: List<HeatCell>): GeoPoint {
-        var lat = 0.0
-        var lon = 0.0
-        var weight = 0
-        cells.forEach { c ->
-            lat += c.center.lat * c.count
-            lon += c.center.lon * c.count
-            weight += c.count
-        }
-        if (weight == 0) return cells.first().center
-        return GeoPoint(lat / weight, lon / weight)
-    }
-
-    /** Canto da grade (x, y = índices dos cantos, não dos quadradinhos). */
-    data class Corner(val x: Int, val y: Int)
-
     /**
-     * Caminha pelas arestas da borda e devolve os cantos do contorno, já sem os pontos no meio de
-     * um lado reto. Lista vazia se o caminho não fechar (aí o chamador usa o retângulo).
+     * Caminha pelas arestas da borda e devolve os cantos do contorno, no plano em metros.
+     * Lista vazia se o caminho não fechar (aí o chamador usa a caixa).
      */
-    fun trace(cells: List<HeatCell>): List<Corner> {
-        if (cells.isEmpty()) return emptyList()
-        // Arestas de cada quadradinho no sentido anti-horário; o lado comum a dois quadradinhos
-        // aparece nos dois sentidos e é descartado.
-        val edges = HashSet<Pair<Corner, Corner>>()
-        cells.forEach { c ->
-            val sw = Corner(c.x, c.y)
-            val se = Corner(c.x + 1, c.y)
-            val ne = Corner(c.x + 1, c.y + 1)
-            val nw = Corner(c.x, c.y + 1)
-            listOf(sw to se, se to ne, ne to nw, nw to sw).forEach { e ->
-                val reverse = e.second to e.first
-                if (!edges.remove(reverse)) edges.add(e)
+    fun trace(cells: List<HeatCell>, size: Double): List<PlanePoint> {
+        if (cells.isEmpty() || size <= 0.0) return emptyList()
+        val eps = size / 1_000.0
+        val places = HashMap<Corner, PlanePoint>(cells.size * 8)
+        val edges = HashSet<Pair<Corner, Corner>>(cells.size * 8)
+
+        cells.forEach { cell ->
+            val corners = HexMath.corners(cell.q, cell.r, size)
+            val keys = corners.map { p ->
+                val k = cornerOf(p, eps)
+                places[k] = p
+                k
+            }
+            for (i in keys.indices) {
+                val edge = keys[i] to keys[(i + 1) % keys.size]
+                val reverse = edge.second to edge.first
+                if (!edges.remove(reverse)) edges.add(edge)
             }
         }
         if (edges.isEmpty()) return emptyList()
+
         val next = HashMap<Corner, MutableList<Corner>>()
         edges.forEach { (from, to) -> next.getOrPut(from) { mutableListOf() }.add(to) }
+        val start = next.keys.minWithOrNull(compareBy<Corner> { it.iy }.thenBy { it.ix }) ?: return emptyList()
 
-        // Começa no canto mais ao sul e, nele, mais a oeste: ali a aresta da borda vai para o leste.
-        val start = next.keys.minWithOrNull(compareBy<Corner> { it.y }.thenBy { it.x }) ?: return emptyList()
-        val path = ArrayList<Corner>()
+        val path = ArrayList<PlanePoint>()
         var current = start
-        var incoming = Corner(1, 0) // veio do oeste: entrou andando para o leste
+        var incoming = PlanePoint(1.0, 0.0)
         var guard = edges.size + 2
         while (guard-- > 0) {
             val options = next[current]
             if (options.isNullOrEmpty()) return emptyList()
-            val step = pick(current, options, incoming)
+            val here = places[current] ?: return emptyList()
+            val step = pick(here, options, places, incoming)
             options.remove(step)
-            path.add(current)
-            incoming = Corner(step.x - current.x, step.y - current.y)
+            path.add(here)
+            val there = places[step] ?: return emptyList()
+            incoming = PlanePoint(there.x - here.x, there.y - here.y)
             current = step
             if (current == start) return simplify(path)
         }
         return emptyList()
     }
 
+    private fun cornerOf(p: PlanePoint, eps: Double): Corner =
+        Corner(round(p.x / eps).toLong(), round(p.y / eps).toLong())
+
     /**
-     * Com mais de um caminho possível (dois quadradinhos que se tocam só pelo canto), segue o que
-     * vira mais para a esquerda — é o que mantém o miolo da zona do lado de dentro.
+     * Com mais de um caminho possível (dois hexágonos que se tocam só pelo canto), segue o que vira
+     * mais para a esquerda — é o que mantém o miolo da zona do lado de dentro.
      */
-    private fun pick(current: Corner, options: List<Corner>, incoming: Corner): Corner {
+    private fun pick(
+        here: PlanePoint,
+        options: List<Corner>,
+        places: Map<Corner, PlanePoint>,
+        incoming: PlanePoint,
+    ): Corner {
         if (options.size == 1) return options.first()
         return options.maxWithOrNull(
-            compareBy<Corner> { turn(incoming, Corner(it.x - current.x, it.y - current.y)) },
+            compareBy<Corner> { option ->
+                val p = places[option]
+                if (p == null) -3 else turn(incoming, PlanePoint(p.x - here.x, p.y - here.y))
+            },
         ) ?: options.first()
     }
 
     /** 1 = vira à esquerda, 0 = segue reto, -1 = vira à direita, -2 = volta por onde veio. */
-    private fun turn(incoming: Corner, direction: Corner): Int {
+    private fun turn(incoming: PlanePoint, direction: PlanePoint): Int {
         val cross = incoming.x * direction.y - incoming.y * direction.x
         val dot = incoming.x * direction.x + incoming.y * direction.y
         return when {
-            cross > 0 -> 1
-            cross < 0 -> -1
+            cross > 1e-9 -> 1
+            cross < -1e-9 -> -1
             dot > 0 -> 0
             else -> -2
         }
     }
 
     /** Tira os cantos no meio de um lado reto. */
-    private fun simplify(path: List<Corner>): List<Corner> {
+    private fun simplify(path: List<PlanePoint>): List<PlanePoint> {
         if (path.size < 3) return path
-        val out = ArrayList<Corner>(path.size)
+        val out = ArrayList<PlanePoint>(path.size)
         for (i in path.indices) {
             val prev = path[(i - 1 + path.size) % path.size]
             val cur = path[i]
             val nxt = path[(i + 1) % path.size]
-            val a = Corner(cur.x - prev.x, cur.y - prev.y)
-            val b = Corner(nxt.x - cur.x, nxt.y - cur.y)
-            val collinear = a.x * b.y - a.y * b.x == 0
-            if (!collinear) out.add(cur)
+            val ax = cur.x - prev.x
+            val ay = cur.y - prev.y
+            val bx = nxt.x - cur.x
+            val by = nxt.y - cur.y
+            val cross = ax * by - ay * bx
+            val scale = maxOf(abs(ax) + abs(ay), abs(bx) + abs(by), 1e-6)
+            if (abs(cross) > 1e-6 * scale * scale) out.add(cur)
         }
         return if (out.size >= 3) out else path
     }
 
-    private fun neighbours(x: Int, y: Int): List<Long> =
-        listOf(key(x + 1, y), key(x - 1, y), key(x, y + 1), key(x, y - 1))
+    /** O centro do hexágono cai dentro do contorno? (raio para a esquerda) */
+    private fun isInside(ring: List<PlanePoint>, point: PlanePoint): Boolean {
+        var hit = false
+        for (i in ring.indices) {
+            val a = ring[i]
+            val b = ring[(i + 1) % ring.size]
+            if ((a.y > point.y) != (b.y > point.y)) {
+                val t = (point.y - a.y) / (b.y - a.y)
+                val x = a.x + t * (b.x - a.x)
+                if (point.x < x) hit = !hit
+            }
+        }
+        return hit
+    }
 
-    private fun key(x: Int, y: Int): Long = (x.toLong() shl 32) or (y.toLong() and 0xFFFFFFFFL)
+    private fun center(cells: List<HeatCell>): GeoPoint {
+        var lat = 0.0
+        var lon = 0.0
+        var weight = 0.0
+        cells.forEach { c ->
+            lat += c.center.lat * c.weight
+            lon += c.center.lon * c.weight
+            weight += c.weight
+        }
+        if (weight <= 0.0) return cells.first().center
+        return GeoPoint(lat / weight, lon / weight)
+    }
 }

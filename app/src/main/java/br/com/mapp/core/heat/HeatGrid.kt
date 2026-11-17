@@ -2,169 +2,219 @@ package br.com.mapp.core.heat
 
 import br.com.mapp.core.model.GeoPoint
 import kotlin.math.PI
-import kotlin.math.abs
 import kotlin.math.cos
-import kotlin.math.floor
+import kotlin.math.max
+import kotlin.math.pow
+import kotlin.math.sqrt
 
 /**
- * Quadradinho da grade com o resumo das ofertas que caíram dentro dele.
- * [x] e [y] são índices da grade global (x = longitude, y = latitude).
+ * Um hexágono da grade, com o que foi lido dentro e em volta dele.
+ *
+ * [count] são as ofertas que caem **dentro** deste hexágono (cada oferta conta uma vez só, num
+ * hexágono só) — é o número mostrado na zona. [weight] é a densidade **suavizada**: as ofertas da
+ * vizinhança entram com peso que cai com a distância, e é ela que dá a cor. É o que faz a mancha
+ * aparecer esfumaçada, como no mapa da 99, em vez de um quadriculado duro.
  */
 data class HeatCell(
-    val x: Int,
-    val y: Int,
+    val q: Int,
+    val r: Int,
     val count: Int,
     val accepted: Int,
-    val avgPrice: Double,
+    val weight: Double,
+    val avgPrice: Double? = null,
     val avgPerKm: Double? = null,
     val avgPerHour: Double? = null,
     val avgProfit: Double? = null,
     val topCategory: String? = null,
     val center: GeoPoint = GeoPoint(0.0, 0.0),
-    val southWest: GeoPoint = GeoPoint(0.0, 0.0),
-    val northEast: GeoPoint = GeoPoint(0.0, 0.0),
+    val polygon: List<GeoPoint> = emptyList(),
 ) {
-    /** Valor da métrica escolhida; null = o quadradinho não tem esse número lido (não pinta). */
+    /** Valor da métrica escolhida; null = a vizinhança não tem esse número lido (não pinta). */
     fun value(metric: HeatMetric): Double? = when (metric) {
-        HeatMetric.CALLS -> count.toDouble()
-        HeatMetric.CATEGORY -> count.toDouble()
+        HeatMetric.CALLS -> weight
+        HeatMetric.CATEGORY -> weight
         HeatMetric.PER_KM -> avgPerKm
         HeatMetric.PER_HOUR -> avgPerHour
         HeatMetric.PROFIT -> avgProfit
         HeatMetric.PRICE -> avgPrice
     }
 
-    /** Os 4 cantos, em ordem, para desenhar ou salvar como zona. */
-    val polygon: List<GeoPoint>
-        get() = listOf(
-            GeoPoint(southWest.lat, southWest.lon),
-            GeoPoint(southWest.lat, northEast.lon),
-            GeoPoint(northEast.lat, northEast.lon),
-            GeoPoint(northEast.lat, southWest.lon),
-        )
+    val key: Long get() = HexMath.key(q, r)
 }
 
 /**
- * A grade inteira de um filtro: quadradinhos pintados + o tamanho deles.
- * [considered] = ofertas que entraram na conta; [plotted] = as que caíram em quadradinho pintado
- * (quadradinho com poucas ofertas não pinta, para uma corrida sortuda não virar zona de ouro).
+ * A grade inteira de um filtro: hexágonos pintados, o tamanho deles e o raio da suavização.
+ * [considered] = ofertas que entraram na conta; [plotted] = as que caíram em hexágono pintado.
  */
 data class HeatMap(
     val cells: List<HeatCell>,
-    val latStep: Double,
-    val lonStep: Double,
-    val meters: Double,
+    val plane: HeatPlane,
+    val sizeMeters: Double,
+    val kernelMeters: Double,
     val considered: Int,
     val plotted: Int,
 ) {
     val isEmpty: Boolean get() = cells.isEmpty()
 
-    /** Canto sudoeste do quadradinho de índice [x], [y] (também vale para os cantos da grade). */
-    fun corner(x: Int, y: Int): GeoPoint = GeoPoint(y * latStep, x * lonStep)
-
     companion object {
-        val EMPTY = HeatMap(emptyList(), 0.0, 0.0, 0.0, 0, 0)
+        val EMPTY = HeatMap(emptyList(), HeatPlane(0.0, 0.0), 0.0, 0.0, 0, 0)
     }
 }
 
 /**
- * Grade do mapa de calor. O lado do quadradinho muda com o zoom: longe junta mais (bairro),
- * perto separa (quadra).
+ * Monta a grade de hexágonos do mapa de calor.
+ *
+ * O hexágono tem **sempre o mesmo tamanho na tela** (como no mapa da 99): quem muda é quanto chão
+ * ele cobre. Dando zoom, ele passa a cobrir menos metros e a mancha fica mais específica, sem
+ * crescer na tela.
  */
 object HeatGrid {
 
-    /** Mínimo de ofertas no quadradinho para ele pintar. */
-    const val MIN_SAMPLES = 3
+    /** Largura do hexágono na tela, em dp (vale para qualquer zoom). */
+    const val TARGET_DP = 22.0
 
-    private const val METERS_PER_DEGREE = 111_320.0
+    /** Limites do tamanho do hexágono no chão: nem fino demais para o pouco dado, nem gigante. */
+    const val MIN_SIZE_M = 25.0
+    const val MAX_SIZE_M = 4_000.0
 
-    /** Lado do quadradinho, em metros, para o zoom atual do mapa. */
-    fun cellMeters(zoom: Double): Double = when {
-        zoom < 11.0 -> 2_000.0
-        zoom < 12.0 -> 1_500.0
-        zoom < 13.0 -> 1_000.0
-        zoom < 14.0 -> 600.0
-        zoom < 15.0 -> 400.0
-        zoom < 16.0 -> 250.0
-        zoom < 17.0 -> 150.0
-        else -> 100.0
+    /** Raio mínimo da suavização: abaixo disso a mancha vira pontinho solto. */
+    const val MIN_KERNEL_M = 150.0
+
+    /** Quantas ofertas por perto (já com o peso da distância) para o hexágono pintar. */
+    const val MIN_WEIGHT = 1.5
+
+    /**
+     * Metros por dp do mapa no zoom e na latitude dados. Com `setTilesScaledToDpi` a densidade da
+     * tela se cancela, então a conta vale para qualquer aparelho.
+     */
+    fun metersPerDp(zoom: Double, lat: Double): Double =
+        156_543.03392 * cos(lat * PI / 180.0) / 2.0.pow(zoom)
+
+    /** Raio do hexágono (centro até o canto) para ele sair com [TARGET_DP] de largura na tela. */
+    fun sizeMeters(zoom: Double, lat: Double, targetDp: Double = TARGET_DP): Double =
+        (targetDp * metersPerDp(zoom, lat) / HexMath.SQRT3).coerceIn(MIN_SIZE_M, MAX_SIZE_M)
+
+    /** Raio da suavização: acompanha o hexágono, com um mínimo para a mancha nunca virar ruído. */
+    fun kernelMeters(size: Double): Double = max(size * 3.0, MIN_KERNEL_M)
+
+    /** Monta a grade para o zoom atual do mapa. */
+    fun build(points: List<HeatPoint>, zoom: Double, targetDp: Double = TARGET_DP): HeatMap {
+        if (points.isEmpty()) return HeatMap.EMPTY
+        val plane = HeatPlane.of(points.map { it.point })
+        val size = sizeMeters(zoom, plane.lat0, targetDp)
+        return build(points, plane, size, kernelMeters(size))
     }
 
-    fun latStep(meters: Double): Double = meters / METERS_PER_DEGREE
+    /** Monta a grade com tamanho e suavização escolhidos (usado também pelos testes). */
+    fun build(
+        points: List<HeatPoint>,
+        plane: HeatPlane,
+        size: Double,
+        kernel: Double,
+        minWeight: Double = MIN_WEIGHT,
+    ): HeatMap {
+        if (points.isEmpty() || size <= 0.0) return HeatMap.EMPTY
+        val rings = HexMath.rings(kernel, size)
+        val acc = HashMap<Long, Acc>(points.size * 4)
 
-    /** Passo da longitude na latitude de referência, para o quadradinho sair quadrado na tela. */
-    fun lonStep(meters: Double, refLat: Double): Double {
-        val c = abs(cos(refLat * PI / 180.0))
-        return meters / (METERS_PER_DEGREE * if (c < 0.01) 0.01 else c)
-    }
-
-    /** Agrupa os pontos em quadradinhos de [meters] metros de lado. */
-    fun build(points: List<HeatPoint>, meters: Double, minSamples: Int = MIN_SAMPLES): HeatMap {
-        if (points.isEmpty() || meters <= 0.0) return HeatMap.EMPTY
-        val refLat = points.sumOf { it.point.lat } / points.size
-        val dLat = latStep(meters)
-        val dLon = lonStep(meters, refLat)
-        val groups = LinkedHashMap<Long, MutableList<HeatPoint>>()
         points.forEach { p ->
-            val x = floor(p.point.lon / dLon).toInt()
-            val y = floor(p.point.lat / dLat).toInt()
-            groups.getOrPut(key(x, y)) { mutableListOf() }.add(p)
+            val xy = plane.xy(p.point)
+            val (hq, hr) = HexMath.cellOf(xy, size)
+            // A oferta conta uma vez só, no hexágono em que ela cai.
+            acc.getOrPut(HexMath.key(hq, hr)) { Acc() }.own(p)
+            // E espalha o peso pela vizinhança, que é o que deixa a mancha macia.
+            HexMath.around(hq, hr, rings).forEach { (q, r) ->
+                val c = HexMath.center(q, r, size)
+                val dx = c.x - xy.x
+                val dy = c.y - xy.y
+                val w = weightOf(sqrt(dx * dx + dy * dy), kernel)
+                if (w > 0.0) acc.getOrPut(HexMath.key(q, r)) { Acc() }.add(p, w)
+            }
         }
-        val cells = groups.entries
-            .filter { it.value.size >= minSamples }
-            .map { cell(xOf(it.key), yOf(it.key), it.value, dLat, dLon) }
-            .sortedWith(compareByDescending<HeatCell> { it.count }.thenBy { it.y }.thenBy { it.x })
+
+        val cells = acc.entries
+            .filter { it.value.weight >= minWeight }
+            .map { (key, a) -> a.toCell(HexMath.qOf(key), HexMath.rOf(key), plane, size) }
+            .sortedWith(compareByDescending<HeatCell> { it.weight }.thenBy { it.r }.thenBy { it.q })
+
         return HeatMap(
             cells = cells,
-            latStep = dLat,
-            lonStep = dLon,
-            meters = meters,
+            plane = plane,
+            sizeMeters = size,
+            kernelMeters = kernel,
             considered = points.size,
             plotted = cells.sumOf { it.count },
         )
     }
 
-    private fun cell(x: Int, y: Int, list: List<HeatPoint>, dLat: Double, dLon: Double): HeatCell {
-        val sw = GeoPoint(y * dLat, x * dLon)
-        val ne = GeoPoint((y + 1) * dLat, (x + 1) * dLon)
-        return HeatCell(
-            x = x,
-            y = y,
-            count = list.size,
-            accepted = list.count { it.accepted },
-            avgPrice = list.sumOf { it.price } / list.size,
-            avgPerKm = avg(list.mapNotNull { it.perKm }),
-            avgPerHour = avg(list.mapNotNull { it.perHour }),
-            avgProfit = avg(list.mapNotNull { it.profit }),
-            topCategory = top(list.mapNotNull { it.category }),
-            center = GeoPoint((sw.lat + ne.lat) / 2.0, (sw.lon + ne.lon) / 2.0),
-            southWest = sw,
-            northEast = ne,
-        )
+    /**
+     * Peso de uma oferta a [distance] metros do centro do hexágono (biquadrado): 1 no centro, 0 na
+     * borda do raio, caindo macio no meio.
+     */
+    fun weightOf(distance: Double, kernel: Double): Double {
+        if (kernel <= 0.0 || distance >= kernel) return 0.0
+        val u = distance / kernel
+        val t = 1.0 - u * u
+        return t * t
     }
 
-    private fun avg(values: List<Double>): Double? =
-        if (values.isEmpty()) null else values.sum() / values.size
+    /** Soma dos pesos enquanto a grade é montada. */
+    private class Acc {
+        var count = 0
+        var accepted = 0
+        var weight = 0.0
+        private var priceSum = 0.0
+        private var priceWeight = 0.0
+        private var perKmSum = 0.0
+        private var perKmWeight = 0.0
+        private var perHourSum = 0.0
+        private var perHourWeight = 0.0
+        private var profitSum = 0.0
+        private var profitWeight = 0.0
+        private val categories = HashMap<String, Double>()
 
-    private fun top(names: List<String>): String? =
-        names.groupingBy { it }.eachCount().entries
-            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
-            .firstOrNull()?.key
+        fun own(p: HeatPoint) {
+            count += 1
+            if (p.accepted) accepted += 1
+        }
 
-    private fun key(x: Int, y: Int): Long = (x.toLong() shl 32) or (y.toLong() and 0xFFFFFFFFL)
+        fun add(p: HeatPoint, w: Double) {
+            weight += w
+            priceSum += p.price * w
+            priceWeight += w
+            p.perKm?.let { perKmSum += it * w; perKmWeight += w }
+            p.perHour?.let { perHourSum += it * w; perHourWeight += w }
+            p.profit?.let { profitSum += it * w; profitWeight += w }
+            p.category?.let { categories[it] = (categories[it] ?: 0.0) + w }
+        }
 
-    private fun xOf(key: Long): Int = (key shr 32).toInt()
+        fun toCell(q: Int, r: Int, plane: HeatPlane, size: Double): HeatCell = HeatCell(
+            q = q,
+            r = r,
+            count = count,
+            accepted = accepted,
+            weight = weight,
+            avgPrice = mean(priceSum, priceWeight),
+            avgPerKm = mean(perKmSum, perKmWeight),
+            avgPerHour = mean(perHourSum, perHourWeight),
+            avgProfit = mean(profitSum, profitWeight),
+            topCategory = categories.entries
+                .sortedWith(compareByDescending<Map.Entry<String, Double>> { it.value }.thenBy { it.key })
+                .firstOrNull()?.key,
+            center = plane.geo(HexMath.center(q, r, size)),
+            polygon = HexMath.corners(q, r, size).map { plane.geo(it) },
+        )
 
-    private fun yOf(key: Long): Int = key.toInt()
+        private fun mean(sum: Double, weight: Double): Double? = if (weight <= 0.0) null else sum / weight
+    }
 }
 
 /**
- * Escala de cor da métrica, em 5 níveis (0 = frio, 4 = quente).
+ * Escala de cor da métrica.
  *
- * **Chamadas** usa escala absoluta (o quadradinho com mais chamadas é o mais quente).
- * **Dinheiro** usa a posição do quadradinho na fila (quantil): responde "onde paga melhor" mesmo
- * quando todos os valores são parecidos. Se nada se destaca, tudo fica no nível do meio e nenhuma
- * zona é detectada — é a resposta honesta.
+ * **Chamadas** usa escala absoluta (o hexágono mais cheio é o mais quente). **Dinheiro** usa a
+ * posição do hexágono na fila (quantil): responde "onde paga melhor" mesmo quando os valores são
+ * parecidos. Se nada se destaca, tudo fica no meio e nenhuma zona é detectada — é a resposta honesta.
  */
 class HeatScale private constructor(
     private val sorted: List<Double>,
@@ -174,32 +224,34 @@ class HeatScale private constructor(
     val max: Double get() = sorted.last()
     val size: Int get() = sorted.size
 
-    fun level(value: Double): Int {
-        if (max - min <= EPS) return HeatPalette.LEVELS / 2
+    /** 0 (frio) a 1 (quente): é com ela que a cor é misturada. */
+    fun fraction(value: Double): Double {
+        if (max - min <= EPS) return 0.5
         if (!quantile) {
-            if (max <= 0.0) return 0
-            val f = value / max
-            return (f * HeatPalette.LEVELS).toInt().coerceIn(0, HeatPalette.LEVELS - 1)
+            if (max <= 0.0) return 0.0
+            return (value / max).coerceIn(0.0, 1.0)
         }
-        // Com poucos quadradinhos o quantil não separa nada: o melhor deles é sempre o mais quente.
-        if (value >= max - EPS) return HeatPalette.LEVELS - 1
+        if (value >= max - EPS) return 1.0
         val below = sorted.count { it < value }
-        return (below.toDouble() / sorted.size * HeatPalette.LEVELS)
-            .toInt()
-            .coerceIn(0, HeatPalette.LEVELS - 1)
+        return (below.toDouble() / sorted.size).coerceIn(0.0, 1.0)
     }
+
+    fun fraction(cell: HeatCell, metric: HeatMetric): Double? = cell.value(metric)?.let { fraction(it) }
+
+    fun level(value: Double): Int =
+        (fraction(value) * HeatPalette.LEVELS).toInt().coerceIn(0, HeatPalette.LEVELS - 1)
 
     fun level(cell: HeatCell, metric: HeatMetric): Int? = cell.value(metric)?.let { level(it) }
 
-    /** O quadradinho está quente o bastante para virar zona? */
-    fun isHot(cell: HeatCell, metric: HeatMetric): Boolean = (level(cell, metric) ?: -1) >= HOT_LEVEL
+    /** O hexágono está quente o bastante para entrar numa zona? */
+    fun isHot(cell: HeatCell, metric: HeatMetric): Boolean = (fraction(cell, metric) ?: 0.0) >= HOT
 
     companion object {
-        /** Nível a partir do qual o quadradinho entra numa zona automática. */
-        const val HOT_LEVEL = 3
+        /** Fração a partir da qual o hexágono entra numa zona automática. */
+        const val HOT = 0.6
         private const val EPS = 1e-9
 
-        /** null quando nenhum quadradinho tem a métrica lida (nada a pintar). */
+        /** null quando nenhum hexágono tem a métrica lida (nada a pintar). */
         fun of(cells: List<HeatCell>, metric: HeatMetric): HeatScale? {
             val values = cells.mapNotNull { it.value(metric) }.filter { it.isFinite() }
             if (values.isEmpty()) return null

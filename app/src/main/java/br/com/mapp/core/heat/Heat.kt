@@ -168,23 +168,21 @@ object HeatPoints {
 /** Cores do mapa de calor (ARGB, como [br.com.mapp.core.model.ZoneType.defaultColorArgb]). */
 object HeatPalette {
 
-    /** 5 níveis de "quanta chamada": amarelo claro → vermelho. */
-    private val DEMAND = listOf(
-        0x55FFE082L,
-        0x66FFB74DL,
-        0x77FF8A3DL,
-        0x88F4511EL,
-        0x99D32F2FL,
-    )
+    /** Quantos degraus a legenda mostra (a cor em si é contínua). */
+    const val LEVELS = 5
 
-    /** 5 níveis de dinheiro: vermelho (pouco) → verde (muito). */
-    private val MONEY = listOf(
-        0x55E53935L,
-        0x66FB8C00L,
-        0x77FDD835L,
-        0x889CCC65L,
-        0x9943A047L,
-    )
+    /** Densidade de chamadas: amarelo claro → vermelho escuro (as cores do mapa da 99). */
+    private val DEMAND = listOf(0xFFE082L, 0xFFB300L, 0xFB8C00L, 0xE53935L, 0xB71C1CL)
+
+    /** Dinheiro: vermelho (pouco) → verde (muito). */
+    private val MONEY = listOf(0xE53935L, 0xFB8C00L, 0xFDD835L, 0x9CCC65L, 0x2E7D32L)
+
+    // A borda da mancha fica quase transparente e o miolo forte: é isso que dá o ar esfumaçado,
+    // sem desenhar sombra nenhuma. No dinheiro o "pouco" também interessa, então o mínimo é maior.
+    private const val DEMAND_ALPHA_MIN = 0x2E
+    private const val DEMAND_ALPHA_MAX = 0xCC
+    private const val MONEY_ALPHA_MIN = 0x66
+    private const val MONEY_ALPHA_MAX = 0xCC
 
     /** Cor fixa por modalidade, a mesma da barra de tipos do Histórico de jornadas. */
     val CATEGORY_COLORS: Map<String, Long> = linkedMapOf(
@@ -212,11 +210,22 @@ object HeatPalette {
         0xFFFF8A65L,
     )
 
-    /** Cor do quadradinho: [level] 0 (frio) a 4 (quente). */
-    fun color(metric: HeatMetric, level: Int): Long {
-        val i = level.coerceIn(0, LEVELS - 1)
-        return if (metric.isMoney) MONEY[i] else DEMAND[i]
+    /** Cor do hexágono para a fração 0..1 da escala, com a transparência que faz a mancha. */
+    fun color(metric: HeatMetric, fraction: Double): Long {
+        val f = if (fraction.isFinite()) fraction.coerceIn(0.0, 1.0) else 0.0
+        val rgb = mix(if (metric.isMoney) MONEY else DEMAND, f)
+        val min = if (metric.isMoney) MONEY_ALPHA_MIN else DEMAND_ALPHA_MIN
+        val max = if (metric.isMoney) MONEY_ALPHA_MAX else DEMAND_ALPHA_MAX
+        val alpha = (min + (max - min) * f).toLong().coerceIn(0L, 255L)
+        return (alpha shl 24) or rgb
     }
+
+    /** Cor de um dos degraus da legenda (0 = frio, [LEVELS] - 1 = quente). */
+    fun levelColor(metric: HeatMetric, level: Int): Long =
+        color(metric, level.coerceIn(0, LEVELS - 1).toDouble() / (LEVELS - 1))
+
+    /** A mesma cor, opaca: para a bolinha da lista e os quadradinhos da legenda. */
+    fun solid(color: Long): Long = color or 0xFF000000L
 
     /** Uma cor por modalidade, na ordem em que aparecem (lista fixa primeiro). */
     fun categoryColors(names: List<String>): Map<String, Long> {
@@ -230,8 +239,31 @@ object HeatPalette {
         return out
     }
 
-    /** Quadradinho com cor de modalidade fica mais transparente que o marcador da legenda. */
-    fun translucent(color: Long, alpha: Int = 0x99): Long = (color and 0x00FFFFFFL) or (alpha.toLong() shl 24)
+    /** Hexágono com cor de modalidade: mais fraco no pouco, mais forte no muito. */
+    fun categoryColor(color: Long, fraction: Double): Long {
+        val f = if (fraction.isFinite()) fraction.coerceIn(0.0, 1.0) else 0.0
+        val alpha = (DEMAND_ALPHA_MIN + (DEMAND_ALPHA_MAX - DEMAND_ALPHA_MIN) * f).toLong().coerceIn(0L, 255L)
+        return (alpha shl 24) or (color and 0x00FFFFFFL)
+    }
 
-    const val LEVELS = 5
+    private fun mix(stops: List<Long>, f: Double): Long {
+        if (f <= 0.0) return stops.first()
+        if (f >= 1.0) return stops.last()
+        val pos = f * (stops.size - 1)
+        val i = pos.toInt().coerceIn(0, stops.size - 2)
+        return blend(stops[i], stops[i + 1], pos - i)
+    }
+
+    private fun blend(a: Long, b: Long, t: Double): Long {
+        val r = channel(a, 16, b, t)
+        val g = channel(a, 8, b, t)
+        val bl = channel(a, 0, b, t)
+        return (r shl 16) or (g shl 8) or bl
+    }
+
+    private fun channel(a: Long, shift: Int, b: Long, t: Double): Long {
+        val av = (a shr shift) and 0xFFL
+        val bv = (b shr shift) and 0xFFL
+        return (av + (bv - av) * t).toLong().coerceIn(0L, 255L)
+    }
 }

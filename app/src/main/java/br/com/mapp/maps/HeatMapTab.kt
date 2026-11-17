@@ -63,6 +63,7 @@ import br.com.mapp.core.geo.Geo
 import br.com.mapp.core.heat.HeatFilter
 import br.com.mapp.core.heat.HeatGrid
 import br.com.mapp.core.heat.HeatHours
+import br.com.mapp.core.heat.HeatMap
 import br.com.mapp.core.heat.HeatMetric
 import br.com.mapp.core.heat.HeatPalette
 import br.com.mapp.core.heat.HeatPeriod
@@ -72,6 +73,7 @@ import br.com.mapp.core.heat.HeatSet
 import br.com.mapp.core.heat.HeatSpot
 import br.com.mapp.core.heat.HeatZone
 import br.com.mapp.core.heat.HeatZones
+import br.com.mapp.core.heat.HexMath
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.Zone
 import br.com.mapp.finance.Format
@@ -114,7 +116,7 @@ internal fun HeatMapTab() {
         records.mapNotNull { HeatPoints.of(it.evaluated, it.accepted, filter.spot) }
     }
     val shown = remember(points, filter) { HeatPoints.filter(points, filter, now) }
-    val grid = remember(shown, zoom) { HeatGrid.build(shown, HeatGrid.cellMeters(zoom)) }
+    val grid = remember(shown, zoom) { HeatGrid.build(shown, zoom) }
     val scale = remember(grid, filter.metric) { HeatScale.of(grid.cells, filter.metric) }
     val detected = remember(grid, scale, filter.metric) { HeatZones.of(grid, scale, filter.metric) }
     val categories = remember(points) { HeatPoints.categories(points) }
@@ -169,7 +171,9 @@ internal fun HeatMapTab() {
 
             override fun onZoom(event: org.osmdroid.events.ZoomEvent?): Boolean {
                 val level = event?.zoomLevel ?: return false
-                if (kotlin.math.abs(level - zoom) >= 0.1) zoom = level
+                // Degraus de 1/4 de zoom: o hexágono acompanha a tela sem refazer a grade à toa.
+                val step = kotlin.math.round(level * 4.0) / 4.0
+                if (kotlin.math.abs(step - zoom) >= 0.01) zoom = step
                 return false
             }
         }
@@ -240,7 +244,7 @@ internal fun HeatMapTab() {
         Surface(color = MappColors.Navy) {
             Column(Modifier.fillMaxWidth()) {
                 Text(
-                    footer(grid.considered, grid.plotted, detected.size, points.size, records.size),
+                    footer(grid, detected.size, points.size, records.size),
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MappColors.TextDim,
@@ -408,7 +412,7 @@ private fun Legend(
                         Box(
                             Modifier
                                 .size(width = 14.dp, height = 10.dp)
-                                .background(Color(HeatPalette.color(metric, level).toInt())),
+                                .background(Color(HeatPalette.solid(HeatPalette.levelColor(metric, level)).toInt())),
                         )
                     }
                     Spacer(Modifier.width(4.dp))
@@ -434,7 +438,10 @@ private fun ZoneRow(
             Box(
                 Modifier
                     .size(14.dp)
-                    .background(Color(HeatPalette.color(metric, HeatPalette.LEVELS - 1).toInt() or 0xFF000000.toInt()), CircleShape),
+                    .background(
+                        Color(HeatPalette.solid(HeatPalette.levelColor(metric, HeatPalette.LEVELS - 1)).toInt()),
+                        CircleShape,
+                    ),
             )
         },
         headlineContent = { Text(name) },
@@ -600,23 +607,32 @@ private fun zoneNumbers(zone: HeatZone): String = buildString {
     if (zone.accepted > 0) append(" · ${zone.accepted} aceita(s)")
 }
 
-private fun footer(considered: Int, plotted: Int, zones: Int, withPoint: Int, records: Int): String {
+private fun footer(grid: HeatMap, zones: Int, withPoint: Int, records: Int): String {
     val lost = records - withPoint
     return buildString {
-        append("$plotted de $considered oferta(s) no mapa")
+        append("${grid.plotted} de ${grid.considered} oferta(s) no mapa")
         if (zones > 0) append(" · $zones zona(s)")
+        if (!grid.isEmpty) append(" · hex de ${hexSize(grid.sizeMeters)}")
         if (lost > 0) append(" · $lost sem endereço localizado")
     }
 }
+
+/** "~600 m" ou "~1,5 km", para dar para ver o hexágono encolhendo com o zoom. */
+private fun hexSize(size: Double): String {
+    val meters = size * HexMath.SQRT3
+    return if (meters >= 1_000) "~${Format.input((meters / 1_000).roundTo1())} km" else "~${meters.toInt()} m"
+}
+
+private fun Double.roundTo1(): Double = kotlin.math.round(this * 10) / 10
 
 private fun emptyMessage(points: Int, cells: Int): String = when {
     points == 0 ->
         "Nenhuma oferta com endereço localizado no período. O mapa usa a coordenada da coleta " +
             "(ou do destino): ofertas cujo endereço o GPS não localizou ficam de fora."
     cells == 0 ->
-        "Ainda não há ${HeatGrid.MIN_SAMPLES} ofertas no mesmo pedaço do mapa. Um quadradinho só " +
-            "pinta a partir daí, para uma corrida sortuda não virar zona de ouro."
+        "Ainda não há ofertas suficientes perto umas das outras. A mancha só aparece onde houver " +
+            "uma dupla de chamadas por perto, para uma corrida sortuda não virar zona de ouro."
     else ->
-        "Os quadradinhos estão todos parecidos: nenhuma região se destaca nesta métrica. " +
-            "Troque a métrica, o período ou aproxime o mapa."
+        "A mancha está pareja: nenhuma região se destaca nesta métrica. " +
+            "Troque a métrica, o período ou dê zoom para separar melhor."
 }
