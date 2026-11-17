@@ -1,6 +1,6 @@
 # MApp — Copiloto pessoal para motoristas de app
 
-App Android de uso pessoal, inspirado em **Rota Pro**, **GigU** (ex-StopClub) e **Rydex Pro**. Ele lê as ofertas de corrida da **Uber, 99 e inDrive**, mostra na hora se a corrida vale a pena (semáforo + mini mapa), avisa se a coleta/destino cai numa zona marcada por você e controla ganhos, gastos e relatórios.
+App Android inspirado em **Rota Pro**, **GigU** (ex-StopClub) e **Rydex Pro**, publicado na **Google Play** por **assinatura mensal**. Ele lê as ofertas de corrida da **Uber, 99 e inDrive**, mostra na hora se a corrida vale a pena (semáforo + mini mapa), avisa se a coleta/destino cai numa zona marcada por você e controla ganhos, gastos e relatórios.
 
 > **Princípio de projeto:** o MApp **só lê e mostra informações**. Ele **nunca aceita nem recusa corridas sozinho** — isso protege a conta do motorista (Uber trata automação como fraude) e respeita a política do Google Play sobre Acessibilidade.
 
@@ -30,7 +30,7 @@ App Android de uso pessoal, inspirado em **Rota Pro**, **GigU** (ex-StopClub) e 
 
 **Reclamações comuns:** acessibilidade desligando sozinha, leitura errada do valor, app morto pela economia de bateria.
 
-**Riscos:** Uber processou a StopClub (liminar derrubada pelo TJ-SP; CADE reabriu investigação contra a Uber em jul/2026). Uber lista “apps não autorizados” como motivo de desativação. Google Play proíbe ações *autônomas* via Acessibilidade e exige aviso destacado + declaração no Console. Como o MApp é para uso pessoal (instalação direta/APK), o risco de loja é baixo, mas a regra de **não automatizar cliques** permanece.
+**Riscos:** Uber processou a StopClub (liminar derrubada pelo TJ-SP; CADE reabriu investigação contra a Uber em jul/2026). Uber lista “apps não autorizados” como motivo de desativação. Google Play proíbe ações *autônomas* via Acessibilidade e exige aviso destacado + declaração no Console. **Com o app na loja esse risco deixa de ser teórico:** por isso `isAccessibilityTool=false`, aviso destacado com aceite na primeira abertura, nenhuma automação de clique no código e a declaração pronta na seção 6.5. Rota Pro, GigU e Rydex Pro estão na Play Store com o mesmo arranjo.
 
 Fontes: rotapro.app, play.google.com (app.rotapro, br.com.rydex.app), gigu.app/help, appgoblin.info/apps/co.gigu.app, therideshareguy.com, migalhas.com.br, timesbrasil.com.br, uber.com/br/pt-br/drive/safety/deactivations, support.google.com/googleplay/android-developer/answer/10964491.
 
@@ -51,12 +51,14 @@ Fontes: rotapro.app, play.google.com (app.rotapro, br.com.rydex.app), gigu.app/h
 | R7 | Histórico de ofertas e corridas | v1 |
 | R8 | Relatórios: melhores horários/dias, R$/km médio, mapa das melhores regiões | v1 |
 | R9 | Backup/exportação CSV | v1 |
+| R10 | **Assinatura mensal pela Google Play**: o app só abre para quem paga | loja |
+| R11 | **Suporte dentro do app**: botão em todas as telas, chat e report de bug, com painel de chamados só para mim | loja |
 
 ---
 
 ## 3. Arquitetura
 
-**Stack:** Kotlin · Jetpack Compose (Material 3) · Room · Coroutines/Flow · osmdroid (mapa OpenStreetMap, sem chave de API) · `android.location.Geocoder` (endereço → coordenada, nativo e gratuito) · Fused Location · ML Kit Text Recognition com modelo embutido no APK (OCR no aparelho). · Google Street View Static API (fotos da rua) e Maps Static API (satélite) no Card, na notificação e em Atividades — opcionais, com a mesma chave colada no app.
+**Stack:** Kotlin · Jetpack Compose (Material 3) · Room · Coroutines/Flow · osmdroid (mapa OpenStreetMap, sem chave de API) · `android.location.Geocoder` (endereço → coordenada, nativo e gratuito) · Fused Location · ML Kit Text Recognition com modelo embutido no APK (OCR no aparelho). · Google Street View Static API (fotos da rua) e Maps Static API (satélite) no Card, na notificação e em Atividades — opcionais, com a mesma chave colada no app. · **Play Billing 8** (assinatura mensal) · **Firebase Firestore + Auth** (só o chat de suporte; o resto do app continua sem servidor).
 
 ```
 app/src/main/java/br/com/mapp/
@@ -66,7 +68,9 @@ app/src/main/java/br/com/mapp/
 ├── maps/        # Editor de zonas, geocodificação, utilidades osmdroid
 ├── data/        # Room: entidades, DAOs, repositórios
 ├── finance/     # Telas de ganhos/gastos/metas e relatórios
-└── ui/          # MainActivity, navegação, tema, configurações, permissões
+├── billing/     # Play Billing: consulta a assinatura e guarda o último "sim" do Play
+├── support/     # Chat de suporte no Firestore (login anônimo do motorista, e-mail/senha do dono)
+└── ui/          # MainActivity, navegação, tema, configurações, permissões, assinatura e suporte
 ```
 
 **Fluxo de uma oferta**
@@ -87,7 +91,10 @@ App Uber/99/inDrive  →  OfferAccessibilityService
 - **Cartão e ícone "M" são janelas da Acessibilidade** (`TYPE_ACCESSIBILITY_OVERLAY`, abertas pelo `WindowManager` do serviço do leitor): a Uber esconde as sobreposições comuns (`TYPE_APPLICATION_OVERLAY`) enquanto a solicitação está na tela. Sem o leitor ligado, voltam a ser sobreposição comum.
 - **Leitura por imagem** (`reader/ScreenOcr`): `takeScreenshotOfWindow` (Android 14+, só a janela do app de corrida — janelas por cima não atrapalham) ou `takeScreenshot` recortado na área do app (Android 11–13). Enquanto nenhum modo provou que enxerga a oferta, o leitor usa os dois a cada ciclo; depois fica com o que funcionou (regras em `reader/OfferTracker`, Kotlin puro com testes: quem publicou a oferta decide que ela sumiu; na imagem os trechos tempo+km identificam a oferta, para um quadro mal lido não repetir voz/cartão). A imagem vive só na memória durante o reconhecimento: **nunca é salva nem enviada**. O canal de estatísticas do ML Kit (`TransportBackendDiscovery`) é removido no manifest.
 - OCR erra de jeitos diferentes do texto: endereço quebrado em 2 linhas, "•" que some ou vira outro sinal, ícone lido como letra. O parser tem um modo `fromOcr` para isso, mais rígido (só é oferta com botão Aceitar ou com busca + viagem completos). Testes em `OcrParsingTest` usam a saída real de dois motores de OCR sobre os prints do cartão.
-- A versão do app (`0.2.<nº do build>`) aparece no topo da tela inicial, no painel do ícone "M" e no título da release.
+- A versão do app (`0.3.<nº do build>`) aparece no topo da tela inicial, no painel do ícone "M" e no título da release.
+- **Assinatura:** a decisão de liberar ou bloquear é Kotlin puro (`core/billing/AccessRules`, com teste); toda a dependência da biblioteca do Play mora num arquivo só (`billing/PlayBilling`). A conferência é no aparelho, sem servidor: o app guarda o **último "sim" do Play** e o prazo dele. Sem internet o motorista continua rodando por até 7 dias (senão um túnel ou um chip sem dados derrubaria quem pagou); passado o prazo, o app pede conexão em vez de acusar falta de pagamento. O `OverlayService` também confere — o copiloto não sobe sem assinatura, nem quando o Android reinicia o serviço sozinho.
+- **Suporte:** o botão fica no canto de **todas** as telas porque é desenhado uma vez por cima do `NavHost` (`ui/SupportFab` em `MainActivity`), não tela por tela. O chat é a única coisa do app que fala com servidor, e leva só o que o motorista escreve + versão/modelo/Android/leitor/assinatura. O painel é a **mesma tela de conversa**, com `fromSupport = true`.
+- **Acessibilidade e a loja:** `isAccessibilityTool=false` (o MApp não é ferramenta de acessibilidade; declarar o contrário é declaração falsa e dá suspensão da conta). Em troca, o Play exige **aviso destacado com aceite explícito** antes de qualquer permissão — é a `ui/ConsentScreen`, na primeira abertura.
 
 ---
 
@@ -113,12 +120,126 @@ As regras compartilhadas ficam em `CLAUDE.md`.
 2. Rode no celular (cabo USB ou Wi-Fi debug).
 3. No app: conceda **Sobrepor outros apps**, **Localização** e ative o **serviço de Acessibilidade “MApp”**. Desative a otimização de bateria para o MApp. A leitura por imagem precisa de Android 11+ (ideal: 14+).
 4. Configure os custos do carro em *Financeiro → Custos fixos* e um perfil de filtro; desenhe suas zonas em *Configurações → Zonas*.
+5. Para o **chat de suporte** funcionar no Android Studio, coloque o `google-services.json` em `app/` (seção 6.2). Sem ele o app roda igual, com o chat desligado.
+6. A **assinatura** só é testável com o app num canal de teste do Play e a conta no *teste de licença* (seção 6.3). No APK de teste do CI, sem assinatura o app abre na tela de assinatura — use a conta de teste de licença para liberar.
 
-O GitHub Actions (`.github/workflows/android.yml`) compila e roda os testes a cada push e publica o APK em **Releases → ultima-versao** (https://github.com/GregoryRosa/mapp/releases/tag/ultima-versao).
+O GitHub Actions (`.github/workflows/android.yml`) compila e roda os testes a cada push e publica o APK em **Releases → ultima-versao** (https://github.com/GregoryRosa/mapp/releases/tag/ultima-versao). Com os secrets da seção 6, o mesmo build gera o **AAB assinado** para a loja.
 
 ---
 
-## 6. Roadmap
+## 6. Publicar na Google Play
+
+O app passou a ser **pago por assinatura mensal** e a ter **suporte dentro do app**. O que muda no projeto: `compileSdk`/`targetSdk` **36** (exigência do Play desde 31/08/2026), Play Billing **8** (idem), `isAccessibilityTool=false` com **aviso destacado e aceite** na primeira abertura, política de privacidade publicada e **AAB** assinado com chave de upload gerado pelo CI.
+
+### 6.1 Chave de upload (uma vez)
+
+```bash
+keytool -genkey -v -keystore mapp-upload.jks -alias mapp \
+  -keyalg RSA -keysize 2048 -validity 10000
+base64 -w0 mapp-upload.jks > mapp-upload.b64   # Windows: certutil -encode
+```
+
+Guarde o `.jks` **fora do repositório** (ele está no `.gitignore`) e crie os *secrets* em **Settings → Secrets and variables → Actions**:
+
+| Secret | Valor |
+|---|---|
+| `MAPP_KEYSTORE_BASE64` | conteúdo de `mapp-upload.b64` |
+| `MAPP_KEYSTORE_PASSWORD` | senha do keystore |
+| `MAPP_KEY_ALIAS` | `mapp` |
+| `MAPP_KEY_PASSWORD` | senha da chave |
+| `GOOGLE_SERVICES_JSON` | conteúdo do `google-services.json` (ver 6.2) |
+
+Sem esses secrets o CI continua funcionando: sai o APK de teste de sempre, **sem** o AAB e **sem** o chat. Com eles, cada push em `main` publica o artefato **`mapp-play-aab`** (`app/build/outputs/bundle/release/*.aab`) — é esse arquivo que vai para o Play Console. Como o Play usa **Play App Signing**, ele reassina o AAB: perder a chave de upload é recuperável pelo suporte do Google; perder a conta, não.
+
+### 6.2 Firebase (chat de suporte e painel)
+
+1. [console.firebase.google.com](https://console.firebase.google.com) → novo projeto **MApp** (pode recusar o Analytics).
+2. **Adicionar app → Android**, pacote `br.com.mapp` → baixe o `google-services.json`. Coloque em `app/google-services.json` (para compilar no Android Studio) e o mesmo conteúdo no secret `GOOGLE_SERVICES_JSON`.
+3. **Authentication → Métodos de login:** ative **Anônimo** (o motorista não cria conta) e **E-mail/senha**. Em **Users → Adicionar usuário**, crie o seu e-mail com uma senha: é com ela que você entra no painel.
+4. **Firestore Database → Criar**, modo produção, região `southamerica-east1`.
+5. **Regras → cole e publique** (trocando o e-mail pelo seu):
+
+```javascript
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function dono() {
+      return request.auth != null && request.auth.token.email != null
+        && request.auth.token.email.lower() == 'coloque-seu-email@aqui.com';
+    }
+    function donoDoChamado(ticket) {
+      return request.auth != null
+        && get(/databases/$(database)/documents/tickets/$(ticket)).data.uid == request.auth.uid;
+    }
+
+    match /tickets/{ticket} {
+      // O dono lê todos; o motorista só os dele (o app sempre filtra por uid).
+      allow read: if dono() || (request.auth != null && resource.data.uid == request.auth.uid);
+      allow create: if request.auth != null
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.lastFromSupport == false
+        && request.resource.data.lastMessage.size() <= 2000;
+      allow update: if dono()
+        || (request.auth != null && resource.data.uid == request.auth.uid
+            && request.resource.data.uid == resource.data.uid);
+      allow delete: if dono();
+
+      match /messages/{msg} {
+        allow read: if dono() || donoDoChamado(ticket);
+        // Só o dono escreve como suporte: APK modificado não se passa por atendente.
+        allow create: if (dono() && request.resource.data.fromSupport == true)
+          || (donoDoChamado(ticket) && request.resource.data.fromSupport == false
+              && request.resource.data.text.size() <= 2000);
+        allow update, delete: if dono();
+      }
+    }
+  }
+}
+```
+
+6. Troque **`MappConfig.OWNER_EMAIL`** (e `SUPPORT_EMAIL`) pelo mesmo e-mail. O e-mail no código só diz ao app qual conta mostra o painel; **quem garante o acesso são as regras acima** — nem com o APK modificado outra pessoa lê os chamados.
+
+O plano gratuito (Spark) do Firestore dá 50 mil leituras e 20 mil escritas por dia: folgado para um chat de suporte, sem cartão de crédito.
+
+### 6.3 Assinatura no Play Console
+
+1. **Monetizar → Produtos → Assinaturas → Criar assinatura.** ID do produto: **`mapp_mensal`** (exatamente igual ao `MappConfig.SUBSCRIPTION_ID`).
+2. Crie o **plano base** mensal, com o preço em R$, e **ative**.
+3. Na aba **Ofertas**, crie uma oferta com **fase gratuita** (7, 14 ou 30 dias) e ative. O app mostra sozinho "Teste grátis de N dias" e usa essa oferta na compra.
+4. **Configurações → Testes de licença:** adicione o seu e-mail e os dos testadores que você quiser liberar — eles compram em modo teste, sem cobrança real, e a renovação roda em minutos (bom para testar o bloqueio).
+
+Enquanto o app não estiver num canal de teste com a sua conta dentro, o Play responde "produto não encontrado" — a tela de assinatura mostra isso em português em vez de travar sem explicação.
+
+### 6.4 Declarações obrigatórias (Conteúdo do app)
+
+| Item | O que responder |
+|---|---|
+| **Política de privacidade** | `https://gregoryrosa.github.io/mapp/privacidade.html` — ative em **Settings → Pages → Deploy from branch → main /docs** |
+| **Serviços de acessibilidade** | `isAccessibilityTool=false`. Motivo: **Funcionalidade do app**. Texto pronto em 6.5 |
+| **Acesso ao app** | "Parte da funcionalidade é restrita": explique que exige assinatura mensal pela Google Play. Se o Google pedir acesso, gere um código em **Monetizar → Códigos promocionais** e cole nas instruções |
+| **Público-alvo** | 18 anos ou mais. Sem anúncios |
+| **Segurança dos dados** | Coleta: **mensagens no app** (suporte ao cliente, opcional) e **informações de diagnóstico** (versão, modelo, Android). **Localização: não coletada** — usada só no aparelho e nunca enviada. **Fotos/vídeos: não coletados** — a imagem da tela existe só na memória. Criptografia em trânsito: **sim**. Exclusão de dados a pedido: **sim** |
+| **Classificação de conteúdo** | Questionário comum: sem violência, sexo, apostas ou linguagem imprópria |
+
+### 6.5 Texto da declaração de Acessibilidade
+
+> O MApp é um copiloto para motoristas de aplicativo. Ele usa a API de Acessibilidade para **ler** a oferta de corrida exibida pelos apps Uber, 99 e inDrive (`android:packageNames` limita o serviço a esses três pacotes) e calcular R$/km, R$/hora e lucro líquido, mostrando o resultado num card sobreposto. Quando o app de corrida não expõe a oferta como texto, o serviço captura a imagem apenas daquela janela e reconhece o texto **no próprio dispositivo** (ML Kit com modelo embarcado); a imagem não é salva nem transmitida.
+>
+> O app **não executa nenhuma ação na interface**: não declara `canPerformGestures` e não chama `performAction` nem `dispatchGesture` — ele nunca aceita, recusa ou toca em nada por conta própria, e não inicia, planeja ou executa decisões de forma autônoma. A decisão é sempre do motorista.
+>
+> O uso é informado ao usuário na primeira abertura, em aviso destacado, com aceite explícito antes de qualquer permissão, e descrito na política de privacidade e na ficha da loja.
+
+### 6.6 Primeiro envio
+
+1. **Teste fechado → Criar lançamento** → suba o AAB do artefato `mapp-play-aab`.
+2. Cadastre os e-mails dos testadores e mande o **link de aceite**. O testador precisa **aceitar o convite antes de abrir o app**, senão a assinatura aparece como indisponível.
+3. Confira no Console, em **Detalhes do pacote**, o aviso **"Tamanho da página de memória"**. Se disser que não há compatibilidade com 16 KB, a correção é subir a versão do `mlkit-text` em `gradle/libs.versions.toml` (são as bibliotecas nativas do ML Kit que precisam do alinhamento) — é o único item que depende de uma versão que pode ter saído depois deste commit.
+4. Teste no celular, com a conta de teste de licença: assinar, cancelar (o app continua até o fim do ciclo), e abrir em modo avião (continua liberado até 7 dias).
+
+---
+
+## 7. Roadmap
 
 - **Fase 1 – MVP:** R1–R6, testes de parser com textos reais de ofertas.
 - **Fase 2:** histórico, relatórios, mapa de calor das melhores regiões, CSV.
@@ -128,7 +249,7 @@ O GitHub Actions (`.github/workflows/android.yml`) compila e roda os testes a ca
 
 ---
 
-## 7. Status
+## 8. Status
 
 | Data | Marco |
 |---|---|
@@ -201,4 +322,12 @@ O GitHub Actions (`.github/workflows/android.yml`) compila e roda os testes a ca
 | 16/11/2026 | **Satélite ainda mais perto.** Com 4× (zoom 19, ~175 m) ainda não dava para ver a rua e as casas em volta. O padrão do **Zoom do satélite** passou para **8×**: Card no zoom 20 (~90 m de largura — a rua e as casas vizinhas do ponto), notificação e Atividades no 19. Novo passo **16×** (zoom 21, o máximo da Maps Static API; em alguns lugares o Google não tem imagem tão perto e ela vem cinza). Quem já tinha escolhido um zoom em *Card → Card de corridas → Fotos da rua e satélite* continua com o escolhido. Testes em `SatelliteViewTest`. |
 | 17/11/2026 | **O "!" do ícone "M" agora diz o que está errado.** O "!" cinza aparece quando o Android **não conectou** o leitor (`ReaderStatus.connected`), mas a tela inicial só olhava se a Acessibilidade estava *marcada* nas Configurações — por isso ela dizia "Tudo ativado" com o ícone avisando problema (leitor derrubado pela economia de bateria ou parado depois de atualizar o app). Agora as duas telas usam a mesma regra (`core/status/ReaderCheck`): **Leitor desligado** (Acessibilidade desativada) ou **Leitor sem conexão** (marcada como ligada, mas o Android não conectou — desligue e ligue de novo o MApp em Configurações → Acessibilidade). **Ícone:** tocar no "M" com o "!" mostra o motivo e o que fazer (10 s), e se o leitor continuar sem conexão 2,5 s depois de cair, o aviso aparece sozinho. **Tela inicial:** o cartão *Permissões* só diz "Tudo ativado" com o leitor realmente conectado; senão mostra a linha da Acessibilidade com o motivo e o botão Ativar. Testes em `ReaderCheckTest`. |
 
-**Pendências conhecidas:** corrida em fila — confirmar no celular com o **Registro** (Histórico de jornadas) da próxima ocorrência; print de oferta com 2+ paradas (e da 99/inDrive) para calibrar; confirmar no celular a leitura por imagem (e medir bateria); 99 e inDrive no celular; exportar CSV (R9); persistir `zoneHits`; testes de `Format.parse` e `PolygonCodec`; após o 1º build, versionar `app/schemas/` do Room.
+| 17/11/2026 | **Pronto para a Play Store: assinatura mensal e suporte dentro do app.** (1) **Assinatura** — `compileSdk`/`targetSdk` **36** e **Play Billing 8** (as duas exigências do Play desde 31/08/2026), tela de assinatura com preço e teste grátis lidos do Console, "Já assinei", "Gerenciar" e os erros do Play em português; sem assinatura ativa só abrem a tela de assinatura, o suporte e o painel, e o **copiloto não sobe** (`Gate`, conferido também no `OverlayService`). Tolerância de **7 dias sem internet** e, na primeira abertura, "conferindo" em vez de paywall (regras em `core/billing/AccessRules`, testes em `SubscriptionTest`). (2) **Suporte** — botão no **canto de todas as telas** (uma vez, por cima do `NavHost`), com bolinha quando o suporte responde; chamado de **🐞 bug** ou **💬 dúvida**, chat em tempo real e diagnóstico anexado (versão, modelo, Android, leitor, assinatura — nenhuma corrida, endereço, valor ou GPS); **painel de chamados só para a minha conta**, com fila por quem esperou mais, responder e marcar resolvido (`core/support`, testes em `SupportRulesTest`; Firestore em `support/SupportRepository`, com as regras no README). Sem `google-services.json` o app compila e roda igual, com o chat desligado e o e-mail no lugar. (3) **Conformidade** — `isAccessibilityTool=false` (era `true`, que é declaração falsa e dá suspensão da conta), **aviso destacado com aceite** antes de qualquer permissão (`ui/ConsentScreen`), política de privacidade publicável em `docs/privacidade.html`, `allowBackup=false`, e o CI gerando o **AAB assinado** com a chave de upload vinda dos secrets. Textos das declarações do Console e passo a passo na **seção 6**. **Ainda sem build nem teste no celular** (ver pendências). |
+
+**Pendências conhecidas:**
+- **Nada deste commit foi compilado nem testado:** o ambiente onde ele foi escrito não tem Android SDK nem acesso ao Maven do Google. O CI (build + 2 suítes novas de teste) é a primeira conferência — rode-o antes de subir qualquer coisa para a loja.
+- Se o CI reclamar da chamada `queryProductDetailsAsync` em `billing/PlayBilling.kt`, é a mudança de assinatura da Play Billing 8: troque `response.productDetailsList` por `response` (era `List<ProductDetails>` na 7, virou `QueryProductDetailsResult` na 8).
+- Versões que não pude resolver aqui: `billing 8.0.0`, `firebase-bom 33.7.0`, `google-services 4.4.2`. Se alguma não existir, o erro do CI diz a versão disponível.
+- Aviso de **16 KB** no Play Console (ML Kit) — ver 6.6.
+- R8/`minify` está **desligado** no release: ligar só depois de testar um APK release no aparelho (leitor, Card e chat).
+- Confirmar no celular: compra, cancelamento, bloqueio e o chat ponta a ponta. corrida em fila — confirmar no celular com o **Registro** (Histórico de jornadas) da próxima ocorrência; print de oferta com 2+ paradas (e da 99/inDrive) para calibrar; confirmar no celular a leitura por imagem (e medir bateria); 99 e inDrive no celular; exportar CSV (R9); persistir `zoneHits`; testes de `Format.parse` e `PolygonCodec`; após o 1º build, versionar `app/schemas/` do Room.

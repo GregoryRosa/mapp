@@ -2,14 +2,17 @@
 <!-- Somente leitura: NÃO adicionar canPerformGestures (proibido automatizar aceite/recusa).
      canTakeScreenshot: a Uber não entrega o cartão da oferta como texto; o leitor captura a imagem da
      janela do app de corrida e reconhece o texto no aparelho (reader/ScreenOcr). Nada é salvo.
-     isAccessibilityTool: libera a leitura de telas que os apps marcam como sensíveis (Android 14+). -->
+     isAccessibilityTool=false: o MApp NÃO é ferramenta de acessibilidade — ele usa a API para a sua
+     função principal (ler a oferta de corrida). Declarar "true" seria declaração falsa ao Google e
+     dá suspensão do app e da conta de desenvolvedor. Por isso o aviso destacado com aceite
+     (ui/ConsentScreen) e a declaração de Acessibilidade no Play Console (README → Play Console). -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
     android:canRetrieveWindowContent="true"
     android:canTakeScreenshot="true"
-    android:isAccessibilityTool="true"
+    android:isAccessibilityTool="false"
     android:description="@string/accessibility_description"
     android:notificationTimeout="150"
     android:packageNames="com.ubercab.driver,com.app99.driver,sinet.startup.inDriver" />

@@ -19,6 +19,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
+import br.com.mapp.Gate
 import br.com.mapp.MappApp
 import br.com.mapp.core.bus.OfferBus
 import br.com.mapp.core.card.CardFilters
@@ -770,6 +771,13 @@ class OverlayService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         if (intent?.action == ACTION_STOP) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        // O copiloto é a parte paga: sem assinatura ativa ele não sobe (nem quando o Android
+        // reinicia o serviço sozinho por causa do START_STICKY). A decisão é do core/billing.
+        if (!Gate.isOpen(this)) {
+            Toast.makeText(this, "Assinatura do MApp inativa: abra o app para assinar.", Toast.LENGTH_LONG).show()
             stopSelf()
             return START_NOT_STICKY
         }

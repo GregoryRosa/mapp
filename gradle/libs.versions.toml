@@ -12,6 +12,10 @@ coroutines = "1.9.0"
 osmdroid = "6.1.20"
 playLocation = "21.3.0"
 mlkitText = "16.0.1"
+# Play Billing 8+ é obrigatório para publicar desde 31/08/2026 (versões 7 ou menores são recusadas).
+billing = "8.0.0"
+firebaseBom = "33.7.0"
+googleServices = "4.4.2"
 junit = "4.13.2"
 
 [libraries]
@@ -37,6 +41,11 @@ osmdroid = { module = "org.osmdroid:osmdroid-android", version.ref = "osmdroid" 
 play-location = { module = "com.google.android.gms:play-services-location", version.ref = "playLocation" }
 # Reconhecimento de texto no aparelho, com o modelo dentro do APK (não baixa nada depois de instalado).
 mlkit-text = { module = "com.google.mlkit:text-recognition", version.ref = "mlkitText" }
+billing = { module = "com.android.billingclient:billing-ktx", version.ref = "billing" }
+# Chat de suporte: Firestore (tempo real) + login anônimo do motorista e e-mail/senha do dono.
+firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
+firebase-firestore = { module = "com.google.firebase:firebase-firestore" }
+firebase-auth = { module = "com.google.firebase:firebase-auth" }
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]
@@ -44,3 +53,4 @@ android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }

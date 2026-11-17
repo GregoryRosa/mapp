@@ -1,6 +1,7 @@
 package br.com.mapp
 
 import android.app.Application
+import br.com.mapp.billing.PlayBilling
 import br.com.mapp.core.repo.Repositories
 import br.com.mapp.data.DataModule
 import org.osmdroid.config.Configuration
@@ -11,6 +12,8 @@ class MappApp : Application() {
         super.onCreate()
         instance = this
         repos = DataModule.create(this)
+        // Assinatura: lê o cache do disco e já conecta na Google Play (o resultado chega em segundos).
+        PlayBilling.start(this)
         Configuration.getInstance().apply {
             userAgentValue = packageName
             osmdroidBasePath = filesDir.resolve("osmdroid")
