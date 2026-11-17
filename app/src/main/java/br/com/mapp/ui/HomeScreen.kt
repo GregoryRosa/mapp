@@ -1,7 +1,6 @@
 package br.com.mapp.ui
 
 import android.Manifest
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -76,7 +75,8 @@ import br.com.mapp.finance.rememberNow
 import br.com.mapp.finance.rememberPeriodTotals
 import br.com.mapp.overlay.OverlayService
 import br.com.mapp.overlay.ShiftTracker
-import br.com.mapp.reader.OfferAccessibilityService
+import br.com.mapp.core.status.ReaderCheck
+import br.com.mapp.core.status.ReaderProblem
 import br.com.mapp.reader.ReaderStatus
 
 @Composable
@@ -95,6 +95,10 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
     ) { refresh++ }
 
     val p = remember(refresh) { Perms.check(ctx) }
+    // Leitor de verdade: "ligado nas Configurações" não basta, o Android precisa ter conectado o serviço
+    // (é isso que o ícone "M" mostra; sem conexão ele fica cinza com "!").
+    val reader by ReaderStatus.state.collectAsStateWithLifecycle()
+    val problem = ReaderCheck.problem(p.accessibility, reader.connected)
     val running by OverlayService.running.collectAsState()
     // Versão instalada, sempre à vista: muda a cada APK novo.
     val version = remember { ReaderStatus.versionOf(ctx) }
@@ -144,10 +148,10 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MappColors.TextDim,
                 )
-                if (!p.accessibility) {
+                if (problem != ReaderProblem.NONE) {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "⚠️ Sem o leitor de Acessibilidade ativo o MApp não vê as chamadas.",
+                        "⚠️ ${ReaderCheck.message(problem)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MappColors.Warn,
                     )
@@ -173,8 +177,8 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                             Toast.makeText(ctx, "Ative antes: " + missing.joinToString(" e "), Toast.LENGTH_LONG).show()
                         } else {
                             OverlayService.start(ctx)
-                            if (!p.accessibility) {
-                                Toast.makeText(ctx, "Copiloto iniciado, mas ative a Acessibilidade (leitor)", Toast.LENGTH_LONG).show()
+                            if (problem != ReaderProblem.NONE) {
+                                Toast.makeText(ctx, "Copiloto iniciado, mas o leitor está sem conexão: " + ReaderCheck.message(problem), Toast.LENGTH_LONG).show()
                             }
                         }
                     }
@@ -184,7 +188,7 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
             ShiftCard(running)
 
             // Permissões: completas = uma linha; faltando = lista com "Ativar"
-            val allOk = p.location && p.overlay && p.accessibility && p.battery
+            val allOk = p.location && p.overlay && problem == ReaderProblem.NONE && p.battery
             GlassCard {
                 Text("Permissões", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(6.dp))
@@ -202,10 +206,21 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                     PermRow("Sobrepor outros apps", p.overlay) {
                         ctx.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}")))
                     }
-                    PermRow("Acessibilidade (leitor)", p.accessibility) {
+                    PermRow(
+                        if (problem == ReaderProblem.NOT_CONNECTED) "Acessibilidade (leitor): ligada, mas sem conexão"
+                        else "Acessibilidade (leitor)",
+                        problem == ReaderProblem.NONE,
+                    ) {
                         ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                     }
-                    if (!p.accessibility) {
+                    if (problem == ReaderProblem.NOT_CONNECTED) {
+                        Text(
+                            ReaderCheck.message(problem),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MappColors.Warn,
+                        )
+                    }
+                    if (problem == ReaderProblem.ACCESSIBILITY_OFF) {
                         Text(
                             "Se a Acessibilidade aparecer bloqueada (\"Configuração restrita\"): Configurações → Apps → MApp → " +
                                 "menu ⋮ → \"Permitir configurações restritas\" e ative de novo o leitor MApp.",
@@ -415,10 +430,7 @@ data class Perms(val location: Boolean, val overlay: Boolean, val accessibility:
             val loc = ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION) ==
                 android.content.pm.PackageManager.PERMISSION_GRANTED
             val overlay = Settings.canDrawOverlays(ctx)
-            // O sistema pode gravar a forma longa ou curta ("pkg/.Classe"): compara como ComponentName.
-            val expected = ComponentName(ctx, OfferAccessibilityService::class.java)
-            val enabled = Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-                ?.split(':')?.any { ComponentName.unflattenFromString(it) == expected } == true
+            val enabled = ReaderStatus.settingEnabled(ctx)
             val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
             return Perms(loc, overlay, enabled, pm.isIgnoringBatteryOptimizations(ctx.packageName))
         }

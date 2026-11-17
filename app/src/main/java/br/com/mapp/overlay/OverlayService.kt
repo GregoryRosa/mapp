@@ -50,6 +50,7 @@ import br.com.mapp.finance.ReportMath
 import br.com.mapp.maps.LocationProvider
 import br.com.mapp.maps.PinStore
 import br.com.mapp.reader.OfferAccessibilityService
+import br.com.mapp.core.status.ReaderCheck
 import br.com.mapp.reader.ReaderStatus
 import br.com.mapp.ui.MainActivity
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -197,6 +198,15 @@ class OverlayService : LifecycleService() {
         // Ícone flutuante "M" com o menu circular (e cartão): recriados quando o leitor liga/desliga.
         lifecycleScope.launch { OfferAccessibilityService.windowContext.collect { useHost(it) } }
         lifecycleScope.launch { ReaderStatus.state.collect { bubble?.updateReader(it) } }
+        // Leitor sem conexão (ícone cinza com "!"): o aviso diz o motivo sozinho, sem precisar tocar no "M".
+        // A espera evita avisar à toa quando o Android reconecta o leitor logo em seguida (ex.: ao atualizar).
+        lifecycleScope.launch {
+            ReaderStatus.state.map { it.connected }.distinctUntilChanged().collectLatest { connected ->
+                if (connected) return@collectLatest
+                delay(READER_WARNING_DELAY_MS)
+                ReaderCheck.notice(ReaderStatus.problem(this@OverlayService))?.let { toast(it, READER_WARNING_MS) }
+            }
+        }
         lifecycleScope.launch {
             MappApp.repos.profiles.all()
                 .combine(MappApp.repos.profiles.active()) { all, active -> all to active }
@@ -213,6 +223,8 @@ class OverlayService : LifecycleService() {
             val ctx = this@OverlayService
             OverlayPrefs.setVoiceEnabled(ctx, !OverlayPrefs.isVoiceEnabled(ctx))
         }
+
+        override fun notice(message: String, durationMs: Long) = toast(message, durationMs)
 
         override fun openApp() {
             startActivity(
@@ -1004,6 +1016,9 @@ class OverlayService : LifecycleService() {
         private const val PIN_FIX_MS = 4_000L
         /** Avisos comuns na tela (o Toast curto era 2 s). */
         private const val NOTICE_MS = 4_000L
+        /** Leitor continua sem conexão depois disto: o aviso do "!" aparece sozinho. */
+        private const val READER_WARNING_DELAY_MS = 2_500L
+        private const val READER_WARNING_MS = 10_000L
         /** Avisos de corrida aceita/finalizada/cancelada: tempo para ler dirigindo. */
         private const val TRIP_NOTICE_MS = 6_000L
         /** Memória do aceite salva no máx. a cada isto enquanto a mesma oferta está no cartão. */

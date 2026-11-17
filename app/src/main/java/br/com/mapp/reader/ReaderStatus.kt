@@ -1,8 +1,12 @@
 package br.com.mapp.reader
 
+import android.content.ComponentName
 import android.content.Context
 import android.os.Build
+import android.provider.Settings
 import br.com.mapp.core.bus.OfferBus
+import br.com.mapp.core.status.ReaderCheck
+import br.com.mapp.core.status.ReaderProblem
 import br.com.mapp.reader.parser.ParseUtils
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -70,6 +74,21 @@ object ReaderStatus {
     private var windows: List<String> = emptyList()
     // Último erro de captura de cada modo (o estado da tela só guarda o erro até a próxima leitura boa).
     private val captureErrors = LinkedHashMap<String, Pair<Long, String>>()
+
+    /**
+     * O leitor MApp está marcado em Configurações → Acessibilidade? O sistema pode gravar a forma
+     * longa ou curta ("pkg/.Classe"): compara como [ComponentName]. Marcado **não** quer dizer
+     * conectado: veja [problem].
+     */
+    fun settingEnabled(context: Context): Boolean {
+        val expected = ComponentName(context, OfferAccessibilityService::class.java)
+        return Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+            ?.split(':')?.any { ComponentName.unflattenFromString(it) == expected } == true
+    }
+
+    /** Por que o leitor não está lendo (o mesmo motivo no ícone "M" e na tela inicial). */
+    fun problem(context: Context, snapshot: Snapshot = _state.value): ReaderProblem =
+        ReaderCheck.problem(settingEnabled(context), snapshot.connected)
 
     @Synchronized
     fun setConnected(connected: Boolean) {
@@ -139,7 +158,7 @@ object ReaderStatus {
 
     /** Linhas curtas de estado para a tela inicial. */
     fun lines(s: Snapshot, copilotRunning: Boolean): List<String> = buildList {
-        add(if (s.connected) "✅ Leitor conectado" else "⚠️ Leitor DESLIGADO – ative a Acessibilidade")
+        add(if (s.connected) "✅ Leitor conectado" else "⚠️ Leitor sem conexão – ative ou religue a Acessibilidade")
         add("Última leitura: ${s.lastPlatform ?: "—"} ${ago(s.lastReadAt)}" + (s.lastSource?.let { " ($it)" } ?: ""))
         add(
             "Leitura por imagem: " + when {
