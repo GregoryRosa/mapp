@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package br.com.mapp.maps
 
 import androidx.compose.foundation.BorderStroke
@@ -19,9 +21,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material3.AlertDialog
@@ -37,20 +39,23 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,7 +74,10 @@ import br.com.mapp.core.model.Zone
 import br.com.mapp.core.model.ZoneType
 import br.com.mapp.core.pin.ZonePin
 import br.com.mapp.core.pin.ZonePins
+import br.com.mapp.finance.BackTopBar
 import br.com.mapp.ui.MappColors
+import br.com.mapp.ui.Routes
+import br.com.mapp.ui.SupportTab
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -80,10 +88,51 @@ import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.util.GeoPoint as OsmGeoPoint
 
-/** Editor de zonas: toque no mapa para adicionar vértices e salve como zona (R4). */
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Tela **Zonas**, em duas abas:
+ * - **Minhas zonas**: o editor de sempre — desenhe o polígono no mapa e salve (R4).
+ * - **Mapa de calor**: zonas que o app desenha sozinho a partir do histórico de ofertas
+ *   ([HeatMapTab]), com botões de métrica e filtros.
+ */
 @Composable
-fun ZoneEditorScreen(onBack: () -> Unit) {
+fun ZonesScreen(onBack: () -> Unit) {
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    SupportTab(Routes.ZONES, if (tab == 0) "Minhas zonas" else "Mapa de calor")
+    Scaffold(topBar = { BackTopBar("Zonas", onBack) }) { pad ->
+        Column(Modifier.fillMaxSize().padding(pad)) {
+            TabRow(selectedTabIndex = tab, containerColor = Color.Transparent, contentColor = MappColors.Teal) {
+                ZONE_TABS.forEachIndexed { i, t ->
+                    Tab(
+                        selected = tab == i,
+                        onClick = { tab = i },
+                        selectedContentColor = MappColors.Teal,
+                        unselectedContentColor = MappColors.TextDim,
+                    ) {
+                        Icon(t.second, contentDescription = null, modifier = Modifier.padding(top = 10.dp).size(22.dp))
+                        Text(
+                            t.first,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            modifier = Modifier.padding(start = 4.dp, top = 4.dp, end = 4.dp, bottom = 10.dp),
+                        )
+                    }
+                }
+            }
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                if (tab == 0) MyZonesTab() else HeatMapTab()
+            }
+        }
+    }
+}
+
+private val ZONE_TABS = listOf(
+    "Minhas zonas" to Icons.Filled.Place,
+    "Mapa de calor" to Icons.Filled.LocalFireDepartment,
+)
+
+/** Aba Minhas zonas: toque no mapa para marcar os cantos e salve a área (R4). */
+@Composable
+private fun MyZonesTab() {
     val ctx = LocalContext.current
     val repos = MappApp.repos
     val scope = rememberCoroutineScope()
@@ -158,154 +207,141 @@ fun ZoneEditorScreen(onBack: () -> Unit) {
         quickPolygon = null
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Zonas no mapa") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar")
-                    }
+    Column(Modifier.fillMaxSize()) {
+        // clipToBounds: o MapView (osmdroid) desenha tiles além dos próprios limites e vazava por
+        // baixo da faixa de botões (fundo transparente), deixando os botões ilegíveis sobre o mapa.
+        Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
+            AndroidView(
+                factory = { mapView },
+                modifier = Modifier.fillMaxSize(),
+                update = { map ->
+                    renderEditor(map, zones, pins, vertices.toList(), current, tapOverlay) { selectedPin = it }
                 },
             )
-        },
-    ) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad)) {
-            // clipToBounds: o MapView (osmdroid) desenha tiles além dos próprios limites e vazava por
-            // baixo da faixa de botões (fundo transparente), deixando os botões ilegíveis sobre o mapa.
-            Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
-                AndroidView(
-                    factory = { mapView },
-                    modifier = Modifier.fillMaxSize(),
-                    update = { map ->
-                        renderEditor(map, zones, pins, vertices.toList(), current, tapOverlay) { selectedPin = it }
-                    },
-                )
-                if (drawing.value) {
-                    Surface(
-                        modifier = Modifier.align(Alignment.TopCenter).padding(8.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                        tonalElevation = 4.dp,
-                    ) {
-                        Text(
-                            "Toque no mapa para marcar os cantos da zona (${vertices.size} ponto(s))",
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                }
-                SmallFloatingActionButton(
-                    onClick = {
-                        scope.launch {
-                            val here = LocationProvider.get(ctx).current()
-                            if (here != null) {
-                                current = here
-                                MapViews.centerOn(mapView, here, zoom = mapView.zoomLevelDouble.coerceAtLeast(MapViews.CITY_ZOOM))
-                            }
-                        }
-                    },
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp),
+            if (drawing.value) {
+                Surface(
+                    modifier = Modifier.align(Alignment.TopCenter).padding(8.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                    tonalElevation = 4.dp,
                 ) {
-                    Icon(Icons.Filled.LocationOn, contentDescription = "Minha posição")
+                    Text(
+                        "Toque no mapa para marcar os cantos da zona (${vertices.size} ponto(s))",
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                 }
             }
-
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(MappColors.Navy)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            SmallFloatingActionButton(
+                onClick = {
+                    scope.launch {
+                        val here = LocationProvider.get(ctx).current()
+                        if (here != null) {
+                            current = here
+                            MapViews.centerOn(mapView, here, zoom = mapView.zoomLevelDouble.coerceAtLeast(MapViews.CITY_ZOOM))
+                        }
+                    }
+                },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp),
             ) {
-                if (drawing.value) {
-                    val canUndo = vertices.isNotEmpty()
-                    OutlinedButton(
-                        onClick = { if (vertices.isNotEmpty()) vertices.removeAt(vertices.lastIndex) },
-                        enabled = canUndo,
-                        colors = editorOutlinedColors(),
-                        border = editorBorder(canUndo),
-                    ) { Text("Desfazer") }
-                    OutlinedButton(
-                        onClick = { resetDrawing() },
-                        colors = editorOutlinedColors(),
-                        border = editorBorder(true),
-                    ) { Text("Cancelar") }
-                    Spacer(Modifier.weight(1f))
-                    Button(
-                        onClick = { showSaveDialog = true },
-                        enabled = vertices.size >= 3,
-                        colors = editorPrimaryColors(),
-                    ) { Text("Salvar") }
-                } else {
-                    Button(onClick = { resetDrawing(); drawing.value = true }, colors = editorPrimaryColors()) {
-                        Icon(Icons.Filled.Add, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
-                        Text("Desenhar zona")
-                    }
-                }
+                Icon(Icons.Filled.LocationOn, contentDescription = "Minha posição")
             }
+        }
 
-            HorizontalDivider()
-            if (pins.isNotEmpty() && !drawing.value) {
-                Text(
-                    "📍 Pins para desenhar (${pins.size})",
-                    modifier = Modifier.padding(start = 16.dp, top = 8.dp),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 160.dp)) {
-                    items(pins, key = { "pin${it.id}" }) { pin ->
-                        ListItem(
-                            modifier = Modifier.clickable {
-                                MapViews.centerOn(mapView, pin.point, zoom = PIN_ZOOM)
-                                selectedPin = pin
-                            },
-                            leadingContent = {
-                                Box(Modifier.size(18.dp).background(Color(pinColor(pin)), CircleShape))
-                            },
-                            headlineContent = { Text(pin.type.label) },
-                            supportingContent = { Text("Marcado em ${pinTime(pin)} · toque para transformar em zona") },
-                        )
-                    }
-                }
-                HorizontalDivider()
-            }
-            if (zones.isEmpty()) {
-                Text(
-                    "Nenhuma zona salva. Desenhe áreas perigosas ou de alta demanda para receber alertas.",
-                    modifier = Modifier.padding(16.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(MappColors.Navy)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (drawing.value) {
+                val canUndo = vertices.isNotEmpty()
+                OutlinedButton(
+                    onClick = { if (vertices.isNotEmpty()) vertices.removeAt(vertices.lastIndex) },
+                    enabled = canUndo,
+                    colors = editorOutlinedColors(),
+                    border = editorBorder(canUndo),
+                ) { Text("Desfazer") }
+                OutlinedButton(
+                    onClick = { resetDrawing() },
+                    colors = editorOutlinedColors(),
+                    border = editorBorder(true),
+                ) { Text("Cancelar") }
+                Spacer(Modifier.weight(1f))
+                Button(
+                    onClick = { showSaveDialog = true },
+                    enabled = vertices.size >= 3,
+                    colors = editorPrimaryColors(),
+                ) { Text("Salvar") }
             } else {
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 240.dp)) {
-                    items(zones, key = { it.id }) { zone ->
-                        ListItem(
-                            modifier = Modifier.clickable { MapViews.frame(mapView, zone.polygon) },
-                            leadingContent = {
-                                Box(
-                                    Modifier.size(18.dp).background(
-                                        Color(zone.colorArgb.toInt() or 0xFF000000.toInt()),
-                                        CircleShape,
-                                    ),
-                                )
-                            },
-                            headlineContent = { Text(zone.name) },
-                            supportingContent = {
-                                Text(zone.type.label + if (zone.alertEnabled) " · alerta ligado" else " · sem alerta")
-                            },
-                            trailingContent = {
-                                Row {
-                                    IconButton(onClick = { MapViews.frame(mapView, zone.polygon) }) {
-                                        Icon(Icons.Filled.Place, contentDescription = "Ver no mapa")
-                                    }
-                                    IconButton(onClick = { zoneToDelete = zone }) {
-                                        Icon(Icons.Filled.Delete, contentDescription = "Excluir")
-                                    }
+                Button(onClick = { resetDrawing(); drawing.value = true }, colors = editorPrimaryColors()) {
+                    Icon(Icons.Filled.Add, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text("Desenhar zona")
+                }
+            }
+        }
+
+        HorizontalDivider()
+        if (pins.isNotEmpty() && !drawing.value) {
+            Text(
+                "📍 Pins para desenhar (${pins.size})",
+                modifier = Modifier.padding(start = 16.dp, top = 8.dp),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 160.dp)) {
+                items(pins, key = { "pin${it.id}" }) { pin ->
+                    ListItem(
+                        modifier = Modifier.clickable {
+                            MapViews.centerOn(mapView, pin.point, zoom = PIN_ZOOM)
+                            selectedPin = pin
+                        },
+                        leadingContent = {
+                            Box(Modifier.size(18.dp).background(Color(pinColor(pin)), CircleShape))
+                        },
+                        headlineContent = { Text(pin.type.label) },
+                        supportingContent = { Text("Marcado em ${pinTime(pin)} · toque para transformar em zona") },
+                    )
+                }
+            }
+            HorizontalDivider()
+        }
+        if (zones.isEmpty()) {
+            Text(
+                "Nenhuma zona salva. Desenhe áreas perigosas ou de alta demanda para receber alertas.",
+                modifier = Modifier.padding(16.dp),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        } else {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 240.dp)) {
+                items(zones, key = { it.id }) { zone ->
+                    ListItem(
+                        modifier = Modifier.clickable { MapViews.frame(mapView, zone.polygon) },
+                        leadingContent = {
+                            Box(
+                                Modifier.size(18.dp).background(
+                                    Color(zone.colorArgb.toInt() or 0xFF000000.toInt()),
+                                    CircleShape,
+                                ),
+                            )
+                        },
+                        headlineContent = { Text(zone.name) },
+                        supportingContent = {
+                            Text(zone.type.label + if (zone.alertEnabled) " · alerta ligado" else " · sem alerta")
+                        },
+                        trailingContent = {
+                            Row {
+                                IconButton(onClick = { MapViews.frame(mapView, zone.polygon) }) {
+                                    Icon(Icons.Filled.Place, contentDescription = "Ver no mapa")
                                 }
-                            },
-                        )
-                    }
+                                IconButton(onClick = { zoneToDelete = zone }) {
+                                    Icon(Icons.Filled.Delete, contentDescription = "Excluir")
+                                }
+                            }
+                        },
+                    )
                 }
             }
         }
@@ -388,7 +424,7 @@ fun ZoneEditorScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun SaveZoneDialog(
+internal fun SaveZoneDialog(
     initialName: String = "",
     initialType: ZoneType = ZoneType.DANGER,
     onDismiss: () -> Unit,

@@ -27,6 +27,9 @@ class GeocodingRepository private constructor(context: Context) {
     private val geocoder = Geocoder(context.applicationContext, PT_BR)
     private val cache = LruCache<String, GeoPoint>(CACHE_SIZE)
 
+    /** Coordenada → bairro (mapa de calor). "" guardado = já procurei e não achei. */
+    private val names = LruCache<String, String>(CACHE_SIZE)
+
     suspend fun geocode(address: String?, near: GeoPoint? = null): GeoPoint? {
         val query = address?.trim()?.replace(WHITESPACE, " ")?.takeIf { it.length >= 3 } ?: return null
         val key = query.lowercase(PT_BR)
@@ -62,6 +65,59 @@ class GeocodingRepository private constructor(context: Context) {
             .map { GeoPoint(it.latitude, it.longitude) }
         return if (near != null) points.minByOrNull { Geo.haversineKm(it, near) } else points.firstOrNull()
     }
+
+    /**
+     * Coordenada → nome do bairro (ou da cidade), para dar nome às zonas do mapa de calor.
+     * Cache próprio arredondado a ~100 m. null em qualquer falha.
+     */
+    suspend fun neighborhood(point: GeoPoint): String? {
+        if (!Geocoder.isPresent()) return null
+        val key = "rev:%.3f,%.3f".format(Locale.US, point.lat, point.lon)
+        names.get(key)?.let { return it.takeIf { n -> n.isNotEmpty() } }
+        val found = try {
+            val list = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                asyncReverse(point)
+            } else {
+                withContext(Dispatchers.IO) { blockingReverse(point) }
+            }
+            list.firstNotNullOfOrNull { nameOf(it) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao achar o bairro", e)
+            null
+        }
+        names.put(key, found ?: "")
+        return found
+    }
+
+    /** Bairro, depois sub-região e cidade: o que der para mostrar na lista de zonas. */
+    private fun nameOf(address: Address): String? = listOf(
+        address.subLocality,
+        address.subAdminArea,
+        address.locality,
+        address.thoroughfare,
+    ).firstOrNull { !it.isNullOrBlank() }?.trim()
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private suspend fun asyncReverse(point: GeoPoint): List<Address> =
+        suspendCancellableCoroutine { cont ->
+            val listener = object : Geocoder.GeocodeListener {
+                override fun onGeocode(addresses: MutableList<Address>) {
+                    if (cont.isActive) cont.resume(addresses.toList())
+                }
+
+                override fun onError(errorMessage: String?) {
+                    Log.w(TAG, "Geocoder: $errorMessage")
+                    if (cont.isActive) cont.resume(emptyList())
+                }
+            }
+            geocoder.getFromLocation(point.lat, point.lon, 1, listener)
+        }
+
+    @Suppress("DEPRECATION")
+    private fun blockingReverse(point: GeoPoint): List<Address> =
+        geocoder.getFromLocation(point.lat, point.lon, 1) ?: emptyList()
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private suspend fun asyncLookup(query: String, box: DoubleArray?): List<Address> =
