@@ -9,14 +9,16 @@ import kotlin.math.roundToInt
 /**
  * Aparência do botão flutuante "M", escolhida no painel ⚙ do próprio botão. Cores em ARGB.
  * - [background]: brilho do fundo do círculo (o resto do fundo é preto);
- * - [logoStart]/[logoEnd]: gradiente do "M" (anel da partida / ponto da chegada);
+ * - [logoStart]/[logoEnd]: gradiente do "M" (começo / fim da letra);
  * - anel de dentro (status): [idleRing] = ligado sem corrida, [rideRing] = em corrida
  *   (leitor desligado continua cinza com "!");
  * - anel de fora (meta do dia): gradiente [goalStart] → [goalEnd]; [spinSeconds] = uma volta a cada
  *   N segundos com a meta batida (0 = parado);
  * - [goalSound]: som da meta batida;
  * - [iconSize]/[textSize]: tamanho do botão e dos números em volta dele, em % do padrão ([BubbleSize]);
- * - [pinSize]: tamanho do pin de chegada (só aparece em corrida), em % do padrão.
+ * - [pinSize]: tamanho do pin de chegada (só aparece em corrida), em % do padrão;
+ * - [arrowSize]/[arrowColor]: tamanho (% do padrão) e cor da seta (o carro, só em corrida);
+ *   [arrowColor] null = acompanha o gradiente do "M" (padrão).
  * O padrão é o visual original do MApp (com o botão um pouco maior: 60 dp).
  */
 data class BubbleStyle(
@@ -32,6 +34,8 @@ data class BubbleStyle(
     val iconSize: Int = BubbleSize.DEFAULT,
     val textSize: Int = BubbleSize.DEFAULT,
     val pinSize: Int = BubbleSize.DEFAULT,
+    val arrowSize: Int = BubbleSize.DEFAULT,
+    val arrowColor: Int? = null,
 ) {
     /**
      * Cores do gradiente do anel da meta, em volta do círculo (a partir do topo). Com as cores
@@ -55,7 +59,8 @@ data class BubbleStyle(
         "size=$iconSize",
         "text=$textSize",
         "pin=$pinSize",
-    ).joinToString(";")
+        "arrow=$arrowSize",
+    ).plus(listOfNotNull(arrowColor?.let { "ac=" + hex(it) })).joinToString(";")
 
     companion object {
         val TEAL: Int = 0xFF5EE6D8.toInt()
@@ -91,6 +96,8 @@ data class BubbleStyle(
                 iconSize = map["size"]?.toIntOrNull()?.takeIf { it in BubbleSize.ICON_STEPS } ?: d.iconSize,
                 textSize = map["text"]?.toIntOrNull()?.takeIf { it in BubbleSize.TEXT_STEPS } ?: d.textSize,
                 pinSize = map["pin"]?.toIntOrNull()?.takeIf { it in BubbleSize.PIN_STEPS } ?: d.pinSize,
+                arrowSize = map["arrow"]?.toIntOrNull()?.takeIf { it in BubbleSize.ARROW_STEPS } ?: d.arrowSize,
+                arrowColor = map["ac"]?.let(::parseHex),
             )
         }
 
@@ -214,6 +221,9 @@ object BubbleSize {
     /** Pin de chegada: 60% a 160% (a ponta fica no lugar e a cabeça cresce para cima — cabe no círculo). */
     val PIN_STEPS: List<Int> = (60..160 step 10).toList()
 
+    /** Seta (o carro): 60% a 160% (a base fica no lugar e a seta cresce para cima). */
+    val ARROW_STEPS: List<Int> = (60..160 step 10).toList()
+
     fun iconDp(percent: Int): Int = (BASE_ICON_DP * percent / 100.0).roundToInt()
 
     /** Fator de escala do texto (1.0 = 100%). */
@@ -221,6 +231,9 @@ object BubbleSize {
 
     /** Fator de escala do pin (1.0 = 100%). */
     fun pinScale(percent: Int): Float = percent / 100f
+
+    /** Fator de escala da seta (1.0 = 100%). */
+    fun arrowScale(percent: Int): Float = percent / 100f
 
     /** Passo mais perto da posição 0..1 da barra. */
     fun percentAt(steps: List<Int>, fraction: Double): Int =

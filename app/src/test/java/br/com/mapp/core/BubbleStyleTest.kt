@@ -27,6 +27,8 @@ class BubbleStyleTest {
             iconSize = 130,
             textSize = 160,
             pinSize = 140,
+            arrowSize = 130,
+            arrowColor = 0xFFFF9100.toInt(),
         )
         assertEquals(s, BubbleStyle.decode(s.encode()))
         assertEquals(BubbleStyle(), BubbleStyle.decode(BubbleStyle().encode()))
@@ -119,6 +121,16 @@ class BubbleStyleTest {
         BubbleSize.PIN_STEPS.forEach { assertEquals(it, BubbleSize.percentAt(BubbleSize.PIN_STEPS, BubbleSize.fractionOf(BubbleSize.PIN_STEPS, it))) }
         assertEquals(0.6f, BubbleSize.pinScale(60), 0.001f)
         assertEquals(100, BubbleStyle.decode("v1;pin=55").pinSize)
+        // Seta: 60% a 160%; sem cor gravada acompanha o gradiente do "M" (null).
+        assertEquals(100, d.arrowSize)
+        assertEquals(null, d.arrowColor)
+        assertEquals(null, BubbleStyle.decode(d.encode()).arrowColor)
+        assertEquals(160, BubbleSize.percentAt(BubbleSize.ARROW_STEPS, 1.0))
+        BubbleSize.ARROW_STEPS.forEach { assertEquals(it, BubbleSize.percentAt(BubbleSize.ARROW_STEPS, BubbleSize.fractionOf(BubbleSize.ARROW_STEPS, it))) }
+        assertEquals(1.3f, BubbleSize.arrowScale(130), 0.001f)
+        assertEquals(100, BubbleStyle.decode("v1;arrow=300").arrowSize)
+        assertEquals(0xFF00E64D.toInt(), BubbleStyle.decode("v1;ac=FF00E64D").arrowColor)
+        assertEquals(null, BubbleStyle.decode("v1;ac=xyz").arrowColor)
         // Configuração antiga (sem tamanho) ou valor fora dos passos fica em 100%.
         assertEquals(100, BubbleStyle.decode("v1;spin=8").iconSize)
         val bad = BubbleStyle.decode("v1;size=135;text=500")

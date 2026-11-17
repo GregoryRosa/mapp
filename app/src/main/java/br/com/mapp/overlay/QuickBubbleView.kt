@@ -277,14 +277,22 @@ class QuickBubbleView(
     private val pinSizeBar = bar(
         StyleBarView.Kind.SPEED, { BubbleSize.fractionOf(BubbleSize.PIN_STEPS, it.pinSize) }, steps = BubbleSize.PIN_STEPS.size,
     ) { s, f -> s.copy(pinSize = BubbleSize.percentAt(BubbleSize.PIN_STEPS, f)) }
+    private val arrowSizeBar = bar(
+        StyleBarView.Kind.SPEED, { BubbleSize.fractionOf(BubbleSize.ARROW_STEPS, it.arrowSize) }, steps = BubbleSize.ARROW_STEPS.size,
+    ) { s, f -> s.copy(arrowSize = BubbleSize.percentAt(BubbleSize.ARROW_STEPS, f)) }
+    /** Cor da seta: sem cor escolhida a barra mostra o começo do "M" (a seta acompanha o gradiente). */
+    private val arrowColorBar = bar(StyleBarView.Kind.COLOR, { ColorBar.fractionOf(it.arrowColor ?: it.logoStart) }) { s, f ->
+        s.copy(arrowColor = ColorBar.colorAt(f))
+    }
     private val bars = listOf(
-        backgroundBar, logoStartBar, logoEndBar, idleBar, rideBar, goalStartBar, goalEndBar, spinBar,
-        iconSizeBar, textSizeBar, pinSizeBar,
+        backgroundBar, logoStartBar, logoEndBar, arrowColorBar, idleBar, rideBar, goalStartBar, goalEndBar, spinBar,
+        iconSizeBar, textSizeBar, pinSizeBar, arrowSizeBar,
     )
     private val spinLabel = text(12f, color = WHITE)
     private val iconSizeLabel = text(12f, color = WHITE)
     private val textSizeLabel = text(12f, color = WHITE)
     private val pinSizeLabel = text(12f, color = WHITE)
+    private val arrowSizeLabel = text(12f, color = WHITE)
 
     /** Um botão por som; tocar escolhe e já toca para ouvir. */
     private val soundChips = GoalSound.entries.associateWith { sound ->
@@ -336,14 +344,20 @@ class QuickBubbleView(
             addView(textSizeBar.view, fullWidth(2))
             addView(pinSizeLabel, fullWidth(10))
             addView(pinSizeBar.view, fullWidth(2))
+            addView(arrowSizeLabel, fullWidth(10))
+            addView(arrowSizeBar.view, fullWidth(2))
             addView(text(11f, color = SECONDARY).apply {
-                text = "Ícone e texto: veja no botão ao lado. Pin (só aparece em corrida): veja na prévia \"Em corrida\"."
+                text = "Ícone e texto: veja no botão ao lado. Pin e seta (só aparecem em corrida): veja na prévia \"Em corrida\"."
             }, fullWidth(4))
         }, fullWidth(8))
         addView(section("BOTÃO").apply {
             labeled("Fundo", backgroundBar)
             labeled("Letra M · partida", logoStartBar)
             labeled("Letra M · chegada", logoEndBar)
+            labeled("Seta (carro, em corrida)", arrowColorBar)
+            addView(text(11f, color = SECONDARY).apply {
+                text = "Sem mexer, a seta acompanha as cores do M. Restaurar padrão volta a isso."
+            }, fullWidth(4))
         }, fullWidth(8))
         addView(section("ANEL DE DENTRO · STATUS").apply {
             labeled("Ligado, sem corrida", idleBar)
@@ -804,6 +818,7 @@ class QuickBubbleView(
         iconSizeLabel.text = "Tamanho do ícone: " + BubbleSize.label(s.iconSize)
         textSizeLabel.text = "Tamanho do texto: " + BubbleSize.label(s.textSize)
         pinSizeLabel.text = "Tamanho do pin de chegada: " + BubbleSize.label(s.pinSize)
+        arrowSizeLabel.text = "Tamanho da seta: " + BubbleSize.label(s.arrowSize)
         soundChips.forEach { (sound, chip) ->
             (chip.background as? GradientDrawable)?.setColor(if (sound == s.goalSound) SELECTED_BG else BUTTON_BG)
             chip.setTextColor(if (sound == s.goalSound) SELECTED_TEXT else WHITE)
@@ -1489,6 +1504,7 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
     private val travelMeasure = android.graphics.PathMeasure()
     private var travelU = 0f
     private var travelPin = 0
+    private var travelArrow = 0
     private var travelLength = 0f
     private val posA = FloatArray(2)
     private val posB = FloatArray(2)
@@ -1609,7 +1625,7 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
                 drawMovingArrow(canvas, u, c1, c2)
             } else {
                 // Leitor desligado no meio da corrida: seta parada na partida, virada para cima.
-                drawArrow(canvas, u, START_X * u, START_Y * u, -90f, c1, 255)
+                drawArrow(canvas, u, START_X * u, arrowStartY() * u, -90f, c1, 255)
             }
         }
 
@@ -1656,21 +1672,25 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
         canvas.drawCircle(x, y, 1.0f * u, dot)
     }
 
-    /** Seta de navegação (o carro) com a ponta virada para [degrees]; contorno escuro para destacar da linha. */
+    /**
+     * Seta de navegação (o carro) com a ponta virada para [degrees]; contorno escuro para destacar da
+     * linha. Tamanho dos ajustes do botão ([BubbleStyle.arrowSize]).
+     */
     private fun drawArrow(canvas: Canvas, u: Float, x: Float, y: Float, degrees: Float, color: Int, alpha: Int) {
         if (alpha <= 0) return
+        val k = u * BubbleSize.arrowScale(style.arrowSize)
         arrow.reset()
-        arrow.moveTo(2.0f * u, 0f)
-        arrow.lineTo(-1.6f * u, -1.6f * u)
-        arrow.lineTo(-0.7f * u, 0f)
-        arrow.lineTo(-1.6f * u, 1.6f * u)
+        arrow.moveTo(2.0f * k, 0f)
+        arrow.lineTo(-1.6f * k, -1.6f * k)
+        arrow.lineTo(-0.7f * k, 0f)
+        arrow.lineTo(-1.6f * k, 1.6f * k)
         arrow.close()
         canvas.save()
         canvas.translate(x, y)
         canvas.rotate(degrees)
         outline.color = ringBg
         outline.alpha = alpha
-        outline.strokeWidth = 0.9f * u
+        outline.strokeWidth = 0.9f * k
         canvas.drawPath(arrow, outline)
         dot.style = Paint.Style.FILL
         dot.color = color
@@ -1683,14 +1703,16 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
     /**
      * Em corrida: a seta sai da partida, percorre o "M" e some ao chegar no pin; volta do começo, em
      * loop de [TRAVEL_MS]. A direção é a média de um trecho curto (vira suave nas pontas do "M") e a
-     * cor vai do começo ao fim do gradiente do logo.
+     * cor é a escolhida nos ajustes ([BubbleStyle.arrowColor]) ou, sem escolha, vai do começo ao fim
+     * do gradiente do logo.
      */
     private fun drawMovingArrow(canvas: Canvas, u: Float, c1: Int, c2: Int) {
-        if (travelU != u || travelPin != style.pinSize) {
+        if (travelU != u || travelPin != style.pinSize || travelArrow != style.arrowSize) {
             travelU = u
             travelPin = style.pinSize
+            travelArrow = style.arrowSize
             travel.reset()
-            travel.moveTo(START_X * u, START_Y * u)
+            travel.moveTo(START_X * u, arrowStartY() * u)
             travel.lineTo(6.5f * u, 7.5f * u)
             travel.lineTo(12f * u, 13.5f * u)
             travel.lineTo(17.5f * u, 7.5f * u)
@@ -1714,8 +1736,14 @@ private class LogoBubble(context: Context, private val ringBg: Int) : View(conte
             t > 1f - FADE_OUT -> (1f - t) / FADE_OUT
             else -> 1f
         }
-        drawArrow(canvas, u, x, y, degrees, blend(c1, c2, t), (255 * alpha).toInt())
+        drawArrow(canvas, u, x, y, degrees, style.arrowColor ?: blend(c1, c2, t), (255 * alpha).toInt())
     }
+
+    /**
+     * Centro da seta parada na partida (em 1/24 do ícone): a base fica no lugar e a seta sobe quando
+     * cresce, para caber no círculo.
+     */
+    private fun arrowStartY(): Float = START_Y - (BubbleSize.arrowScale(style.arrowSize) - 1f) * 1.6f
 
     /** Centro da cabeça do pin (em 1/24 do ícone): a ponta fica fixa, a cabeça sobe quando o pin cresce. */
     private fun pinHeadY(): Float = PIN_TIP_Y - (PIN_TIP_Y - PIN_HEAD_Y) * BubbleSize.pinScale(style.pinSize)
