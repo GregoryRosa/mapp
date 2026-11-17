@@ -166,7 +166,7 @@ service cloud.firestore {
 
     function dono() {
       return request.auth != null && request.auth.token.email != null
-        && request.auth.token.email.lower() == 'coloque-seu-email@aqui.com';
+        && request.auth.token.email.lower() == 'gregoryhjrosa@gmail.com';
     }
     function donoDoChamado(ticket) {
       return request.auth != null

@@ -15,11 +15,11 @@ object MappConfig {
      */
     const val SUBSCRIPTION_ID = "mapp_mensal"
 
-    /** Conta que abre o painel de chamados. Trocar para o seu e-mail antes de publicar. */
-    const val OWNER_EMAIL = "gregoryrosa@gmail.com"
+    /** Conta que abre o painel de chamados (a mesma criada em Firebase → Authentication → Usuários). */
+    const val OWNER_EMAIL = "gregoryhjrosa@gmail.com"
 
     /** E-mail mostrado quando o chat não está disponível (sem internet / Firebase sem configurar). */
-    const val SUPPORT_EMAIL = "gregoryrosa@gmail.com"
+    const val SUPPORT_EMAIL = "gregoryhjrosa@gmail.com"
 
     /** Política de privacidade (obrigatória na ficha do Play). */
     const val PRIVACY_URL = "https://gregoryrosa.github.io/mapp/privacidade.html"
