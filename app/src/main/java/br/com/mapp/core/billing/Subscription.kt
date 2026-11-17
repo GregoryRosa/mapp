@@ -19,9 +19,21 @@ object AccessRules {
     private const val DAY_MS = 24L * 60 * 60 * 1000
 
     /**
-     * O que fazer agora. [owner] = dono do app logado (ele não assina de si mesmo).
+     * O que fazer agora.
+     *
+     * [owner] = dono do app logado (ele não assina de si mesmo). [fromPlay] = o app foi instalado
+     * pela Play Store; `false` é o APK de teste publicado nas Releases do GitHub, onde não existe
+     * assinatura para encontrar — bloquear ali só trancaria o desenvolvedor fora do próprio app,
+     * sem proteger nada (quem instala APK à mão também consegue modificar o APK).
      */
-    fun access(e: Entitlement, now: Long, owner: Boolean = false, graceDays: Int = GRACE_DAYS): Access {
+    fun access(
+        e: Entitlement,
+        now: Long,
+        owner: Boolean = false,
+        fromPlay: Boolean = true,
+        graceDays: Int = GRACE_DAYS,
+    ): Access {
+        if (!fromPlay) return Access.SIDELOAD
         if (owner) return Access.OWNER
         val age = now - e.checkedAt
         return when {
@@ -42,12 +54,14 @@ object AccessRules {
         return ((left + DAY_MS - 1) / DAY_MS).toInt()
     }
 
-    /** Verdadeiro quando o app pode ser usado (inclui o dono e a tolerância sem internet). */
-    fun isOpen(access: Access): Boolean = access == Access.ALLOWED || access == Access.OWNER
+    /** Verdadeiro quando o app pode ser usado (inclui o dono, o APK de teste e a tolerância). */
+    fun isOpen(access: Access): Boolean =
+        access == Access.ALLOWED || access == Access.OWNER || access == Access.SIDELOAD
 
     /** Texto para a tela de assinatura / aviso. */
     fun message(access: Access, e: Entitlement, now: Long): String = when (access) {
         Access.OWNER -> "Acesso de administrador."
+        Access.SIDELOAD -> "APK de teste (fora da Play Store): a assinatura não é conferida aqui."
         Access.ALLOWED -> if (e.trial) {
             "Teste grátis em andamento."
         } else {
@@ -89,6 +103,9 @@ data class Entitlement(
 enum class Access {
     /** Dono do app (painel de suporte): sempre entra. */
     OWNER,
+
+    /** APK instalado fora da Play Store (build de teste): não há assinatura para conferir. */
+    SIDELOAD,
 
     /** Assinatura ativa (ou dentro da tolerância sem internet). */
     ALLOWED,

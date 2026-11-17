@@ -53,9 +53,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import br.com.mapp.Gate
 import br.com.mapp.MappConfig
-import br.com.mapp.billing.EntitlementStore
-import br.com.mapp.core.billing.AccessRules
 import br.com.mapp.core.support.DeviceReport
 import br.com.mapp.core.support.SupportMessage
 import br.com.mapp.core.support.SupportRules
@@ -394,8 +393,7 @@ internal fun shortTime(at: Long): String {
 
 /** Linha de diagnóstico que vai anexada ao chamado. */
 internal fun deviceLine(ctx: android.content.Context): String {
-    val e = EntitlementStore.state.value
-    val access = AccessRules.access(e, System.currentTimeMillis(), SupportRepository.owner.value)
+    val access = Gate.access(ctx)
     return DeviceReport.text(
         appVersion = ReaderStatus.versionOf(ctx),
         androidVersion = Build.VERSION.RELEASE ?: Build.VERSION.SDK_INT.toString(),

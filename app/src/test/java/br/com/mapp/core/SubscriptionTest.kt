@@ -49,6 +49,23 @@ class SubscriptionTest {
         assertTrue(AccessRules.isOpen(Access.OWNER))
     }
 
+    @Test fun apk_fora_da_play_store_nao_e_bloqueado() {
+        // APK de teste das Releases do GitHub: não há assinatura para conferir, e bloquear ali só
+        // trancaria o desenvolvedor fora do próprio app de trabalho.
+        assertEquals(Access.SIDELOAD, AccessRules.access(Entitlement.NONE, now, fromPlay = false))
+        assertTrue(AccessRules.isOpen(Access.SIDELOAD))
+        // Vale mesmo com o Play tendo dito "não" antes (ex.: assinatura cancelada na loja).
+        val negado = Entitlement(active = false, checkedAt = now)
+        assertEquals(Access.SIDELOAD, AccessRules.access(negado, now, fromPlay = false))
+    }
+
+    @Test fun instalado_pela_loja_continua_bloqueando() {
+        // Garante que o caso de cima não virou um buraco: o padrão é conferir.
+        val negado = Entitlement(active = false, checkedAt = now)
+        assertEquals(Access.BLOCKED, AccessRules.access(negado, now))
+        assertEquals(Access.BLOCKED, AccessRules.access(negado, now, fromPlay = true))
+    }
+
     @Test fun dias_restantes_da_tolerancia() {
         assertEquals(7, AccessRules.graceLeft(Entitlement(active = true, checkedAt = now), now))
         assertEquals(1, AccessRules.graceLeft(Entitlement(active = true, checkedAt = now - 6 * day), now))

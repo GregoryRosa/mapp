@@ -24,6 +24,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import br.com.mapp.Gate
 import br.com.mapp.billing.EntitlementStore
 import br.com.mapp.billing.PlayBilling
 import br.com.mapp.core.billing.AccessRules
@@ -85,6 +86,8 @@ private fun MappGate() {
     val entitlement by EntitlementStore.state.collectAsStateWithLifecycle()
     val owner by SupportRepository.owner.collectAsStateWithLifecycle()
     val now = rememberNow()
+    // APK de teste do GitHub não passa pela loja: ali não há assinatura para conferir.
+    val fromPlay = remember { Gate.fromPlay(ctx) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
 
     // Sessão anônima do suporte: o botão de suporte precisa dela para contar as respostas novas.
@@ -101,7 +104,7 @@ private fun MappGate() {
         return
     }
 
-    val access = AccessRules.access(entitlement, now, owner = owner)
+    val access = AccessRules.access(entitlement, now, owner = owner, fromPlay = fromPlay)
     if (!AccessRules.isOpen(access)) {
         // Bloqueado: ainda assim dá para falar com o suporte e para o dono entrar no painel.
         var screen by remember { mutableStateOf(Routes.HOME) }
