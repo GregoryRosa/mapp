@@ -1,6 +1,7 @@
 package br.com.mapp.core.bubble
 
 import br.com.mapp.core.sound.GoalSound
+import br.com.mapp.core.sound.RideSound
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -15,6 +16,8 @@ import kotlin.math.roundToInt
  * - anel de fora (meta do dia): gradiente [goalStart] → [goalEnd]; [spinSeconds] = uma volta a cada
  *   N segundos com a meta batida (0 = parado);
  * - [goalSound]: som da meta batida;
+ * - [sparkLevel]/[rideSound]: efeito e som quando a corrida começa (bolha estourando + faíscas
+ *   saindo do botão);
  * - [iconSize]/[textSize]: tamanho do botão e dos números em volta dele, em % do padrão ([BubbleSize]);
  * - [pinSize]: tamanho do pin de chegada (só aparece em corrida), em % do padrão;
  * - [arrowSize]/[arrowColor]: tamanho (% do padrão) e cor da seta (o carro, só em corrida);
@@ -31,6 +34,8 @@ data class BubbleStyle(
     val goalEnd: Int = LILAC,
     val spinSeconds: Int = DEFAULT_SPIN_S,
     val goalSound: GoalSound = GoalSound.DEFAULT,
+    val sparkLevel: SparkLevel = SparkLevel.DEFAULT,
+    val rideSound: RideSound = RideSound.DEFAULT,
     val iconSize: Int = BubbleSize.DEFAULT,
     val textSize: Int = BubbleSize.DEFAULT,
     val pinSize: Int = BubbleSize.DEFAULT,
@@ -56,6 +61,8 @@ data class BubbleStyle(
         "g2=" + hex(goalEnd),
         "spin=$spinSeconds",
         "sound=" + goalSound.id,
+        "spark=" + sparkLevel.id,
+        "rsound=" + rideSound.id,
         "size=$iconSize",
         "text=$textSize",
         "pin=$pinSize",
@@ -93,6 +100,8 @@ data class BubbleStyle(
                 goalEnd = color("g2", d.goalEnd),
                 spinSeconds = map["spin"]?.toIntOrNull()?.takeIf { it in SpinSpeed.STEPS } ?: d.spinSeconds,
                 goalSound = map["sound"]?.let { GoalSound.fromId(it) } ?: d.goalSound,
+                sparkLevel = map["spark"]?.let { SparkLevel.fromId(it) } ?: d.sparkLevel,
+                rideSound = map["rsound"]?.let { RideSound.fromId(it) } ?: d.rideSound,
                 iconSize = map["size"]?.toIntOrNull()?.takeIf { it in BubbleSize.ICON_STEPS } ?: d.iconSize,
                 textSize = map["text"]?.toIntOrNull()?.takeIf { it in BubbleSize.TEXT_STEPS } ?: d.textSize,
                 pinSize = map["pin"]?.toIntOrNull()?.takeIf { it in BubbleSize.PIN_STEPS } ?: d.pinSize,

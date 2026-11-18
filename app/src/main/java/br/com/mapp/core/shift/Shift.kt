@@ -181,6 +181,26 @@ object AutoShift {
     }
 }
 
+/**
+ * Aviso de **corrida iniciada** (bolha estourando no som + faíscas no ícone "M"): toca uma vez
+ * quando o acompanhamento reconhece a corrida começando — indo buscar o passageiro ("Encontro com
+ * <nome>") ou já a bordo, quando o aceite não foi lido. Tela de fim e tela inicial nunca avisam, e
+ * [MIN_GAP_MS] evita repetir no mesmo aceite (a tela de busca e a de embarque chegam seguidas).
+ */
+object RideStartCue {
+    const val MIN_GAP_MS = 25_000L
+
+    /**
+     * [rideStarted] = o acompanhamento reconheceu uma corrida começando (oferta contada, passageiro
+     * novo na tela ou embarque); [lastCueAtMs] = quando o aviso tocou pela última vez (null = nunca).
+     */
+    fun shouldCue(stage: TripStage, rideStarted: Boolean, lastCueAtMs: Long?, nowMs: Long): Boolean {
+        if (!rideStarted) return false
+        if (stage != TripStage.ACCEPTED && stage != TripStage.ON_TRIP) return false
+        return lastCueAtMs == null || nowMs - lastCueAtMs >= MIN_GAP_MS
+    }
+}
+
 data class CategoryShare(val label: String, val count: Int, val percent: Double, val revenue: Double)
 
 data class ShiftSummary(

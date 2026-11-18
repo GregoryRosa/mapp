@@ -37,6 +37,7 @@ import br.com.mapp.core.model.TripEvent
 import br.com.mapp.core.model.TripStage
 import br.com.mapp.core.shift.AutoShift
 import br.com.mapp.core.shift.AutoShiftAction
+import br.com.mapp.core.shift.RideStartCue
 import br.com.mapp.core.shift.TripMatcher
 import br.com.mapp.core.model.Zone
 import br.com.mapp.core.model.ZoneHit
@@ -633,6 +634,7 @@ class OverlayService : LifecycleService() {
         }
         // Corrida começando: a jornada inicia/retoma sozinha para a corrida entrar nos números.
         autoShift(event, match, offer)
+        rideStartCue(event, match, offer)
         if (ShiftTracker.current(this).value == null) {
             // Sem jornada: a corrida fica em "Aceitas hoje" e no dia, e o "M" fica verde até ela acabar.
             if (offer != null && event.stage != TripStage.FINISHED) {
@@ -695,6 +697,23 @@ class OverlayService : LifecycleService() {
         tripToast("▶ Jornada $what sozinha: corrida começou")
         TripLog.add(this, "  → jornada $what sozinha (corrida começou)")
     }
+
+    /**
+     * Aviso de corrida iniciada ([RideStartCue]): bolha estourando no som e faíscas saindo do ícone
+     * "M", uma vez quando a corrida começa (indo buscar o passageiro, ou no embarque se o aceite não
+     * foi lido). Vale também sem jornada aberta; som e efeito são escolhidos nos ajustes do botão.
+     */
+    private fun rideStartCue(event: TripEvent, match: TripMatcher.Result<OfferKey>, offer: EvaluatedOffer?) {
+        val rideStarted = offer != null || match.newRide || match.started
+        val now = System.currentTimeMillis()
+        if (!RideStartCue.shouldCue(event.stage, rideStarted, lastRideCueAt, now)) return
+        lastRideCueAt = now
+        greatSound?.playRide()
+        bubble?.celebrateRideStart()
+    }
+
+    /** Quando o aviso de corrida iniciada tocou (para não repetir no mesmo aceite). */
+    private var lastRideCueAt: Long? = null
 
     /** Corrida aceita que não aconteceu (✕ no painel, ou outra busca começou sem este embarque). */
     private fun cancelPending(auto: Boolean, platform: Platform? = null) {

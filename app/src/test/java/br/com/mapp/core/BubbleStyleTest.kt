@@ -4,8 +4,10 @@ import br.com.mapp.core.bubble.BubbleSize
 import br.com.mapp.core.bubble.BubbleStyle
 import br.com.mapp.core.bubble.ColorBar
 import br.com.mapp.core.bubble.SpinSpeed
+import br.com.mapp.core.bubble.SparkLevel
 import br.com.mapp.core.sound.GoalSound
 import br.com.mapp.core.sound.GreatSound
+import br.com.mapp.core.sound.RideSound
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -24,6 +26,8 @@ class BubbleStyleTest {
             goalEnd = 0xFFFF1744.toInt(),
             spinSeconds = 3,
             goalSound = GoalSound.DING_DONG,
+            sparkLevel = SparkLevel.FIREWORKS,
+            rideSound = RideSound.RISE,
             iconSize = 130,
             textSize = 160,
             pinSize = 140,
@@ -142,5 +146,19 @@ class BubbleStyleTest {
         assertEquals(GoalSound.CASH, GoalSound.fromId(null))
         assertEquals(GreatSound.RISE, GoalSound.RISE.great)
         GoalSound.entries.forEach { assertEquals(it, GoalSound.fromId(it.id)) }
+    }
+
+    @Test fun aviso_de_corrida_iniciada() {
+        // Padrão: faíscas discretas e a bolha estourando.
+        assertEquals(SparkLevel.DISCRETE, BubbleStyle().sparkLevel)
+        assertEquals(RideSound.POP, BubbleStyle().rideSound)
+        SparkLevel.entries.forEach { assertEquals(it, SparkLevel.fromId(it.id)) }
+        RideSound.entries.forEach { assertEquals(it, RideSound.fromId(it.id)) }
+        // Configuração antiga (sem o aviso) e id errado ficam no padrão.
+        assertEquals(SparkLevel.DISCRETE, BubbleStyle.decode("v1;spin=8").sparkLevel)
+        assertEquals(RideSound.POP, BubbleStyle.decode("v1;rsound=lixo").rideSound)
+        assertEquals(SparkLevel.OFF, BubbleStyle.decode("v1;spark=off").sparkLevel)
+        assertEquals(GreatSound.CHIME, RideSound.CHIME.great)
+        assertEquals(null, RideSound.POP.great)
     }
 }

@@ -14,6 +14,7 @@ import br.com.mapp.core.model.TripStage
 import br.com.mapp.core.shift.AutoShift
 import br.com.mapp.core.shift.AutoShiftAction
 import br.com.mapp.core.shift.Odometer
+import br.com.mapp.core.shift.RideStartCue
 import br.com.mapp.core.shift.PeriodMath
 import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftCodec
@@ -21,6 +22,7 @@ import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.core.shift.ShiftSummary
 import br.com.mapp.core.shift.ShiftTrip
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -395,5 +397,24 @@ class ShiftTest {
         )
         // A jornada retomada mantém o tempo já trabalhado.
         assertEquals(h, pausada.resume(2 * h).elapsedMs(2 * h))
+    }
+
+    @Test fun aviso_de_corrida_iniciada() {
+        val t = 10 * 60_000L
+        // Indo buscar o passageiro (ou embarque, quando o aceite não foi lido): avisa.
+        assertTrue(RideStartCue.shouldCue(TripStage.ACCEPTED, rideStarted = true, lastCueAtMs = null, nowMs = t))
+        assertTrue(RideStartCue.shouldCue(TripStage.ON_TRIP, rideStarted = true, lastCueAtMs = null, nowMs = t))
+        // Etapa repetida (sem corrida nova), tela de fim e tela inicial nunca avisam.
+        assertFalse(RideStartCue.shouldCue(TripStage.ACCEPTED, rideStarted = false, lastCueAtMs = null, nowMs = t))
+        assertFalse(RideStartCue.shouldCue(TripStage.FINISHED, rideStarted = true, lastCueAtMs = null, nowMs = t))
+        assertFalse(RideStartCue.shouldCue(TripStage.IDLE, rideStarted = true, lastCueAtMs = null, nowMs = t))
+        // Mesmo aceite: a tela de busca e a do embarque chegam seguidas e o aviso não repete.
+        assertFalse(RideStartCue.shouldCue(TripStage.ON_TRIP, rideStarted = true, lastCueAtMs = t, nowMs = t + 5_000))
+        // Corrida seguinte (aceita depois): avisa de novo.
+        assertTrue(
+            RideStartCue.shouldCue(
+                TripStage.ACCEPTED, rideStarted = true, lastCueAtMs = t, nowMs = t + RideStartCue.MIN_GAP_MS,
+            ),
+        )
     }
 }
