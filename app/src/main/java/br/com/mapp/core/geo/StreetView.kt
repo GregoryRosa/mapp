@@ -9,7 +9,11 @@ import java.time.YearMonth
 import java.time.ZoneId
 import java.util.Locale
 import kotlin.math.atan
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlin.math.tan
 
 /**
@@ -38,12 +42,63 @@ object StreetView {
         "$HOST/metadata?location=${coord(point)}&radius=$RADIUS_M&source=outdoor&key=${enc(key)}"
 
     /**
-     * Sem `heading`: o Google vira a câmera da foto mais próxima para o ponto pedido.
-     * `return_error_code`: sem foto devolve erro em vez da imagem cinza "sem imagens".
+     * Foto do ponto. [framing] decide para onde a câmera olha:
+     * - [StreetFraming.FACADE]: sem `heading` e sem inclinação — o Google vira a câmera da foto mais
+     *   próxima para o ponto pedido (a fachada da casa), como o MApp fazia antes.
+     * - [StreetFraming.STREET]: `heading` girado 90° ([streetHeading], precisa do ponto de onde a
+     *   foto foi tirada, [pano], que vem dos metadados) — a câmera olha ao longo da via.
+     * - [StreetFraming.MIXED]: rumo da fachada com a câmera inclinada para baixo (o chão na frente
+     *   do ponto e um pedaço da fachada).
+     * `pitch` negativo = câmera para baixo ([tiltDeg] graus). `return_error_code`: sem foto devolve
+     * erro em vez da imagem cinza "sem imagens".
      */
-    fun imageUrl(point: GeoPoint, key: String, zoom: StreetZoom = StreetZoom.DEFAULT): String =
-        "$HOST?size=${WIDTH}x$HEIGHT&location=${coord(point)}&radius=$RADIUS_M&source=outdoor" +
-            "&fov=${zoom.fov}&pitch=0&return_error_code=true&key=${enc(key)}"
+    fun imageUrl(
+        point: GeoPoint,
+        key: String,
+        zoom: StreetZoom = StreetZoom.DEFAULT,
+        framing: StreetFraming = StreetFraming.FACADE,
+        tiltDeg: Int = 0,
+        pano: GeoPoint? = null,
+    ): String {
+        val heading = if (framing == StreetFraming.STREET && pano != null) streetHeading(pano, point) else null
+        val aim = heading?.let { "&heading=" + String.format(Locale.US, "%.1f", it) }.orEmpty()
+        return "$HOST?size=${WIDTH}x$HEIGHT&location=${coord(point)}&radius=$RADIUS_M&source=outdoor$aim" +
+            "&fov=${zoom.fov}&pitch=${-framing.tilt(tiltDeg)}&return_error_code=true&key=${enc(key)}"
+    }
+
+    /** Abaixo disso a foto está praticamente sobre o ponto: não há rumo confiável para a via. */
+    const val MIN_HEADING_M = 4.0
+
+    /** Raio da Terra, em metros. */
+    private const val EARTH_M = 6_371_000.0
+
+    /** Rumo de [from] para [to], em graus (0 = norte, 90 = leste). */
+    fun bearing(from: GeoPoint, to: GeoPoint): Double {
+        val lat1 = Math.toRadians(from.lat)
+        val lat2 = Math.toRadians(to.lat)
+        val dLon = Math.toRadians(to.lon - from.lon)
+        val y = sin(dLon) * cos(lat2)
+        val x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
+        return (Math.toDegrees(atan2(y, x)) + 360.0) % 360.0
+    }
+
+    /** Distância aproximada em metros (basta para as dezenas de metros entre a foto e o ponto). */
+    fun metersBetween(a: GeoPoint, b: GeoPoint): Double {
+        val lat = Math.toRadians((a.lat + b.lat) / 2)
+        val dx = Math.toRadians(b.lon - a.lon) * cos(lat)
+        val dy = Math.toRadians(b.lat - a.lat)
+        return EARTH_M * hypot(dx, dy)
+    }
+
+    /**
+     * Para onde virar a câmera para olhar ao longo da rua: a foto do Google é tirada de dentro da
+     * via, então o rumo dela para o endereço aponta para a calçada — girando 90° a câmera passa a
+     * olhar a pista (asfalto, paralelepípedo, terra). null se a foto está quase sobre o ponto.
+     */
+    fun streetHeading(pano: GeoPoint, point: GeoPoint): Double? {
+        if (metersBetween(pano, point) < MIN_HEADING_M) return null
+        return (bearing(pano, point) + 90.0) % 360.0
+    }
 
     /** Campo de visão da foto sem zoom (1×), em graus — o que o MApp pedia antes do zoom. */
     const val BASE_FOV = 80
@@ -61,8 +116,13 @@ object StreetView {
     /** Pontos a menos de ~1 m (5 casas decimais) usam a mesma foto. */
     fun cacheKey(point: GeoPoint): String = coord(point)
 
-    /** A foto muda com o ponto e com o zoom pedido. */
-    fun cacheKey(point: GeoPoint, zoom: StreetZoom): String = "z${zoom.id}:${coord(point)}"
+    /** A foto muda com o ponto, o zoom, o enquadramento e a inclinação pedidos. */
+    fun cacheKey(
+        point: GeoPoint,
+        zoom: StreetZoom,
+        framing: StreetFraming = StreetFraming.FACADE,
+        tiltDeg: Int = 0,
+    ): String = "z${zoom.id}${framing.tag(tiltDeg)}:${coord(point)}"
 
     /**
      * Quais pontos ganham foto, na ordem do trajeto: coleta e destino sempre; paradas só se têm
@@ -112,6 +172,49 @@ enum class StreetZoom(val id: String, val label: String, val factor: Double) {
 
         fun fromId(id: String?): StreetZoom = entries.firstOrNull { it.id == id } ?: DEFAULT
     }
+}
+
+/**
+ * Enquadramento da foto da rua (Card → Card de corridas → Fotos da rua e satélite): para onde a
+ * câmera olha no ponto. [STREET] é o padrão — o pedido era ver **a rua** (asfalto, paralelepípedo,
+ * terra, buraco, ladeira), não o telhado da casa.
+ */
+enum class StreetFraming(val id: String, val label: String, val hint: String) {
+    FACADE("fachada", "Fachada", "Câmera virada para o endereço, sem inclinação (como era antes)."),
+    STREET("rua", "Rua", "Câmera ao longo da via, inclinada para baixo: mostra se é asfalto, paralelepípedo ou terra."),
+    MIXED("mista", "Mista", "Rumo da fachada, inclinada para baixo: o chão na frente do ponto e um pedaço da fachada.");
+
+    /** Inclinação para baixo usada, em graus: a fachada é sempre reta. */
+    fun tilt(deg: Int): Int = if (this == FACADE) 0 else StreetTilt.snap(deg)
+
+    /** Pedaço do nome da foto no cache; vazio na fachada, para a foto já buscada continuar valendo. */
+    fun tag(deg: Int): String = if (this == FACADE) "" else "-$id${tilt(deg)}"
+
+    companion object {
+        /** Padrão = Rua. */
+        val DEFAULT = STREET
+
+        fun fromId(id: String?): StreetFraming = entries.firstOrNull { it.id == id } ?: DEFAULT
+    }
+}
+
+/**
+ * Inclinação da câmera para baixo, em graus, nos enquadramentos Rua e Mista (slider nos ajustes).
+ * 0 = câmera reta (horizonte no meio da foto), [MAX] = bem para baixo (quase só o chão).
+ */
+object StreetTilt {
+    const val MIN = 0
+    const val MAX = 45
+    const val STEP = 5
+    const val DEFAULT = 20
+
+    /** Passos intermediários do slider (de [MIN] a [MAX], de [STEP] em [STEP]). */
+    const val SLIDER_STEPS = (MAX - MIN) / STEP - 1
+
+    /** Arredonda para o passo do slider e mantém dentro da faixa. */
+    fun snap(deg: Int): Int = ((deg.coerceIn(MIN, MAX).toDouble() / STEP).roundToInt() * STEP)
+
+    fun label(deg: Int): String = if (snap(deg) == 0) "reta" else "${snap(deg)}° para baixo"
 }
 
 /**

@@ -482,6 +482,8 @@ class OfferCardView(
         fun bind(stop: RouteStop, mode: PhotoView, shot: SatelliteShot) {
             val zoom = OverlayPrefs.streetZoom(context)
             val satZoom = OverlayPrefs.satelliteZoom(context)
+            val framing = OverlayPrefs.streetFraming(context)
+            val tilt = OverlayPrefs.streetTilt(context)
             badge.text = stop.letter
             badge.background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
@@ -501,12 +503,12 @@ class OfferCardView(
             val id = if (mode == PhotoView.SATELLITE) {
                 "${mode.id}|${stop.letter}|${shot.width}x${shot.height}z${satZoom.id}|${StreetView.cacheKey(point)}"
             } else {
-                "${mode.id}|${StreetView.cacheKey(point, zoom)}"
+                "${mode.id}|${StreetView.cacheKey(point, zoom, framing, tilt)}"
             }
             if (id == loadedId) return
             reset()
             loadedId = id
-            StreetViewPhotos.cached(stop, mode, shot, zoom, satZoom)?.let { show(it); return }
+            StreetViewPhotos.cached(stop, mode, shot, zoom, satZoom, framing, tilt)?.let { show(it); return }
             showMissing(if (mode == PhotoView.SATELLITE) "Carregando satélite…" else "Carregando foto…")
             job = scope.launch {
                 val result = StreetViewPhotos.load(context, stop, mode, shot)

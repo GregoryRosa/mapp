@@ -1,5 +1,7 @@
 package br.com.mapp.core
 
+import br.com.mapp.core.geo.StreetFraming
+import br.com.mapp.core.geo.StreetTilt
 import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.geo.StreetViewBudget
 import br.com.mapp.core.geo.StreetZoom
@@ -30,6 +32,81 @@ class StreetViewTest {
         assertTrue(img.contains("location=-30.07123,-51.11988"))
         assertTrue(img.contains("return_error_code=true"))
         assertFalse(img.contains("heading="))
+    }
+
+    @Test
+    fun `fachada e o enquadramento de antes e rua e o padrao`() {
+        assertEquals(StreetFraming.STREET, StreetFraming.DEFAULT)
+        assertEquals(StreetFraming.MIXED, StreetFraming.fromId("mista"))
+        assertEquals(StreetFraming.DEFAULT, StreetFraming.fromId(null))
+        assertEquals(StreetFraming.DEFAULT, StreetFraming.fromId("lixo"))
+        // Fachada ignora a inclinação; Rua e Mista usam a escolhida.
+        assertEquals(0, StreetFraming.FACADE.tilt(30))
+        assertEquals(30, StreetFraming.STREET.tilt(30))
+        assertEquals(30, StreetFraming.MIXED.tilt(30))
+    }
+
+    @Test
+    fun `rumo da camera olha ao longo da rua`() {
+        // Foto tirada 21 m a oeste do endereço: o endereço está a leste (90°), a rua corre norte-sul.
+        val pano = GeoPoint(-30.0712345, -51.1201)
+        assertEquals(90.0, StreetView.bearing(pano, p), 0.01)
+        assertEquals(21.5, StreetView.metersBetween(pano, p), 0.5)
+        assertEquals(180.0, StreetView.streetHeading(pano, p)!!, 0.01)
+        // Foto 18 m ao sul: o endereço está ao norte (0°) e a rua corre leste-oeste.
+        val south = GeoPoint(-30.0714, -51.1198765)
+        assertEquals(90.0, StreetView.streetHeading(south, p)!!, 0.01)
+        // Foto quase sobre o ponto: não há rumo confiável (volta a ser a foto que o Google escolhe).
+        assertNull(StreetView.streetHeading(GeoPoint(-30.07125, -51.1198765), p))
+    }
+
+    @Test
+    fun `enquadramento rua pede heading e camera para baixo`() {
+        val pano = GeoPoint(-30.0712345, -51.1201)
+
+        // Fachada = a foto de antes: sem heading e sem inclinação.
+        val facade = StreetView.imageUrl(p, "abc", StreetZoom.X1, StreetFraming.FACADE, 20, pano)
+        assertFalse(facade.contains("heading="))
+        assertTrue(facade.contains("pitch=0&"))
+
+        // Rua: câmera girada 90° (olhando a pista) e inclinada para baixo.
+        val street = StreetView.imageUrl(p, "abc", StreetZoom.X1, StreetFraming.STREET, 20, pano)
+        assertTrue(street.contains("heading=180.0&"))
+        assertTrue(street.contains("pitch=-20&"))
+
+        // Sem o ponto da foto (metadados sem `location`): fica o rumo do Google, só inclinada.
+        val noPano = StreetView.imageUrl(p, "abc", StreetZoom.X1, StreetFraming.STREET, 20, null)
+        assertFalse(noPano.contains("heading="))
+        assertTrue(noPano.contains("pitch=-20&"))
+
+        // Mista: rumo da fachada (sem heading) com a câmera inclinada.
+        val mixed = StreetView.imageUrl(p, "abc", StreetZoom.X1, StreetFraming.MIXED, 45, pano)
+        assertFalse(mixed.contains("heading="))
+        assertTrue(mixed.contains("pitch=-45&"))
+    }
+
+    @Test
+    fun `inclinacao anda de 5 em 5 graus dentro da faixa`() {
+        assertEquals(20, StreetTilt.DEFAULT)
+        assertEquals(0, StreetTilt.snap(-10))
+        assertEquals(45, StreetTilt.snap(90))
+        assertEquals(20, StreetTilt.snap(22))
+        assertEquals(25, StreetTilt.snap(23))
+        assertEquals("reta", StreetTilt.label(0))
+        assertEquals("20° para baixo", StreetTilt.label(20))
+        assertEquals(StreetTilt.MAX / StreetTilt.STEP - 1, StreetTilt.SLIDER_STEPS)
+    }
+
+    @Test
+    fun `enquadramento e inclinacao mudam a foto guardada`() {
+        val facade = StreetView.cacheKey(p, StreetZoom.X1, StreetFraming.FACADE, 20)
+        // Fachada guarda com o mesmo nome de antes: a foto já buscada continua valendo.
+        assertEquals(StreetView.cacheKey(p, StreetZoom.X1), facade)
+        val street = StreetView.cacheKey(p, StreetZoom.X1, StreetFraming.STREET, 20)
+        assertFalse(facade == street)
+        assertFalse(street == StreetView.cacheKey(p, StreetZoom.X1, StreetFraming.MIXED, 20))
+        assertFalse(street == StreetView.cacheKey(p, StreetZoom.X1, StreetFraming.STREET, 35))
+        assertEquals(street, StreetView.cacheKey(p, StreetZoom.X1, StreetFraming.STREET, 22))
     }
 
     @Test
