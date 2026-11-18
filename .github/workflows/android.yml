@@ -4,8 +4,14 @@ on:
   push:
     branches: [ main ]
   pull_request:
-  # Botão "Run workflow" na aba Actions: gera o AAB de novo sem precisar de commit.
+  # Botão "Run workflow" na aba Actions: compila, gera o AAB e **publica o APK** na release
+  # sem precisar de commit novo.
   workflow_dispatch:
+
+# Dois merges quase juntos não podem publicar fora de ordem: um build por vez em cada branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -60,10 +66,19 @@ jobs:
 
       # Publica o APK numa release "ultima-versao" para baixar direto no celular.
       - name: Publicar APK na release
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Build de um commit que já não é o topo do main não sobrescreve a release (merges em sequência).
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            git fetch --depth=1 origin main
+            TIP=$(git rev-parse FETCH_HEAD)
+            if [ "$TIP" != "$GITHUB_SHA" ]; then
+              echo "::notice::${GITHUB_SHA::7} não é mais o topo do main (${TIP::7}): release mantida."
+              exit 0
+            fi
+          fi
           # A versão (0.3.<nº desta execução>) vem do próprio APK: é a mesma que aparece na tela inicial do app.
           VERSION=$(jq -r '.elements[0].versionName // empty' app/build/outputs/apk/debug/output-metadata.json 2>/dev/null || true)
           VERSION=${VERSION:-0.3.$GITHUB_RUN_NUMBER}
