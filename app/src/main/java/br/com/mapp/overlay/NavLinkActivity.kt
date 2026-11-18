@@ -11,43 +11,40 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.lifecycle.lifecycleScope
 import br.com.mapp.core.bus.OfferBus
-import br.com.mapp.core.model.TripStage
+import br.com.mapp.core.model.Platform
 import br.com.mapp.core.nav.NavHold
 import br.com.mapp.core.nav.NavLinkState
 import br.com.mapp.core.nav.NavRequest
 import br.com.mapp.core.nav.ReleaseReason
 import br.com.mapp.reader.OfferAccessibilityService
 import br.com.mapp.reader.ReaderStatus
-import kotlinx.coroutines.launch
 
 /**
  * Atraso do Waze ([NavHold]). Com o MApp escolhido como app dos links `waze://`, a Uber abre esta tela
  * em vez do Waze. Ela é **invisível e não recebe toques** (a Uber continua à vista e respondendo ao
- * dedo), pede ao leitor uma rajada de leituras da tela e, assim que ele reconhece a corrida (ou depois
- * de algumas leituras sem novidade, ou no tempo máximo), abre o Waze com o mesmo link e fecha.
+ * dedo).
+ *
+ * - **Uber na tela:** pede ao leitor uma rajada de leituras e, assim que ele reconhece a corrida (ou
+ *   depois de algumas leituras sem novidade, ou no tempo máximo), abre o Waze com o mesmo link e fecha.
+ * - **Motorista no Waze** (a Uber mandou a rota com outro app na frente): abre a Uber — igual a tocar no
+ *   ícone dela — e passa a espera para o [NavRelay], que abre o Waze depois da leitura.
  *
  * Só atrasa a abertura que a Uber pediu: não toca em nada nem muda o destino. Desligada no manifest
  * (`enabled=false`); só existe para o Android quando o motorista liga o atraso na tela inicial.
  */
 class NavLinkActivity : ComponentActivity() {
 
-    private val handler = Handler(Looper.getMainLooper())
     private var link: Uri? = null
     private var request: NavRequest? = null
     private var forwarded = false
-    private var startedAt = 0L
-    private var holdMs = 0L
-    private var readsAtStart = 0
-    private var stage: TripStage? = null
-
-    private val timeout = Runnable { forward(ReleaseReason.TIMEOUT) }
+    private var waiter: NavWaiter? = null
+    private val handler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,7 +54,7 @@ class NavLinkActivity : ComponentActivity() {
         window.attributes = window.attributes.also { it.alpha = 0f }
         noAnimation(open = true)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() = forward(ReleaseReason.LEFT)
+            override fun handleOnBackPressed() = release(ReleaseReason.LEFT)
         })
 
         link = intent?.data
@@ -68,14 +65,20 @@ class NavLinkActivity : ComponentActivity() {
             return
         }
         val referrer = callerPackage()
+        val enabled = OverlayPrefs.isNavHoldOn(this)
+        val readerOn = ReaderStatus.state.value.connected
         val plan = NavHold.plan(
-            enabled = OverlayPrefs.isNavHoldOn(this),
+            enabled = enabled,
             delayMs = OverlayPrefs.navHoldMs(this),
             copilotOn = OfferBus.hasListeners,
-            readerOn = ReaderStatus.state.value.connected,
+            readerOn = readerOn,
             referrer = referrer,
             ownPackage = packageName,
             test = req.test,
+            rideAppOnScreen = readerOn && OfferAccessibilityService.rideAppOnScreen() != null,
+            bringOn = OverlayPrefs.isNavBringOn(this),
+            lastRideApp = OfferAccessibilityService.lastRideApp,
+            sinceLastBringMs = NavRelay.sinceLastBring(),
         )
         TripLog.add(this, NavHold.describe(req, referrer, plan))
         if (plan.holdMs <= 0L) {
@@ -83,26 +86,42 @@ class NavLinkActivity : ComponentActivity() {
             return
         }
 
-        holdMs = plan.holdMs
-        startedAt = SystemClock.elapsedRealtime()
-        readsAtStart = OfferAccessibilityService.imageReads.value
-        OfferAccessibilityService.burst(plan.holdMs)
-        handler.postDelayed(timeout, plan.holdMs)
-        lifecycleScope.launch {
-            OfferBus.tripStages.collect { event ->
-                if (event.stage == TripStage.ACCEPTED || event.stage == TripStage.ON_TRIP) {
-                    stage = event.stage
-                    check()
-                }
+        val bring = plan.bring
+        if (bring != null) {
+            if (NavRelay.bringToFront(this, bring)) {
+                // A Uber vai cobrir esta tela (que fecha): a espera continua no NavRelay.
+                NavRelay.holdAfterBringing(this, bring, link, extrasOrNull(), req, plan.holdMs)
+                forwarded = true
+                finish()
+                noAnimation(open = false)
+                return
             }
+            TripLog.add(this, "🧭 Não consegui abrir o app ${bring.label}: Waze aberto na hora")
+            forward(null)
+            return
         }
-        lifecycleScope.launch { OfferAccessibilityService.imageReads.collect { check() } }
+
+        waiter = NavWaiter(lifecycleScope, plan.holdMs) { reason, elapsed, reads ->
+            TripLog.add(this, NavHold.describeRelease(elapsed, reason, reads))
+            forward(reason)
+        }.also { it.start() }
+        // A janela de aceite da Uber pode fechar logo depois de pedir o Waze (com o Waze por baixo):
+        // confere de novo e, se a Uber sumiu, traz o app para ler.
+        plan.fallback?.let { app -> handler.postDelayed({ lateCheck(app, req, plan.holdMs) }, NavHold.LATE_CHECK_MS) }
     }
 
-    override fun onStop() {
-        super.onStop()
-        // Tela apagada, botão início ou outro app por cima: abre o Waze agora (não fica preso aqui).
-        if (!forwarded && !isChangingConfigurations) forward(ReleaseReason.LEFT)
+    private fun lateCheck(app: Platform, req: NavRequest, holdMs: Long) {
+        val w = waiter ?: return
+        if (forwarded) return
+        if (!NavHold.lateBring(w.readsSoFar, OfferAccessibilityService.rideAppOnScreen() != null)) return
+        if (!NavRelay.bringToFront(this, app)) return
+        w.cancel()
+        waiter = null
+        forwarded = true
+        TripLog.add(this, "🧭 ${app.label} saiu da tela logo depois de pedir o Waze: trazendo o app para ler")
+        NavRelay.holdAfterBringing(this, app, link, extrasOrNull(), req, holdMs + NavHold.BRING_EXTRA_MS - NavHold.LATE_CHECK_MS)
+        finish()
+        noAnimation(open = false)
     }
 
     override fun onDestroy() {
@@ -110,19 +129,23 @@ class NavLinkActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun check() {
-        if (forwarded || holdMs <= 0L) return
-        val reason = NavHold.release(elapsed(), holdMs, stage, reads()) ?: return
-        forward(reason)
+    override fun onStop() {
+        super.onStop()
+        // Tela apagada, botão início ou outro app por cima: abre o Waze agora (não fica preso aqui).
+        if (!forwarded && !isChangingConfigurations) release(ReleaseReason.LEFT)
+    }
+
+    /** Termina a espera (o [NavWaiter] chama [forward]); sem espera em curso, abre o Waze direto. */
+    private fun release(reason: ReleaseReason) {
+        val w = waiter
+        if (w != null) w.finish(reason) else forward(reason)
     }
 
     /** Abre o Waze com o mesmo link (uma vez só) e fecha. [reason] null = sem espera. */
     private fun forward(reason: ReleaseReason?) {
         if (forwarded) return
         forwarded = true
-        handler.removeCallbacksAndMessages(null)
-        if (reason != null) TripLog.add(this, NavHold.describeRelease(elapsed(), reason, reads()))
-        openWaze()
+        NavRelay.openWaze(this, link, extrasOrNull(), request)
         if (request?.test == true) {
             Toast.makeText(this, "✅ O link do Waze passou pelo MApp e foi entregue ao Waze.", Toast.LENGTH_LONG).show()
         }
@@ -130,42 +153,15 @@ class NavLinkActivity : ComponentActivity() {
         noAnimation(open = false)
     }
 
-    private fun openWaze() {
-        val uri = link
-        val out = if (uri != null) Intent(Intent.ACTION_VIEW, uri) else packageManager.getLaunchIntentForPackage(NavHold.WAZE_PACKAGE)
-        if (out != null) {
-            out.setPackage(NavHold.WAZE_PACKAGE)
-            out.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            try {
-                intent?.extras?.let { out.putExtras(it) }
-            } catch (e: Exception) {
-                // Extra que o MApp não consegue ler: segue só com o link.
-            }
-            try {
-                startActivity(out)
-                return
-            } catch (e: ActivityNotFoundException) {
-                // Waze desinstalado: tenta o site abaixo.
-            } catch (e: SecurityException) {
-                // idem
-            }
-        }
-        val web = request?.let { Intent(Intent.ACTION_VIEW, Uri.parse(NavHold.webUrl(it))) }
-        try {
-            if (web == null) throw ActivityNotFoundException()
-            startActivity(web.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        } catch (e: Exception) {
-            Toast.makeText(this, "Waze não encontrado no celular", Toast.LENGTH_LONG).show()
-        }
+    private fun extrasOrNull(): Bundle? = try {
+        intent?.extras
+    } catch (e: Exception) {
+        null
     }
 
     /** Pacote do app que pediu o Waze (a Uber, normalmente); null = não se identificou. */
     private fun callerPackage(): String? =
         callingPackage ?: referrer?.takeIf { it.scheme == "android-app" }?.host
-
-    private fun elapsed(): Long = if (startedAt == 0L) 0L else SystemClock.elapsedRealtime() - startedAt
-
-    private fun reads(): Int = (OfferAccessibilityService.imageReads.value - readsAtStart).coerceAtLeast(0)
 
     private fun noAnimation(open: Boolean) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {

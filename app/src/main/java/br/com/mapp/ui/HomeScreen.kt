@@ -290,6 +290,7 @@ private fun WazeHoldCard(refresh: Int) {
     val ctx = LocalContext.current
     var on by remember { mutableStateOf(OverlayPrefs.isNavHoldOn(ctx)) }
     var delay by remember { mutableLongStateOf(OverlayPrefs.navHoldMs(ctx)) }
+    var bring by remember { mutableStateOf(OverlayPrefs.isNavBringOn(ctx)) }
     val state = remember(on, refresh) {
         NavLinkActivity.sync(ctx)
         NavLinkActivity.state(ctx)
@@ -344,6 +345,26 @@ private fun WazeHoldCard(refresh: Int) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MappColors.TextDim,
             )
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Trazer a Uber quando eu estiver no Waze", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Se a chamada chegar com o Waze na frente, a Uber manda a rota direto e a tela dela nem " +
+                            "aparece. Ligado, o MApp abre a Uber por um instante (como tocar no ícone dela), lê a " +
+                            "corrida e então manda a rota ao Waze.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MappColors.TextDim,
+                    )
+                }
+                Switch(
+                    checked = bring,
+                    onCheckedChange = {
+                        bring = it
+                        OverlayPrefs.setNavBringOn(ctx, it)
+                    },
+                )
+            }
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { NavLinkActivity.test(ctx) }) { Text("Testar") }

@@ -18,8 +18,21 @@ data class NavRequest(
     val rawQuery: String = "",
 )
 
-/** Quanto segurar o Waze e por quê (para o Registro). 0 = repassa na hora. */
-data class HoldPlan(val holdMs: Long, val reason: String)
+/**
+ * Quanto segurar o Waze e por quê (para o Registro). 0 = repassa na hora. [bring] = app de corrida
+ * que não está na tela (o motorista estava no Waze): o MApp abre esse app para ler a corrida e só
+ * depois manda a rota ao Waze.
+ */
+data class HoldPlan(
+    val holdMs: Long,
+    val reason: String,
+    val bring: Platform? = null,
+    /**
+     * App a trazer se ele sumir da tela no começo da espera (a janela de aceite da Uber fechou logo
+     * depois de pedir o Waze, com o Waze por baixo) — ver [lateBring]. null = não trazer.
+     */
+    val fallback: Platform? = null,
+)
 
 /** Por que o Waze foi liberado. */
 enum class ReleaseReason(val label: String) {
@@ -76,6 +89,18 @@ object NavHold {
      */
     const val FRAMES_ENOUGH = 3
 
+    /** Trazendo o app de corrida para a frente: tempo a mais para ele aparecer na tela. */
+    const val BRING_EXTRA_MS = 1_500L
+
+    /**
+     * Depois de trazer o app de corrida, outro pedido nesse intervalo não traz de novo (se o app
+     * reenviar a rota ao voltar para a frente, não vira vaivém).
+     */
+    const val BRING_COOLDOWN_MS = 15_000L
+
+    /** Confere se o app de corrida continua na tela este tanto depois de começar a segurar. */
+    const val LATE_CHECK_MS = 700L
+
     /** Tempo de espera válido (valor salvo antigo ou estranho vira o padrão). */
     fun validDelay(ms: Long): Long = if (ms in DELAYS_MS) ms else DEFAULT_DELAY_MS
 
@@ -128,6 +153,12 @@ object NavHold {
      * Quanto segurar este pedido. Só segura com o atraso ligado, o copiloto rodando, o leitor conectado
      * e o pedido vindo de um app de corrida (ou de quem não se identificou). Pedido do próprio MApp e
      * o do botão Testar nunca esperam.
+     *
+     * [rideAppOnScreen] = o leitor vê a janela de um app de corrida agora. Sem ela (motorista no Waze
+     * quando a chamada chegou), segurar não adianta: com [bringOn] o plano manda trazer o app que pediu
+     * (ou, se ele não se identificou, [lastRideApp] — o último app de corrida que o leitor viu) e
+     * espera [BRING_EXTRA_MS] a mais; senão repassa na hora. [sinceLastBringMs] = tempo desde a última
+     * vez que um app foi trazido (null = nunca).
      */
     fun plan(
         enabled: Boolean,
@@ -137,6 +168,10 @@ object NavHold {
         referrer: String?,
         ownPackage: String,
         test: Boolean,
+        rideAppOnScreen: Boolean = true,
+        bringOn: Boolean = false,
+        lastRideApp: Platform? = null,
+        sinceLastBringMs: Long? = null,
     ): HoldPlan = when {
         test -> HoldPlan(0, "teste")
         referrer == ownPackage -> HoldPlan(0, "pedido do próprio MApp")
@@ -144,8 +179,25 @@ object NavHold {
         !copilotOn -> HoldPlan(0, "copiloto parado")
         !readerOn -> HoldPlan(0, "leitor sem conexão")
         referrer != null && Platform.fromPackage(referrer) == null -> HoldPlan(0, "pedido de outro app")
-        else -> HoldPlan(validDelay(delayMs), "esperando a leitura da tela")
+        else -> {
+            val app = referrer?.let { Platform.fromPackage(it) } ?: lastRideApp
+            val cooled = sinceLastBringMs == null || sinceLastBringMs >= BRING_COOLDOWN_MS
+            val bringable = app?.takeIf { bringOn && cooled }
+            when {
+                rideAppOnScreen -> HoldPlan(validDelay(delayMs), "esperando a leitura da tela", fallback = bringable)
+                app == null -> HoldPlan(0, "app de corrida fora da tela")
+                !bringOn -> HoldPlan(0, "${app.label} fora da tela")
+                !cooled -> HoldPlan(0, "${app.label} trazido para a frente há pouco")
+                else -> HoldPlan(validDelay(delayMs) + BRING_EXTRA_MS, "${app.label} fora da tela", bring = app)
+            }
+        }
     }
+
+    /**
+     * [LATE_CHECK_MS] depois de começar a segurar com o app de corrida na tela: se nenhuma leitura
+     * aconteceu e ele já não está lá (era a janela de aceite por cima do Waze), vale trazer o app.
+     */
+    fun lateBring(reads: Int, rideAppOnScreen: Boolean): Boolean = reads == 0 && !rideAppOnScreen
 
     /**
      * Libera o Waze? [stage] = etapa que o leitor publicou desde o começo da espera (só aceite e
@@ -203,7 +255,14 @@ object NavHold {
         }
         if (request.navigate) append(" · navegar")
         append(" · ")
-        append(if (plan.holdMs > 0) "segurando até ${label(plan.holdMs)}" else "repassado na hora (${plan.reason})")
+        val bring = plan.bring
+        append(
+            when {
+                plan.holdMs <= 0 -> "repassado na hora (${plan.reason})"
+                bring != null -> "${bring.label} fora da tela: trazendo o app para ler (até ${label(plan.holdMs)})"
+                else -> "segurando até ${label(plan.holdMs)}"
+            },
+        )
     }
 
     /** Linha do Registro quando o Waze é liberado. */

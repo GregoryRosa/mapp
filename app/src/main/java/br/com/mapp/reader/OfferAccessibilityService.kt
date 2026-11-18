@@ -479,6 +479,25 @@ class OfferAccessibilityService : AccessibilityService() {
         return Scene(best, own, summary)
     }
 
+    /**
+     * App de corrida com a **tela própria** (janela de aplicativo, não sobreposição) grande na tela.
+     * A janela de aceite que a Uber abre por cima do Waze é sobreposição: não conta — sem ela, o Waze é
+     * que está por baixo.
+     */
+    private fun rideAppWindow(): Platform? {
+        val metrics = resources.displayMetrics
+        val minArea = metrics.widthPixels.toLong() * metrics.heightPixels * MIN_TARGET_AREA_PERCENT / 100
+        val bounds = Rect()
+        for (window in windows) {
+            if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+            val pkg = windowPackages[window.id] ?: packageOf(window)?.also { windowPackages[window.id] = it }
+            val platform = Platform.fromPackage(pkg) ?: continue
+            window.getBoundsInScreen(bounds)
+            if (bounds.width().toLong() * bounds.height() >= minArea) return platform
+        }
+        return null
+    }
+
     private fun packageOf(window: AccessibilityWindowInfo): String? {
         val root = try {
             window.root
@@ -594,6 +613,23 @@ class OfferAccessibilityService : AccessibilityService() {
          * (overlay/NavLinkActivity) libera o Waze depois de algumas sem novidade.
          */
         val imageReads: StateFlow<Int> = _imageReads.asStateFlow()
+
+        /**
+         * App de corrida com janela grande na tela agora (null = nenhum, ou leitor desligado). O atraso
+         * do Waze usa para saber se a Uber está à vista ou se o motorista estava no Waze. Main thread.
+         */
+        fun rideAppOnScreen(): Platform? {
+            val service = _windowContext.value as? OfferAccessibilityService ?: return null
+            return try {
+                service.rideAppWindow()
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        /** Último app de corrida que mandou evento ao leitor (null = nenhum ainda). */
+        val lastRideApp: Platform?
+            get() = (_windowContext.value as? OfferAccessibilityService)?.scanPlatform
 
         /** Atraso do Waze: lê a tela em rajada por [ms]. Sem leitor conectado, não faz nada. */
         fun burst(ms: Long) {

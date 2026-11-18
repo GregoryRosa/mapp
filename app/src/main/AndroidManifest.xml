@@ -16,9 +16,12 @@
     <uses-permission android:name="com.android.vending.BILLING" />
 
     <!-- Atraso do Waze: saber se o Waze está instalado e quem abre os links waze:// (cartão da tela
-         inicial) e repassar o link a ele. -->
+         inicial), repassar o link a ele e, com o motorista no Waze, abrir o app de corrida para ler. -->
     <queries>
         <package android:name="com.waze" />
+        <package android:name="com.ubercab.driver" />
+        <package android:name="com.app99.driver" />
+        <package android:name="sinet.startup.inDriver" />
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="waze" />
