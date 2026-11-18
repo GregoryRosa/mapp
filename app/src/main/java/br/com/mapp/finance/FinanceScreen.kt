@@ -71,11 +71,13 @@ import br.com.mapp.MappApp
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.repo.EntryKind
 import br.com.mapp.core.repo.FinanceEntry
+import br.com.mapp.core.goal.WeekGoals
 import br.com.mapp.core.repo.Goals
 import br.com.mapp.core.shift.PeriodTotals
 import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.ui.MappColors
 import kotlinx.coroutines.launch
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZoneOffset
@@ -180,7 +182,7 @@ private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
                     title = dayTitle(date, todayDate),
                     subtitle = null,
                     totals = dayTotals,
-                    goal = ReportMath.goalProgress(dayTotals.gross, goals.daily),
+                    goal = ReportMath.goalProgress(dayTotals.gross, WeekGoals.goalFor(goals, date)),
                     goalHint = true,
                     titleActions = {
                         IconButton(onClick = { showPicker = true }) {
@@ -529,15 +531,88 @@ private fun EntryDialog(initial: FinanceEntry?, onDismiss: () -> Unit, onSave: (
 private fun GoalsDialog(goals: Goals, onDismiss: () -> Unit, onSave: (Goals) -> Unit) {
     var daily by remember { mutableStateOf(Format.input(goals.daily)) }
     var monthly by remember { mutableStateOf(Format.input(goals.monthly)) }
+    var byWeekday by remember { mutableStateOf(goals.byWeekday) }
+    var selected by remember { mutableStateOf(emptySet<DayOfWeek>()) }
+    var dayValue by remember { mutableStateOf("") }
     val valid = isBlankOrNumber(daily) && isBlankOrNumber(monthly)
+    // A lista da semana já mostra a meta geral que está sendo digitada agora.
+    val preview = Goals(daily = Format.parse(daily)?.takeIf { it > 0 }, byWeekday = byWeekday)
+    val dayGoal = Format.parse(dayValue)?.takeIf { it > 0 }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Metas de ganhos") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                NumberField("Meta diária", daily, { daily = it }, suffix = "R$")
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                NumberField("Meta geral do dia", daily, { daily = it }, suffix = "R$")
+                Text(
+                    "Vale nos dias sem meta própria. Deixe em branco para não usar meta.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 NumberField("Meta mensal", monthly, { monthly = it }, suffix = "R$")
-                Text("Deixe em branco para não usar meta.", style = MaterialTheme.typography.bodySmall)
+                SectionTitle("Meta por dia da semana")
+                Text(
+                    "Toque nos dias, digite o valor e Aplicar. Dá para marcar vários de uma vez.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                WeekGoals.DAYS.chunked(4).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        row.forEach { d ->
+                            FilterChip(
+                                selected = d in selected,
+                                onClick = { selected = if (d in selected) selected - d else selected + d },
+                                label = { Text(WeekGoals.short(d)) },
+                            )
+                        }
+                    }
+                }
+                NumberField(
+                    "Meta destes dias",
+                    dayValue,
+                    { dayValue = it },
+                    Modifier.fillMaxWidth(),
+                    suffix = "R$",
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        enabled = selected.isNotEmpty() && dayGoal != null,
+                        onClick = {
+                            byWeekday = WeekGoals.withDays(preview, selected, dayGoal).byWeekday
+                            selected = emptySet()
+                            dayValue = ""
+                        },
+                    ) { Text("Aplicar") }
+                    TextButton(
+                        enabled = selected.isNotEmpty(),
+                        onClick = {
+                            byWeekday = WeekGoals.withDays(preview, selected, null).byWeekday
+                            selected = emptySet()
+                            dayValue = ""
+                        },
+                    ) { Text("Usar a geral") }
+                }
+                WeekGoals.groups(preview).forEach { g ->
+                    val own = WeekGoals.own(preview, g.days.first()) != null
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                selected = g.days.toSet()
+                                dayValue = Format.input(g.goal)
+                            }
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(g.label, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (g.goal == null) "sem meta" else Format.brl(g.goal) + if (own) "" else " (geral)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (own) MappColors.Teal else MappColors.TextDim,
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
@@ -546,6 +621,7 @@ private fun GoalsDialog(goals: Goals, onDismiss: () -> Unit, onSave: (Goals) -> 
                     Goals(
                         daily = Format.parse(daily)?.takeIf { it > 0 },
                         monthly = Format.parse(monthly)?.takeIf { it > 0 },
+                        byWeekday = byWeekday,
                     )
                 )
             }) { Text("Salvar") }

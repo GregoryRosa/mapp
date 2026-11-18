@@ -68,7 +68,16 @@ data class FinanceEntry(
     val atMillis: Long = System.currentTimeMillis(),
 )
 
-data class Goals(val daily: Double? = null, val monthly: Double? = null)
+/**
+ * Metas de ganhos. [daily] é a **meta geral do dia**, usada nos dias sem meta própria; [byWeekday]
+ * guarda a meta de cada dia da semana (1 = segunda … 7 = domingo, `java.time.DayOfWeek.value`).
+ * Regras em `core/goal/WeekGoals`.
+ */
+data class Goals(
+    val daily: Double? = null,
+    val monthly: Double? = null,
+    val byWeekday: Map<Int, Double> = emptyMap(),
+)
 
 interface FinanceRepository {
     fun entries(fromMillis: Long, toMillis: Long): Flow<List<FinanceEntry>>
