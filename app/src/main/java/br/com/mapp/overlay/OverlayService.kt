@@ -35,6 +35,8 @@ import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.RawOffer
 import br.com.mapp.core.model.TripEvent
 import br.com.mapp.core.model.TripStage
+import br.com.mapp.core.shift.AutoShift
+import br.com.mapp.core.shift.AutoShiftAction
 import br.com.mapp.core.shift.TripMatcher
 import br.com.mapp.core.model.Zone
 import br.com.mapp.core.model.ZoneHit
@@ -619,6 +621,8 @@ class OverlayService : LifecycleService() {
             markAccepted(offer, true, passenger = event.passenger, onBoard = event.stage == TripStage.ON_TRIP)
             matcher.markCounted(key!!)
         }
+        // Corrida começando: a jornada inicia/retoma sozinha para a corrida entrar nos números.
+        autoShift(event, match, offer)
         if (ShiftTracker.current(this).value == null) {
             // Sem jornada: a corrida fica em "Aceitas hoje" e no dia, e o "M" fica verde até ela acabar.
             if (offer != null && event.stage != TripStage.FINISHED) {
@@ -665,6 +669,21 @@ class OverlayService : LifecycleService() {
             }
             TripStage.IDLE -> Unit // fechamentos já aplicados acima
         }
+    }
+
+    /**
+     * Jornada automática ([AutoShift]): corrida começando (indo buscar o passageiro ou já a bordo) com
+     * a jornada fechada ou pausada → ela inicia/retoma sozinha, como se o ▶ tivesse sido tocado.
+     */
+    private fun autoShift(event: TripEvent, match: TripMatcher.Result<OfferKey>, offer: EvaluatedOffer?) {
+        val rideStarted = offer != null || match.newRide || match.started
+        val action = AutoShift.action(ShiftTracker.current(this).value, event.stage, rideStarted)
+        if (action == AutoShiftAction.NONE) return
+        if (location?.hasPermission() == false) toast("Sem permissão de localização: os km não serão contados")
+        ShiftTracker.start(this)
+        val what = if (action == AutoShiftAction.START) "iniciada" else "retomada"
+        tripToast("▶ Jornada $what sozinha: corrida começou")
+        TripLog.add(this, "  → jornada $what sozinha (corrida começou)")
     }
 
     /** Corrida aceita que não aconteceu (✕ no painel, ou outra busca começou sem este embarque). */
