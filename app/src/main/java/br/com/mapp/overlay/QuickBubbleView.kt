@@ -29,12 +29,14 @@ import android.widget.TextView
 import br.com.mapp.core.bubble.BubbleSize
 import br.com.mapp.core.bubble.BubbleStyle
 import br.com.mapp.core.bubble.ColorBar
+import br.com.mapp.core.bubble.SparkLevel
 import br.com.mapp.core.bubble.SpinSpeed
 import br.com.mapp.core.goal.DayGoal
 import br.com.mapp.core.model.ZoneType
 import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.core.sound.GoalSound
+import br.com.mapp.core.sound.RideSound
 import br.com.mapp.core.status.ReaderCheck
 import br.com.mapp.reader.ReaderStatus
 import kotlinx.coroutines.CoroutineScope
@@ -49,8 +51,8 @@ import kotlin.math.sin
  * Toque = abre o menu circular (botões redondos com ícone em volta do "M"); arraste = muda de lugar;
  * segurar 3 s parado (no "M" ou no ✕ do menu) = desliga o copiloto (anel vermelho enche).
  * A engrenagem do menu abre os **ajustes do próprio botão**: cores do fundo, do "M", do anel de
- * dentro (status) e do anel de fora (meta), velocidade do giro, som da meta batida e tamanho do
- * botão e dos números em volta dele. O 📋 abre as **Atividades**: corrida atual e próxima, com os
+ * dentro (status) e do anel de fora (meta), velocidade do giro, som da meta batida, o aviso de
+ * corrida iniciada (som e faíscas) e tamanho do botão e dos números em volta dele. O 📋 abre as **Atividades**: corrida atual e próxima, com os
  * dados da notificação da corrida aceita.
  * Só mexe nas configurações do próprio MApp — nunca toca no app de corrida.
  */
@@ -123,6 +125,9 @@ class QuickBubbleView(
         y = prefs.getInt(OverlayPrefs.KEY_BUBBLE_Y, (context.resources.displayMetrics.heightPixels * 0.45).toInt())
         title = "MApp – ícone"
     }
+
+    /** Faíscas em volta do botão quando a corrida começa (janela própria, só durante o efeito). */
+    private val sparks = SparkOverlay(host)
 
     // ------------------------------------------------------------------ textos do dia (em volta do "M")
 
@@ -301,6 +306,23 @@ class QuickBubbleView(
             playGoal(sound)
         }.apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
     }
+    /** Força do efeito que sai do botão quando a corrida começa. */
+    private val sparkChips = SparkLevel.entries.associateWith { level ->
+        button(level.label) {
+            commitStyle(style.copy(sparkLevel = level))
+            celebrateRideStart()
+        }.apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
+    }
+
+    /** Som do aviso de corrida iniciada; tocar escolhe e já toca com o efeito, para ver e ouvir. */
+    private val rideChips = RideSound.entries.associateWith { sound ->
+        button(sound.label) {
+            commitStyle(style.copy(rideSound = sound))
+            playRide(sound)
+            celebrateRideStart()
+        }.apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
+    }
+
     private val resetButton = button("Restaurar padrão") { onResetTapped() }
 
     private val previewRow = LinearLayout(context).apply {
@@ -329,6 +351,37 @@ class QuickBubbleView(
             }, fullWidth(6))
         }
         addView(button("▶ Testar som") { playGoal(style.goalSound) }, fullWidth(6))
+    }
+
+    private val rideBox = section("AO INICIAR A CORRIDA").apply {
+        addView(text(11f, color = SECONDARY).apply {
+            text = "Quando a corrida começa (indo buscar o passageiro): faíscas saindo do botão e um aviso sonoro."
+        }, fullWidth(2))
+        addView(text(12f, color = WHITE).apply { text = "Efeito" }, fullWidth(8))
+        SparkLevel.entries.chunked(2).forEach { row ->
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                row.forEachIndexed { i, level ->
+                    addView(
+                        sparkChips.getValue(level),
+                        LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = dp(4) },
+                    )
+                }
+            }, fullWidth(4))
+        }
+        addView(text(12f, color = WHITE).apply { text = "Som" }, fullWidth(10))
+        RideSound.entries.chunked(3).forEach { row ->
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                row.forEachIndexed { i, sound ->
+                    addView(
+                        rideChips.getValue(sound),
+                        LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = dp(4) },
+                    )
+                }
+            }, fullWidth(4))
+        }
+        addView(button("▶ Testar aviso") { playRide(style.rideSound); celebrateRideStart() }, fullWidth(6))
     }
 
     private val panel = LinearLayout(context).apply {
@@ -370,6 +423,7 @@ class QuickBubbleView(
             addView(spinLabel, fullWidth(10))
             addView(spinBar.view, fullWidth(2))
         }, fullWidth(8))
+        addView(rideBox, fullWidth(8))
         addView(soundBox, fullWidth(8))
         addView(row(resetButton, button("Fechar") { closePanel() }, labelWeight = false), fullWidth(8))
     }
@@ -493,6 +547,15 @@ class QuickBubbleView(
 
     private var rideOpen = false
 
+    /**
+     * Corrida começando (indo buscar o passageiro): faíscas saindo do botão, na força escolhida nos
+     * ajustes ([BubbleStyle.sparkLevel]; desligado não faz nada). O som é tocado por quem chama.
+     */
+    fun celebrateRideStart() {
+        if (!bubbleAttached) return
+        sparks.burst(style, bubbleParams.x + sizePx / 2, bubbleParams.y + sizePx / 2, sizePx)
+    }
+
     /** Corridas mudaram (aceita, terminou, endereço localizado): atualiza o menu Atividades aberto. */
     fun refreshActivities() {
         if (!activitiesAttached) return
@@ -505,6 +568,7 @@ class QuickBubbleView(
         closePanel()
         closeActivities()
         activities.destroy()
+        sparks.destroy()
         soundPlayer?.stop()
         soundPlayer = null
         if (labelsAttached) {
@@ -819,10 +883,15 @@ class QuickBubbleView(
         textSizeLabel.text = "Tamanho do texto: " + BubbleSize.label(s.textSize)
         pinSizeLabel.text = "Tamanho do pin de chegada: " + BubbleSize.label(s.pinSize)
         arrowSizeLabel.text = "Tamanho da seta: " + BubbleSize.label(s.arrowSize)
-        soundChips.forEach { (sound, chip) ->
-            (chip.background as? GradientDrawable)?.setColor(if (sound == s.goalSound) SELECTED_BG else BUTTON_BG)
-            chip.setTextColor(if (sound == s.goalSound) SELECTED_TEXT else WHITE)
-        }
+        soundChips.forEach { (sound, chip) -> paintChip(chip, sound == s.goalSound) }
+        sparkChips.forEach { (level, chip) -> paintChip(chip, level == s.sparkLevel) }
+        rideChips.forEach { (sound, chip) -> paintChip(chip, sound == s.rideSound) }
+    }
+
+    /** Botão de escolha: o selecionado fica com o fundo verde-água do MApp. */
+    private fun paintChip(chip: TextView, selected: Boolean) {
+        (chip.background as? GradientDrawable)?.setColor(if (selected) SELECTED_BG else BUTTON_BG)
+        chip.setTextColor(if (selected) SELECTED_TEXT else WHITE)
     }
 
     /** Grava [s] (vale também para o ícone recriado e para o som da meta no copiloto). */
@@ -882,6 +951,11 @@ class QuickBubbleView(
         resetButton.text = "Restaurar padrão"
         commitStyle(BubbleStyle())
         bindBars()
+    }
+
+    private fun playRide(sound: RideSound) {
+        val player = soundPlayer ?: GreatSoundPlayer(context).also { soundPlayer = it }
+        player.playRide(sound)
     }
 
     private fun playGoal(sound: GoalSound) {

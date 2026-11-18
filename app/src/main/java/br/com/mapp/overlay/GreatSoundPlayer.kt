@@ -13,6 +13,8 @@ import android.util.Log
 import br.com.mapp.core.sound.CashSound
 import br.com.mapp.core.sound.GoalSound
 import br.com.mapp.core.sound.GreatSound
+import br.com.mapp.core.sound.PopSound
+import br.com.mapp.core.sound.RideSound
 import br.com.mapp.core.sound.SoundSynth
 
 /**
@@ -61,6 +63,20 @@ class GreatSoundPlayer(context: Context) {
             sound == GoalSound.CASH -> playCash()
             synth != null -> { stop(); playSynth(synth) }
             else -> { stop(); 0L }
+        }
+    }
+
+    /**
+     * Aviso de corrida iniciada (indo buscar o passageiro): bolha estourando ou o som escolhido nos
+     * ajustes do botão "M".
+     */
+    fun playRide(sound: RideSound = OverlayPrefs.bubbleStyle(app).rideSound): Long {
+        val synth = sound.great
+        stop()
+        return when {
+            sound == RideSound.POP -> playPcm(PopSound.render(), PopSound.DURATION_MS.toLong())
+            synth != null -> playSynth(synth)
+            else -> 0L
         }
     }
 
