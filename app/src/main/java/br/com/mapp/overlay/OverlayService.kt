@@ -36,9 +36,8 @@ import br.com.mapp.core.model.RawOffer
 import br.com.mapp.core.model.TripEvent
 import br.com.mapp.core.model.TripStage
 import br.com.mapp.core.shift.AutoShift
+import br.com.mapp.core.shift.AutoShiftAction
 import br.com.mapp.core.shift.RideStartCue
-import br.com.mapp.core.shift.AutoShift
-import br.com.mapp.core.shift.RideStartCueAction
 import br.com.mapp.core.shift.TripMatcher
 import br.com.mapp.core.model.Zone
 import br.com.mapp.core.model.ZoneHit
