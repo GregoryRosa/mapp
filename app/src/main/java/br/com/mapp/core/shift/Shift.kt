@@ -64,6 +64,11 @@ data class Shift(
     val trips: List<ShiftTrip> = emptyList(),
     /** Custo/km do veículo no momento em que a jornada foi encerrada (null = usar o atual). */
     val costPerKm: Double? = null,
+    /**
+     * Divisão do [costPerKm] por item de Custos fixos (combustível, manutenção...) gravada ao encerrar.
+     * null = jornada encerrada antes de o MApp guardar a divisão.
+     */
+    val costParts: List<CostPart>? = null,
     /** Quando foi encerrada (null = aberta, ou gravada por versão antiga). */
     val endedAt: Long? = null,
 ) {
@@ -294,10 +299,22 @@ object ShiftMath {
 
     /**
      * Custos do veículo mudaram: as jornadas que começaram hoje (já encerradas, com o custo/km
-     * guardado) passam a usar [costPerKm]. Dias anteriores ficam com o custo/km daquele dia.
+     * guardado) passam a usar [costPerKm] e a divisão [parts]. Dias anteriores ficam com o custo/km
+     * daquele dia.
      */
-    fun withCostToday(list: List<Shift>, costPerKm: Double, now: Long, zone: ZoneId = ZoneId.systemDefault()): List<Shift> =
-        list.map { if (it.costPerKm != null && sameDay(it.startedAt, now, zone)) it.copy(costPerKm = costPerKm) else it }
+    fun withCostToday(
+        list: List<Shift>,
+        costPerKm: Double,
+        now: Long,
+        zone: ZoneId = ZoneId.systemDefault(),
+        parts: List<CostPart>? = null,
+    ): List<Shift> = list.map {
+        if (it.costPerKm != null && sameDay(it.startedAt, now, zone)) {
+            it.copy(costPerKm = costPerKm, costParts = parts ?: it.costParts)
+        } else {
+            it
+        }
+    }
 
     fun sameDay(a: Long, b: Long, zone: ZoneId): Boolean =
         Instant.ofEpochMilli(a).atZone(zone).toLocalDate() == Instant.ofEpochMilli(b).atZone(zone).toLocalDate()
@@ -353,6 +370,15 @@ data class PeriodTotals(
     val avgTripKm: Double? = null,
     val categories: List<CategoryShare> = emptyList(),
     val shifts: Int = 0,
+    /**
+     * [carCost] dividido pelos itens de Custos fixos (combustível, manutenção, depreciação, extras),
+     * na ordem da tela. Vazio quando o [PeriodMath.totals] não recebeu os itens.
+     */
+    val carCostItems: List<CostAmount> = emptyList(),
+    /** [expenses] por categoria do lançamento. */
+    val expenseItems: List<CostAmount> = emptyList(),
+    /** Alguma jornada antiga (sem a divisão gravada) foi dividida pelos Custos fixos de hoje. */
+    val splitEstimated: Boolean = false,
 ) {
     /** Valor bruto: tudo o que entrou, sem tirar custos. */
     val gross: Double get() = ridesGross + manualIncome
@@ -383,6 +409,8 @@ object PeriodMath {
      * - lançamentos manuais: ganho soma no bruto (km informado soma nos km e no custo do carro), gasto
      *   soma nos custos.
      * [current] = jornada aberta (vale até [now]); [history] = encerradas.
+     * [parts] = itens do custo/km de agora ([CostSplit.parts]): dividem o custo do carro item a item
+     * ([PeriodTotals.carCostItems]). Jornada encerrada usa a divisão que gravou; sem ela, a de agora.
      */
     fun totals(
         from: Long,
@@ -393,11 +421,13 @@ object PeriodMath {
         entries: List<FinanceEntry>,
         costPerKm: Double,
         now: Long,
+        parts: List<CostPart> = emptyList(),
     ): PeriodTotals {
         val spans = listOfNotNull(current).map { it to max(now, it.startedAt) } +
             history.map { it to (it.endedAt ?: (it.startedAt + it.activeMs)) }
         val inPeriod = spans.map { it.first }.filter { it.startedAt in from..to }
-        val summaries = inPeriod.map { ShiftMath.summary(it, costPerKm, now) }
+        val pairs = inPeriod.map { it to ShiftMath.summary(it, costPerKm, now) }
+        val summaries = pairs.map { it.second }
 
         val loose = offers.filter { r ->
             val raw = r.evaluated.raw
@@ -416,6 +446,22 @@ object PeriodMath {
         val rides = inPeriod.flatMap { s -> s.trips.filter { it.finished } } +
             loose.map { ShiftTrip.from(it.evaluated.raw, it.evaluated.raw.capturedAt) }
         val tripKms = rides.mapNotNull { it.tripKm }
+        val expenseList = inRange.filter { it.kind == EntryKind.EXPENSE }
+
+        // Custo do carro item a item: cada jornada pela divisão que gravou ao encerrar; jornada antiga
+        // (sem divisão) e o que rodou fora de jornada, pelos Custos fixos de agora.
+        val nowPerKm = parts.sumOf { it.perKm }
+        var estimated = false
+        val carItems = if (parts.isEmpty()) emptyList() else {
+            val items = pairs.flatMap { (s, sum) ->
+                val stored = s.costParts
+                if (stored == null && s.costPerKm != null && sum.cost > 0 && abs(s.costPerKm - nowPerKm) > 0.0005) {
+                    estimated = true
+                }
+                CostSplit.split(sum.cost, stored ?: parts)
+            } + CostSplit.split((looseKm + manualKm) * costPerKm, parts)
+            CostSplit.merge(items)
+        }
         return PeriodTotals(
             rides = rides.size,
             ridesGross = rides.sumOf { it.price },
@@ -425,10 +471,14 @@ object PeriodMath {
             kmWithTrip = tripKms.sum(),
             hours = summaries.sumOf { it.hours } + looseHours,
             carCost = summaries.sumOf { it.cost } + (looseKm + manualKm) * costPerKm,
-            expenses = inRange.filter { it.kind == EntryKind.EXPENSE }.sumOf { it.amount },
+            expenses = expenseList.sumOf { it.amount },
             avgTripKm = if (tripKms.isNotEmpty()) tripKms.average() else null,
             categories = ShiftMath.categories(rides),
             shifts = inPeriod.size,
+            carCostItems = carItems,
+            expenseItems = expenseList.groupBy { it.category.trim().ifEmpty { "Outros" } }
+                .map { (category, list) -> CostAmount(category, list.sumOf { it.amount }) },
+            splitEstimated = estimated,
         )
     }
 
@@ -477,8 +527,10 @@ object ShiftCodec {
 
     fun encode(s: Shift): String = buildString {
         append(
-            listOf("v1", s.startedAt, s.activeMs, s.resumedAt ?: "", s.gpsKm, s.costPerKm ?: "", s.endedAt ?: "")
-                .joinToString(SEP),
+            listOf(
+                "v1", s.startedAt, s.activeMs, s.resumedAt ?: "", s.gpsKm, s.costPerKm ?: "", s.endedAt ?: "",
+                CostSplit.encode(s.costParts),
+            ).joinToString(SEP),
         )
         s.trips.forEach { t ->
             append('\n')
@@ -504,6 +556,7 @@ object ShiftCodec {
                 gpsKm = h[4].toDouble(),
                 costPerKm = h.getOrNull(5)?.toDoubleOrNull(),
                 endedAt = h.getOrNull(6)?.toLongOrNull(),
+                costParts = CostSplit.decode(h.getOrNull(7)),
                 trips = rows.drop(1).filter { it.isNotBlank() }.map { row ->
                     val c = row.split(SEP)
                     ShiftTrip(

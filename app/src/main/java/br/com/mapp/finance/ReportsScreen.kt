@@ -23,11 +23,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.com.mapp.MappApp
 import br.com.mapp.core.model.Signal
+import br.com.mapp.core.shift.PeriodTotals
+import br.com.mapp.core.shift.ShiftMath
+import br.com.mapp.ui.BarSection
+import br.com.mapp.ui.Part
+import br.com.mapp.ui.WITHOUT_TRIP
+import br.com.mapp.ui.WITH_TRIP
+import br.com.mapp.ui.categoryColors
 
 private enum class ReportRange(val label: String) {
     LAST_7("7 dias"),
@@ -63,6 +72,13 @@ internal fun ReportsTab() {
     val byHour = remember(all) { ReportMath.incomeByHour(all, bucketHours = HOUR_BAND) }
     val offerSummary = remember(offers) { ReportMath.summarizeOffers(offers) }
     val bestHours = remember(offers) { ReportMath.bestHours(offers, top = 5) }
+
+    // Semanas da Uber já fechadas (segunda 4h → segunda 4h), da mais recente para trás.
+    val now = rememberNow()
+    val week = ReportMath.uberWeek(now)
+    val weekPeriods = remember(week) { ReportMath.closedUberWeeks(CLOSED_WEEKS, week.from + 1) }
+    val weekTotals = rememberPeriodsTotals(weekPeriods, now)
+    val closedWeeks = weekPeriods.zip(weekTotals).filter { !it.second.isEmpty }
 
     Column(
         Modifier
@@ -155,6 +171,71 @@ internal fun ReportsTab() {
                         BarRow(signalLabel(s), n.toDouble(), max, n.toString(), color = signalColor(s))
                     }
                 }
+            }
+        }
+
+        SectionTitle("Semanas fechadas")
+        Text(
+            "Segunda 4h até segunda 4h (fechamento da Uber) · toque para abrir",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (closedWeeks.isEmpty()) {
+            Text("Nenhuma semana fechada com corridas ainda.", style = MaterialTheme.typography.bodySmall)
+        }
+        closedWeeks.forEach { (p, t) -> key(p.from) { ClosedWeekCard(p, t) } }
+    }
+}
+
+/** Quantas semanas fechadas aparecem no fim de Relatórios (~6 meses). */
+private const val CLOSED_WEEKS = 26
+
+/**
+ * Semana da Uber fechada: card menor (datas, ganho, corridas, tempo, km, lucro); toque abre a mesma
+ * grade das jornadas, com as barras de km com/sem passageiro e dos tipos de corrida.
+ */
+@Composable
+private fun ClosedWeekCard(p: Period, t: PeriodTotals) {
+    ClosedPeriodCard(
+        key = p.from,
+        title = "${Format.day(p.from)} a ${Format.day(p.to)}",
+        value = Format.brl(t.gross),
+        summary = "${t.rides} corrida${if (t.rides == 1) "" else "s"} · ${ShiftMath.duration(t.hours)} · " +
+            "${Format.km(t.km)} · lucro ${Format.brl(t.net)}",
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            StatRow(
+                Triple("Ganho", Format.brl(t.gross), Color.Unspecified),
+                Triple("Custo", Format.brl(t.cost), RedSignal),
+                Triple("Lucro", Format.brl(t.net), profitColor(t.net)),
+            )
+            StatRow(
+                Triple("Tempo", ShiftMath.duration(t.hours), Color.Unspecified),
+                Triple("Corridas", t.rides.toString(), Color.Unspecified),
+                Triple("Km rodados", Format.km(t.km), Color.Unspecified),
+            )
+            StatRow(
+                Triple("R$/km", t.perKm?.let { ShiftMath.num(it, 2) } ?: Format.NONE, Color.Unspecified),
+                Triple("R$/h", t.perHour?.let { ShiftMath.num(it, 2) } ?: Format.NONE, Color.Unspecified),
+                Triple("Média/corrida", t.avgTripKm?.let { Format.km(it) } ?: Format.NONE, Color.Unspecified),
+            )
+            if (t.km > 0 && t.kmWithTrip > 0) {
+                val pct = (t.kmWithTrip.coerceAtMost(t.km) * 100 / t.km).toInt()
+                BarSection(
+                    title = "Km com e sem passageiro",
+                    parts = listOf(
+                        Part("Com passageiro ${Format.km(t.kmWithTrip)} ($pct%)", t.kmWithTrip, WITH_TRIP),
+                        Part("Sem ${Format.km(t.kmWithoutTrip)}", t.kmWithoutTrip, WITHOUT_TRIP),
+                    ),
+                )
+            }
+            if (t.categories.isNotEmpty()) {
+                val colors = categoryColors(t.categories.map { it.label })
+                BarSection(
+                    title = "Tipos de corrida",
+                    parts = t.categories.map { c ->
+                        Part("${c.label} ${ShiftMath.num(c.percent, 0)}% (${c.count})", c.count.toDouble(), colors.getValue(c.label))
+                    },
+                )
             }
         }
     }

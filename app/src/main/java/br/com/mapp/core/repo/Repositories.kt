@@ -43,6 +43,8 @@ interface OfferHistoryRepository {
     suspend fun record(offer: EvaluatedOffer): Long
     fun recent(limit: Int = 200): Flow<List<OfferRecord>>
     fun between(fromMillis: Long, toMillis: Long): Flow<List<OfferRecord>>
+    /** Só as ofertas marcadas como aceitas (meses e semanas fechados: não carrega todas as vistas). */
+    fun acceptedBetween(fromMillis: Long, toMillis: Long): Flow<List<OfferRecord>>
     /**
      * Marca a oferta (identificada por raw.capturedAt + preço) como aceita ou não (null = sem informação).
      * Se ela ainda não foi gravada, a marca vale quando [record] for chamado.

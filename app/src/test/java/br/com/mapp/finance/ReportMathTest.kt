@@ -243,4 +243,38 @@ class ReportMathTest {
         assertEquals(d, ReportMath.day(java.time.LocalDate.of(2026, 11, 12), zone))
         assertEquals(ReportMath.today(t(12, 1), zone), d)
     }
+
+    @Test fun semanas_da_uber_fechadas() {
+        // Quarta 18/11: semana atual começa seg 16/11 4h; a última fechada é 09/11 4h → 16/11 3:59:59.
+        val weeks = ReportMath.closedUberWeeks(3, t(18, 10), zone)
+        assertEquals(listOf(t(9, 4), t(2, 4), t(26, 4, month = 10)), weeks.map { it.from })
+        assertEquals(t(16, 4) - 1, weeks[0].to)
+        assertEquals(weeks[1].to + 1, weeks[0].from)
+        // Segunda antes das 4h: a semana de 09/11 ainda está aberta.
+        assertEquals(t(2, 4), ReportMath.closedUberWeeks(1, t(16, 3), zone).single().from)
+    }
+
+    @Test fun meses_fechados_do_dia_1_ao_ultimo_dia() {
+        val months = ReportMath.closedMonths(3, t(18, 10), zone)
+        assertEquals(t(1, 0, month = 10), months[0].from)
+        assertEquals(t(1, 0, month = 11) - 1, months[0].to)
+        assertEquals(t(1, 0, month = 9), months[1].from)
+        assertEquals(t(1, 0, month = 10) - 1, months[1].to)
+        assertEquals(t(1, 0, month = 8), months[2].from)
+        assertEquals(ReportMath.currentMonth(t(18, 10), zone), ReportMath.month(java.time.LocalDate.of(2026, 11, 30), zone))
+        assertEquals("Outubro 2026", ReportMath.monthTitle(months[0].from, zone))
+        assertEquals("novembro", ReportMath.monthName(t(18, 10), zone))
+        // Janeiro: o fechado é dezembro do ano anterior.
+        val jan = LocalDateTime.of(2027, 1, 5, 12, 0).atZone(zone).toInstant().toEpochMilli()
+        assertEquals("Dezembro 2026", ReportMath.monthTitle(ReportMath.closedMonths(1, jan, zone).single().from, zone))
+    }
+
+    @Test fun porcentagem_ao_lado_da_descricao() {
+        assertEquals("Combustível (23%)", Format.withPercent("Combustível", 23.4))
+        assertEquals("Pneus (2,1%)", Format.withPercent("Pneus", 2.06))
+        assertEquals("10%", Format.percent(9.96))
+        assertEquals("-12%", Format.percent(-12.3))
+        assertEquals("Lavagem", Format.withPercent("Lavagem", null))
+        assertEquals(Format.NONE, Format.percent(null))
+    }
 }

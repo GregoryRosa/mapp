@@ -309,11 +309,11 @@ private fun Stat(label: String, value: String, modifier: Modifier = Modifier, co
     }
 }
 
-private class Part(val label: String, val weight: Double, val color: Color)
+internal class Part(val label: String, val weight: Double, val color: Color)
 
 /** Barra dividida pelas partes (largura proporcional) com legenda colorida embaixo. */
 @Composable
-private fun BarSection(title: String, parts: List<Part>) {
+internal fun BarSection(title: String, parts: List<Part>) {
     val shown = parts.filter { it.weight > 0 }
     if (shown.isEmpty()) return
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -338,8 +338,8 @@ private fun BarSection(title: String, parts: List<Part>) {
     }
 }
 
-private val WITH_TRIP = Color(0xFF4DD0B8)
-private val WITHOUT_TRIP = Color(0xFF546E7A)
+internal val WITH_TRIP = Color(0xFF4DD0B8)
+internal val WITHOUT_TRIP = Color(0xFF546E7A)
 
 /** Cor fixa por tipo de corrida (a mesma em todas as jornadas); tipos novos pegam uma cor livre. */
 private val CATEGORY_COLORS = mapOf(
@@ -360,7 +360,7 @@ private val EXTRA_COLORS = listOf(
     Color(0xFFB39DDB), Color(0xFFF06292), Color(0xFF4DD0E1), Color(0xFF7986CB), Color(0xFF81C784), Color(0xFFFF8A65),
 )
 
-private fun categoryColors(labels: List<String>): Map<String, Color> {
+internal fun categoryColors(labels: List<String>): Map<String, Color> {
     val out = LinkedHashMap<String, Color>()
     labels.forEach { l -> CATEGORY_COLORS[l]?.let { out[l] = it } }
     var next = 0
