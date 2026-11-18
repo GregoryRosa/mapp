@@ -83,6 +83,8 @@ class OfferAccessibilityService : AccessibilityService() {
     private var ocrStartedAt = 0L
     private var ocrDueAt = 0L
     private var lastCycleAt = 0L
+    /** Atraso do Waze ([burst]): até quando a imagem relê a tela no intervalo mais curto. */
+    private var burstUntil = 0L
     /** Pacote de cada janela (usado nas duas threads). */
     private val windowPackages = ConcurrentHashMap<Int, String>()
 
@@ -272,6 +274,20 @@ class OfferAccessibilityService : AccessibilityService() {
 
     // ------------------------------------------------------------------ fonte 2: imagem
 
+    private val bursting: Boolean get() = SystemClock.elapsedRealtime() < burstUntil
+
+    /**
+     * Atraso do Waze: a Uber pediu o Waze e o MApp está segurando por [ms]. Lê a tela agora e depois a
+     * cada [OCR_FAST_INTERVAL_MS] — é a janela para pegar "Encontro com <novo>" antes de o Waze cobrir.
+     */
+    private fun startBurst(ms: Long) {
+        safely {
+            burstUntil = maxOf(burstUntil, SystemClock.elapsedRealtime() + ms)
+            scanPlatform?.let { requestScan(it, urgent = true) }
+            requestOcrSoon(screenChanged = true, delayMs = 0L)
+        }
+    }
+
     private fun scheduleTick(delayMs: Long) {
         handler.removeCallbacks(ocrTick)
         val delay = delayMs.coerceAtLeast(50L)
@@ -310,7 +326,8 @@ class OfferAccessibilityService : AccessibilityService() {
         if (tracker.treeHasIt) return OCR_POLL_MS
         val sinceLast = now - lastCycleAt
         if (sinceLast < OCR_FAST_INTERVAL_MS) return OCR_FAST_INTERVAL_MS - sinceLast
-        return startCycle(engine, now)
+        val next = startCycle(engine, now)
+        return if (bursting) minOf(next, OCR_FAST_INTERVAL_MS) else next
     }
 
     /** Captura a janela do app de corrida e lê o texto da imagem. Devolve o tempo até o próximo ciclo. */
@@ -394,6 +411,8 @@ class OfferAccessibilityService : AccessibilityService() {
                         return@post
                     }
                     handler.post {
+                        // Depois do onStage acima (mesma fila): quem espera o Waze vê a etapa antes da contagem.
+                        _imageReads.value = _imageReads.value + 1
                         safely {
                             tracker.onImage(mode, offer, SystemClock.elapsedRealtime()) { shown ->
                                 // Preço coberto por outra janela, mas os trechos da oferta continuam na tela?
@@ -444,8 +463,11 @@ class OfferAccessibilityService : AccessibilityService() {
             }
             summary += "$who ${bounds.width()}x${bounds.height()} em ${bounds.left},${bounds.top} " +
                 "(camada ${window.layer}, tipo ${window.type})"
-            // Cartão e ícone do MApp são janelas da Acessibilidade (às vezes sem conteúdo legível).
-            if (pkg == packageName || window.type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) own += bounds
+            // Cartão e ícone do MApp são janelas da Acessibilidade (às vezes sem conteúdo legível). Tela do
+            // MApp (tipo aplicativo) não entra: a do atraso do Waze é invisível e cobre a tela inteira.
+            val ownOverlay = window.type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY ||
+                (pkg == packageName && window.type != AccessibilityWindowInfo.TYPE_APPLICATION)
+            if (ownOverlay) own += bounds
             if (platform != null && bounds.width().toLong() * bounds.height() >= minArea) {
                 val previous = best
                 if (previous == null || window.layer > previous.layer) {
@@ -564,6 +586,20 @@ class OfferAccessibilityService : AccessibilityService() {
          * sobreposições comuns (TYPE_APPLICATION_OVERLAY) enquanto a solicitação está na tela.
          */
         val windowContext: StateFlow<Context?> = _windowContext.asStateFlow()
+
+        private val _imageReads = MutableStateFlow(0)
+
+        /**
+         * Leituras da tela de um app de corrida pela imagem (contador que só sobe). O atraso do Waze
+         * (overlay/NavLinkActivity) libera o Waze depois de algumas sem novidade.
+         */
+        val imageReads: StateFlow<Int> = _imageReads.asStateFlow()
+
+        /** Atraso do Waze: lê a tela em rajada por [ms]. Sem leitor conectado, não faz nada. */
+        fun burst(ms: Long) {
+            val service = _windowContext.value as? OfferAccessibilityService ?: return
+            service.handler.post { service.startBurst(ms) }
+        }
         private val PT_BR: Locale = Locale.forLanguageTag("pt-BR")
 
         private const val MAX_DEPTH = 60
