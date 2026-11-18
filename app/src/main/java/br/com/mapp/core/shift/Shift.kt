@@ -4,6 +4,7 @@ import br.com.mapp.core.geo.Geo
 import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.RawOffer
+import br.com.mapp.core.model.TripStage
 import br.com.mapp.core.repo.EntryKind
 import br.com.mapp.core.repo.FinanceEntry
 import br.com.mapp.core.repo.OfferRecord
@@ -143,6 +144,35 @@ data class Shift(
         /** Corrida contada até 1 min antes / 20 min depois da oferta é a mesma corrida. */
         const val MATCH_BEFORE_MS = 60_000L
         const val MATCH_AFTER_MS = 20 * 60_000L
+    }
+}
+
+/** O que a jornada automática faz quando uma corrida começa. */
+enum class AutoShiftAction { NONE, START, RESUME }
+
+/**
+ * Jornada automática: quando a corrida começa (indo buscar o passageiro ou já a bordo), a jornada
+ * acompanha sozinha — abre uma nova se não havia nenhuma e continua a que ficou pausada, para a
+ * corrida e os km entrarem nos números do dia. Encerrar continua sendo só do motorista.
+ */
+object AutoShift {
+    /**
+     * [rideStarted] = o acompanhamento reconheceu uma corrida começando (oferta contada, passageiro
+     * novo na tela ou embarque). Tela de fim e tela inicial nunca abrem jornada.
+     */
+    fun action(
+        shift: Shift?,
+        stage: TripStage,
+        rideStarted: Boolean,
+        enabled: Boolean = true,
+    ): AutoShiftAction {
+        if (!enabled || !rideStarted) return AutoShiftAction.NONE
+        if (stage != TripStage.ACCEPTED && stage != TripStage.ON_TRIP) return AutoShiftAction.NONE
+        return when {
+            shift == null -> AutoShiftAction.START
+            shift.paused -> AutoShiftAction.RESUME
+            else -> AutoShiftAction.NONE
+        }
     }
 }
 

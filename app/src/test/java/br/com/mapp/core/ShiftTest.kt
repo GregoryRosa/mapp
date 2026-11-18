@@ -10,6 +10,9 @@ import br.com.mapp.core.model.Signal
 import br.com.mapp.core.repo.EntryKind
 import br.com.mapp.core.repo.FinanceEntry
 import br.com.mapp.core.repo.OfferRecord
+import br.com.mapp.core.model.TripStage
+import br.com.mapp.core.shift.AutoShift
+import br.com.mapp.core.shift.AutoShiftAction
 import br.com.mapp.core.shift.Odometer
 import br.com.mapp.core.shift.PeriodMath
 import br.com.mapp.core.shift.Shift
@@ -356,5 +359,41 @@ class ShiftTest {
             pendingTrips = pending,
         )
         assertEquals(3, ShiftMath.combine(listOf(s(1), s(2))).pendingTrips)
+    }
+
+    @Test fun jornada_inicia_sozinha_quando_a_corrida_comeca() {
+        val h = 3_600_000L
+        // Indo buscar o passageiro, sem jornada aberta: abre uma.
+        assertEquals(
+            AutoShiftAction.START,
+            AutoShift.action(null, TripStage.ACCEPTED, rideStarted = true),
+        )
+        // Jornada pausada: continua de onde parou.
+        val pausada = Shift(startedAt = 0, activeMs = h, resumedAt = null)
+        assertEquals(
+            AutoShiftAction.RESUME,
+            AutoShift.action(pausada, TripStage.ACCEPTED, rideStarted = true),
+        )
+        // Embarque (passageiro a bordo) também vale.
+        assertEquals(
+            AutoShiftAction.RESUME,
+            AutoShift.action(pausada, TripStage.ON_TRIP, rideStarted = true),
+        )
+        // Jornada já rodando: nada muda.
+        assertEquals(
+            AutoShiftAction.NONE,
+            AutoShift.action(Shift(startedAt = 0), TripStage.ACCEPTED, rideStarted = true),
+        )
+        // Tela de fim e tela inicial nunca abrem jornada.
+        assertEquals(AutoShiftAction.NONE, AutoShift.action(null, TripStage.FINISHED, rideStarted = true))
+        assertEquals(AutoShiftAction.NONE, AutoShift.action(null, TripStage.IDLE, rideStarted = true))
+        // Tela de corrida sem corrida nova (etapa repetida) não mexe na jornada.
+        assertEquals(AutoShiftAction.NONE, AutoShift.action(null, TripStage.ACCEPTED, rideStarted = false))
+        assertEquals(
+            AutoShiftAction.NONE,
+            AutoShift.action(null, TripStage.ACCEPTED, rideStarted = true, enabled = false),
+        )
+        // A jornada retomada mantém o tempo já trabalhado.
+        assertEquals(h, pausada.resume(2 * h).elapsedMs(2 * h))
     }
 }
