@@ -10,6 +10,8 @@ import br.com.mapp.core.card.CardLayout
 import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.StreetViewBudget
 import br.com.mapp.core.geo.SatelliteZoom
+import br.com.mapp.core.geo.StreetFraming
+import br.com.mapp.core.geo.StreetTilt
 import br.com.mapp.core.geo.StreetZoom
 import br.com.mapp.core.nav.NavApp
 import br.com.mapp.core.nav.NavHold
@@ -41,6 +43,8 @@ object OverlayPrefs {
     const val KEY_SATELLITE_BUDGET = "satellite_budget"
     const val KEY_PHOTO_VIEW = "photo_view"
     const val KEY_STREET_ZOOM = "street_zoom"
+    const val KEY_STREET_FRAMING = "street_framing"
+    const val KEY_STREET_TILT = "street_tilt"
     const val KEY_SATELLITE_ZOOM = "satellite_zoom"
     const val KEY_TRIP_MEMORY = "trip_memory"
     const val KEY_NAV_HOLD_ON = "nav_hold_on"
@@ -205,6 +209,22 @@ object OverlayPrefs {
 
     fun setStreetZoom(context: Context, zoom: StreetZoom) {
         of(context).edit().putString(KEY_STREET_ZOOM, zoom.id).apply()
+    }
+
+    /** Enquadramento da foto da rua (padrão Rua: a câmera olha a via, não a fachada). */
+    fun streetFraming(context: Context): StreetFraming =
+        StreetFraming.fromId(of(context).getString(KEY_STREET_FRAMING, null))
+
+    fun setStreetFraming(context: Context, framing: StreetFraming) {
+        of(context).edit().putString(KEY_STREET_FRAMING, framing.id).apply()
+    }
+
+    /** Inclinação da câmera para baixo, em graus, nos enquadramentos Rua e Mista. */
+    fun streetTilt(context: Context): Int =
+        StreetTilt.snap(of(context).getInt(KEY_STREET_TILT, StreetTilt.DEFAULT))
+
+    fun setStreetTilt(context: Context, deg: Int) {
+        of(context).edit().putInt(KEY_STREET_TILT, StreetTilt.snap(deg)).apply()
     }
 
     /**

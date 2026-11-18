@@ -9,6 +9,7 @@ import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.SatelliteShot
 import br.com.mapp.core.geo.SatelliteView
 import br.com.mapp.core.geo.SatelliteZoom
+import br.com.mapp.core.geo.StreetFraming
 import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.geo.StreetViewBudget
 import br.com.mapp.core.geo.StreetZoom
@@ -53,8 +54,16 @@ object StreetViewPhotos {
 
     private val budgetLock = Any()
 
-    /** Foto da rua já na memória do ponto com o [zoom] escolhido (mudar o zoom busca de novo). */
-    fun cached(point: GeoPoint, zoom: StreetZoom): Result? = cache.get(StreetView.cacheKey(point, zoom))
+    /**
+     * Foto da rua já na memória do ponto com o [zoom], o [framing] e a inclinação [tilt] escolhidos
+     * (mudar qualquer um deles nos ajustes busca de novo).
+     */
+    fun cached(
+        point: GeoPoint,
+        zoom: StreetZoom,
+        framing: StreetFraming = StreetFraming.FACADE,
+        tilt: Int = 0,
+    ): Result? = cache.get(StreetView.cacheKey(point, zoom, framing, tilt))
 
     /**
      * Imagem já na memória do ponto [stop] no modo [view] (null = ainda não buscada). [shot] = tamanho
@@ -66,10 +75,12 @@ object StreetViewPhotos {
         shot: SatelliteShot = SatelliteShot.CARD,
         zoom: StreetZoom = StreetZoom.DEFAULT,
         satelliteZoom: SatelliteZoom = SatelliteZoom.DEFAULT,
+        framing: StreetFraming = StreetFraming.FACADE,
+        tilt: Int = 0,
     ): Result? {
         val point = stop.point ?: return null
         return when (view) {
-            PhotoView.STREET -> cached(point, zoom)
+            PhotoView.STREET -> cached(point, zoom, framing, tilt)
             PhotoView.SATELLITE -> cache.get(satelliteKey(stop, point, shot.zoomed(satelliteZoom)))
         }
     }
@@ -78,9 +89,15 @@ object StreetViewPhotos {
         val key = OverlayPrefs.streetViewKey(context)
             ?: return Result.Missing("Cole a chave do Google em Card", retry = true)
         val zoom = OverlayPrefs.streetZoom(context)
-        cached(point, zoom)?.let { return it }
-        val result = withContext(Dispatchers.IO) { fetch(context.applicationContext, point, key, zoom) }
-        if (!(result is Result.Missing && result.retry)) cache.put(StreetView.cacheKey(point, zoom), result)
+        val framing = OverlayPrefs.streetFraming(context)
+        val tilt = OverlayPrefs.streetTilt(context)
+        cached(point, zoom, framing, tilt)?.let { return it }
+        val result = withContext(Dispatchers.IO) {
+            fetch(context.applicationContext, point, key, zoom, framing, tilt)
+        }
+        if (!(result is Result.Missing && result.retry)) {
+            cache.put(StreetView.cacheKey(point, zoom, framing, tilt), result)
+        }
         return result
     }
 
@@ -153,7 +170,14 @@ object StreetViewPhotos {
         }
     }
 
-    private fun fetch(context: Context, point: GeoPoint, key: String, zoom: StreetZoom): Result {
+    private fun fetch(
+        context: Context,
+        point: GeoPoint,
+        key: String,
+        zoom: StreetZoom,
+        framing: StreetFraming,
+        tilt: Int,
+    ): Result {
         // 1) Metadados (grátis): há foto perto? Sem foto, nada é cobrado.
         val meta = try {
             val (code, body) = get(StreetView.metadataUrl(point, key))
@@ -187,7 +211,7 @@ object StreetViewPhotos {
             OverlayPrefs.setStreetViewBudget(context, budget.spend(month))
         }
         return try {
-            val (code, bytes) = get(StreetView.imageUrl(point, key, zoom))
+            val (code, bytes) = get(StreetView.imageUrl(point, key, zoom, framing, tilt, panoOf(meta)))
             if (code != 200) return Result.Missing("Sem foto da rua aqui")
             val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                 ?: return Result.Missing("Foto indisponível", retry = true)
@@ -195,6 +219,18 @@ object StreetViewPhotos {
         } catch (e: IOException) {
             Result.Missing("Sem internet", retry = true)
         }
+    }
+
+    /**
+     * De onde a foto foi tirada (`location` dos metadados): é o ponto da câmera, dentro da rua.
+     * O enquadramento Rua precisa dele para virar a câmera ao longo da via. null = não veio.
+     */
+    private fun panoOf(meta: JSONObject): GeoPoint? {
+        val loc = meta.optJSONObject("location") ?: return null
+        val lat = loc.optDouble("lat", Double.NaN)
+        val lon = loc.optDouble("lng", Double.NaN)
+        if (lat.isNaN() || lon.isNaN()) return null
+        return GeoPoint(lat, lon)
     }
 
     private fun get(url: String): Pair<Int, ByteArray> {

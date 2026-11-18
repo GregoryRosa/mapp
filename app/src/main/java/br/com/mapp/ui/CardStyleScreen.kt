@@ -42,6 +42,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
@@ -98,6 +99,8 @@ import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.StreetView
 import br.com.mapp.core.geo.StreetViewBudget
 import br.com.mapp.core.geo.SatelliteZoom
+import br.com.mapp.core.geo.StreetFraming
+import br.com.mapp.core.geo.StreetTilt
 import br.com.mapp.core.geo.StreetZoom
 import br.com.mapp.core.media.MediaBlock
 import br.com.mapp.core.media.MediaLayout
@@ -1080,6 +1083,8 @@ private fun StreetViewCard(view: PhotoView, onView: (PhotoView) -> Unit) {
     var showKey by remember { mutableStateOf(false) }
     var zoom by remember { mutableStateOf(OverlayPrefs.streetZoom(ctx)) }
     var satZoom by remember { mutableStateOf(OverlayPrefs.satelliteZoom(ctx)) }
+    var framing by remember { mutableStateOf(OverlayPrefs.streetFraming(ctx)) }
+    var tilt by remember { mutableStateOf(OverlayPrefs.streetTilt(ctx)) }
     val month = remember { StreetViewBudget.monthOf(System.currentTimeMillis()) }
     val used = remember { OverlayPrefs.streetViewBudget(ctx).usedIn(month) }
     val usedSatellite = remember { OverlayPrefs.satelliteBudget(ctx).usedIn(month) }
@@ -1137,6 +1142,35 @@ private fun StreetViewCard(view: PhotoView, onView: (PhotoView) -> Unit) {
                     "Trocar o zoom (rua ou satélite) busca as imagens de novo.",
                 style = MaterialTheme.typography.bodySmall,
             )
+            Text("Enquadramento da foto da rua", style = MaterialTheme.typography.labelMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                StreetFraming.entries.forEach { f ->
+                    FilterChip(
+                        selected = framing == f,
+                        onClick = { framing = f; OverlayPrefs.setStreetFraming(ctx, f) },
+                        label = { Text(f.label) },
+                    )
+                }
+            }
+            Text(framing.hint, style = MaterialTheme.typography.bodySmall)
+            if (framing != StreetFraming.FACADE) {
+                Text(
+                    "Inclinação da câmera: ${StreetTilt.label(tilt)}",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Slider(
+                    value = tilt.toFloat(),
+                    onValueChange = { tilt = StreetTilt.snap(it.toInt()) },
+                    onValueChangeFinished = { OverlayPrefs.setStreetTilt(ctx, tilt) },
+                    valueRange = StreetTilt.MIN.toFloat()..StreetTilt.MAX.toFloat(),
+                    steps = StreetTilt.SLIDER_STEPS,
+                )
+                Text(
+                    "Mais inclinação = mais chão na foto (reta = horizonte no meio; ${StreetTilt.MAX}° = " +
+                        "quase só o piso da rua). Trocar o enquadramento ou a inclinação busca as fotos de novo.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             Text(
                 if (key.isBlank()) {
                     "Cole a chave do Google Cloud. Ela fica só neste celular. Ative no mesmo projeto a " +
