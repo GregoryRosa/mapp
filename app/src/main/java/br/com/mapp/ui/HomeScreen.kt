@@ -16,6 +16,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -33,7 +34,10 @@ import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.Style
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Switch
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -56,6 +60,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
@@ -75,6 +80,10 @@ import br.com.mapp.finance.NetToggle
 import br.com.mapp.finance.ReportMath
 import br.com.mapp.finance.rememberNow
 import br.com.mapp.finance.rememberPeriodTotals
+import br.com.mapp.core.nav.NavHold
+import br.com.mapp.core.nav.NavLinkState
+import br.com.mapp.overlay.NavLinkActivity
+import br.com.mapp.overlay.OverlayPrefs
 import br.com.mapp.overlay.OverlayService
 import br.com.mapp.overlay.ShiftTracker
 import br.com.mapp.core.status.ReaderCheck
@@ -238,6 +247,8 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                 }
             }
 
+            WazeHoldCard(refresh)
+
             // Diagnóstico do leitor. O cartão da oferta da Uber só é lido pela IMAGEM da tela (OCR):
             // quando essa leitura falha, nada aparece e o resto do app parece normal (as telas de
             // corrida aceita/finalizada continuam vindo pelo texto). Estas linhas dizem em que passo
@@ -265,6 +276,81 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                 color = MappColors.TextDim,
                 modifier = Modifier.padding(horizontal = 4.dp),
             )
+        }
+    }
+}
+
+/**
+ * Atraso do Waze ([NavHold]): liga/desliga, espera máxima, situação no Android e botão Testar (faz o
+ * Android perguntar quem abre os links do Waze). [refresh] muda ao voltar das Configurações/do Waze.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WazeHoldCard(refresh: Int) {
+    val ctx = LocalContext.current
+    var on by remember { mutableStateOf(OverlayPrefs.isNavHoldOn(ctx)) }
+    var delay by remember { mutableLongStateOf(OverlayPrefs.navHoldMs(ctx)) }
+    val state = remember(on, refresh) {
+        NavLinkActivity.sync(ctx)
+        NavLinkActivity.state(ctx)
+    }
+    GlassCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("🧭 Segurar o Waze", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Para não perder a corrida aceita na fila",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MappColors.TextDim,
+                )
+            }
+            Switch(
+                checked = on,
+                onCheckedChange = {
+                    on = it
+                    OverlayPrefs.setNavHoldOn(ctx, it)
+                    NavLinkActivity.setEnabled(ctx, it)
+                },
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            NavHold.message(state, delay),
+            style = MaterialTheme.typography.bodySmall,
+            color = when (state) {
+                NavLinkState.READY -> MappColors.Profit
+                NavLinkState.ASK, NavLinkState.WAZE_DEFAULT -> MappColors.Warn
+                else -> MappColors.TextDim
+            },
+        )
+        if (on && state != NavLinkState.NO_WAZE) {
+            Spacer(Modifier.height(10.dp))
+            Text("Esperar no máximo", style = MaterialTheme.typography.labelMedium, color = MappColors.Text)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                NavHold.DELAYS_MS.forEach { ms ->
+                    FilterChip(
+                        selected = ms == delay,
+                        onClick = {
+                            delay = ms
+                            OverlayPrefs.setNavHoldMs(ctx, ms)
+                        },
+                        label = { Text(NavHold.label(ms)) },
+                    )
+                }
+            }
+            Text(
+                "Normalmente abre antes: assim que o MApp lê a tela da corrida. Só segura com o copiloto ligado; " +
+                    "cada vez fica no Registro (Jornadas → Registro) como \"🧭 Waze\".",
+                style = MaterialTheme.typography.bodySmall,
+                color = MappColors.TextDim,
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { NavLinkActivity.test(ctx) }) { Text("Testar") }
+                if (state == NavLinkState.WAZE_DEFAULT) {
+                    TextButton(onClick = { NavLinkActivity.openWazeSettings(ctx) }) { Text("Ajustar", color = MappColors.Teal) }
+                }
+            }
         }
     }
 }

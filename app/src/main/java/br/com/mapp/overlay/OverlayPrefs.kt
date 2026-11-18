@@ -11,6 +11,7 @@ import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.StreetViewBudget
 import br.com.mapp.core.geo.SatelliteZoom
 import br.com.mapp.core.geo.StreetZoom
+import br.com.mapp.core.nav.NavHold
 import br.com.mapp.core.notify.NoticeLayout
 import br.com.mapp.core.sound.GreatSound
 import br.com.mapp.core.sound.OfferSounds
@@ -41,9 +42,25 @@ object OverlayPrefs {
     const val KEY_STREET_ZOOM = "street_zoom"
     const val KEY_SATELLITE_ZOOM = "satellite_zoom"
     const val KEY_TRIP_MEMORY = "trip_memory"
+    const val KEY_NAV_HOLD_ON = "nav_hold_on"
+    const val KEY_NAV_HOLD_MS = "nav_hold_ms"
 
     fun of(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
+
+    /** Atraso do Waze (tela inicial → Segurar o Waze): padrão desligado. Ligar/desligar também liga o atalho (`NavLinkActivity.setEnabled`). */
+    fun isNavHoldOn(context: Context): Boolean = of(context).getBoolean(KEY_NAV_HOLD_ON, false)
+
+    fun setNavHoldOn(context: Context, on: Boolean) {
+        of(context).edit().putBoolean(KEY_NAV_HOLD_ON, on).apply()
+    }
+
+    /** Espera máxima do Waze, em ms (um dos [NavHold.DELAYS_MS]). */
+    fun navHoldMs(context: Context): Long = NavHold.validDelay(of(context).getLong(KEY_NAV_HOLD_MS, NavHold.DEFAULT_DELAY_MS))
+
+    fun setNavHoldMs(context: Context, ms: Long) {
+        of(context).edit().putLong(KEY_NAV_HOLD_MS, NavHold.validDelay(ms)).apply()
+    }
 
     /** Aviso por voz (padrão: ligado). */
     fun isVoiceEnabled(context: Context): Boolean = of(context).getBoolean(KEY_VOICE_ENABLED, true)
