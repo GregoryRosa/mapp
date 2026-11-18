@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -36,6 +37,7 @@ import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -73,6 +75,7 @@ import br.com.mapp.core.repo.EntryKind
 import br.com.mapp.core.repo.FinanceEntry
 import br.com.mapp.core.goal.WeekGoals
 import br.com.mapp.core.repo.Goals
+import br.com.mapp.core.shift.CostSplit
 import br.com.mapp.core.shift.PeriodTotals
 import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.ui.MappColors
@@ -165,6 +168,11 @@ private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
     val dayTotals = rememberPeriodTotals(day, now)
     val weekTotals = rememberPeriodTotals(week, now)
     val monthTotals = rememberPeriodTotals(month, now)
+    val monthCosts = remember(monthTotals) { CostSplit.breakdown(monthTotals) }
+    // Meses fechados (dia 1 ao último dia), do mais recente para trás; só os que tiveram movimento.
+    val closedPeriods = remember(month) { ReportMath.closedMonths(CLOSED_MONTHS, month.from + 1, zone) }
+    val closedTotals = rememberPeriodsTotals(closedPeriods, now)
+    val closed = closedPeriods.zip(closedTotals).filter { !it.second.isEmpty }
 
     var showPicker by remember { mutableStateOf(false) }
     var showEntryDialog by remember { mutableStateOf(false) }
@@ -205,12 +213,22 @@ private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
             }
             item {
                 PeriodCard(
-                    title = "Mês",
+                    title = "Mês · ${ReportMath.monthName(month.from, zone)}",
                     subtitle = null,
                     totals = monthTotals,
                     goal = ReportMath.goalProgress(monthTotals.gross, goals.monthly),
                     goalHint = true,
+                    footer = {
+                        if (!monthCosts.isEmpty) {
+                            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                            CostBreakdownBlock(monthCosts, monthTotals.km)
+                        }
+                    },
                 )
+            }
+            if (closed.isNotEmpty()) {
+                item { SectionTitle("Meses fechados") }
+                items(closed, key = { "mes-" + it.first.from }) { (p, t) -> ClosedMonthCard(p, t, zone) }
             }
             if (monthTotals.rides > 0) {
                 item {
@@ -279,6 +297,46 @@ private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
     }
 }
 
+/** Quantos meses fechados aparecem embaixo do Mês (o histórico de jornadas guarda até 400). */
+private const val CLOSED_MONTHS = 12
+
+/**
+ * Mês fechado: card menor (mês, bruto, corridas, km e líquido); toque abre os números e cada custo
+ * com o valor tirado do bruto — "Combustível (23%)".
+ */
+@Composable
+private fun ClosedMonthCard(p: Period, t: PeriodTotals, zone: ZoneId) {
+    val costs = remember(t) { CostSplit.breakdown(t) }
+    val netPct = CostSplit.percentOf(t.net, t.gross)
+    ClosedPeriodCard(
+        key = p.from,
+        title = ReportMath.monthTitle(p.from, zone),
+        value = Format.brl(t.gross),
+        summary = "${Format.day(p.from, zone)} a ${Format.day(p.to, zone)} · ${t.rides} corrida${if (t.rides == 1) "" else "s"} · " +
+            "${Format.km(t.km)} · líquido ${Format.withPercent(Format.brl(t.net), netPct)}",
+    ) {
+        StatRow(
+            Triple("Bruto", Format.brl(t.gross), Color.Unspecified),
+            Triple("Custos", Format.brl(t.cost), RedSignal),
+            Triple("Líquido", Format.brl(t.net), profitColor(t.net)),
+        )
+        StatRow(
+            Triple("Corridas", t.rides.toString(), Color.Unspecified),
+            Triple("Tempo", ShiftMath.duration(t.hours), Color.Unspecified),
+            Triple("Km rodados", Format.km(t.km), Color.Unspecified),
+        )
+        if (t.km > 0) {
+            Text(
+                "${Format.perKm(t.perKm)} · ${Format.perHour(t.perHour)} bruto · " +
+                    "${Format.perKm(t.netPerKm)} · ${Format.perHour(t.netPerHour)} líquido",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        CostBreakdownBlock(costs, t.km)
+    }
+}
+
 /** "Hoje", "Ontem, 12/11" ou "Qua, 11/11". */
 private fun dayTitle(date: LocalDate, today: LocalDate): String {
     val dm = "%02d/%02d".format(date.dayOfMonth, date.monthValue)
@@ -302,6 +360,7 @@ private fun PeriodCard(
     goal: GoalProgress?,
     goalHint: Boolean,
     titleActions: @Composable RowScope.() -> Unit = {},
+    footer: @Composable () -> Unit = {},
 ) {
     var net by rememberSaveable { mutableStateOf(false) }
     val t = totals
@@ -372,6 +431,7 @@ private fun PeriodCard(
             } else if (goalHint) {
                 Text("Sem meta definida (toque na bandeira).", style = MaterialTheme.typography.bodySmall)
             }
+            footer()
         }
     }
 }

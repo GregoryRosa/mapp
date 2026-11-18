@@ -109,6 +109,48 @@ object ReportMath {
         return Period(start.toInstant().toEpochMilli(), end.toInstant().toEpochMilli() - 1)
     }
 
+    /**
+     * Semanas da Uber já fechadas, da mais recente para a mais antiga: a que acabou na última
+     * segunda às 4h e as [count] − 1 anteriores.
+     */
+    fun closedUberWeeks(count: Int, now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault()): List<Period> {
+        val current = uberWeek(now, zone)
+        val start = Instant.ofEpochMilli(current.from).atZone(zone)
+        return (1..count).map { i ->
+            val from = start.minusWeeks(i.toLong())
+            Period(from.toInstant().toEpochMilli(), from.plusWeeks(1).toInstant().toEpochMilli() - 1)
+        }
+    }
+
+    /** Meses já fechados (dia 1 até o último dia), do mais recente para o mais antigo: [count] meses. */
+    fun closedMonths(count: Int, now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault()): List<Period> {
+        val first = Instant.ofEpochMilli(now).atZone(zone).toLocalDate().withDayOfMonth(1)
+        return (1..count).map { i -> month(first.minusMonths(i.toLong()), zone) }
+    }
+
+    /** Mês inteiro de [anyDay] (dia 1 00:00 até o último instante do último dia). */
+    fun month(anyDay: LocalDate, zone: ZoneId = ZoneId.systemDefault()): Period {
+        val first = anyDay.withDayOfMonth(1)
+        val start = first.atStartOfDay(zone)
+        val end = first.plusMonths(1).atStartOfDay(zone)
+        return Period(start.toInstant().toEpochMilli(), end.toInstant().toEpochMilli() - 1)
+    }
+
+    private val MONTHS = listOf(
+        "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+        "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+    )
+
+    /** "Outubro 2026" — mês em que [millis] cai. */
+    fun monthTitle(millis: Long, zone: ZoneId = ZoneId.systemDefault()): String {
+        val d = dateOf(millis, zone)
+        return "${MONTHS[d.monthValue - 1]} ${d.year}"
+    }
+
+    /** "novembro" — nome do mês em minúsculas, para "Mês · novembro". */
+    fun monthName(millis: Long, zone: ZoneId = ZoneId.systemDefault()): String =
+        MONTHS[dateOf(millis, zone).monthValue - 1].lowercase()
+
     /** Últimos [days] dias corridos, incluindo hoje (de 00:00 de hoje-(days-1) até o fim de hoje). */
     fun lastDays(days: Int, now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault()): Period {
         require(days >= 1) { "days deve ser >= 1" }
@@ -119,12 +161,8 @@ object ReportMath {
     }
 
     /** Mês corrente inteiro (dia 1 00:00 até o último instante do mês). */
-    fun currentMonth(now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault()): Period {
-        val first = Instant.ofEpochMilli(now).atZone(zone).toLocalDate().withDayOfMonth(1)
-        val start = first.atStartOfDay(zone)
-        val end = first.plusMonths(1).atStartOfDay(zone)
-        return Period(start.toInstant().toEpochMilli(), end.toInstant().toEpochMilli() - 1)
-    }
+    fun currentMonth(now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault()): Period =
+        month(dateOf(now, zone), zone)
 
     // ---------- Lançamentos ----------
 

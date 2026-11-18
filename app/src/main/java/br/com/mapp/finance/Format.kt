@@ -44,6 +44,20 @@ object Format {
     /** "R$ 45,00/h". */
     fun perHour(value: Double?): String = value?.let { "${brl(it)}/h" } ?: NONE
 
+    /**
+     * Fatia do bruto: "23%" a partir de 10%, "2,1%" abaixo (para não virar "0%"). null = "—".
+     */
+    fun percent(value: Double?): String {
+        if (value == null || !value.isFinite()) return NONE
+        val abs = kotlin.math.abs(value)
+        val text = if (abs >= 9.95) "%.0f".format(PT_BR, value) else oneDecimal.get()!!.format(value)
+        return "$text%"
+    }
+
+    /** "Combustível (23%)" — descrição com a fatia do bruto entre parênteses. */
+    fun withPercent(label: String, percent: Double?): String =
+        if (percent == null) label else "$label (${percent(percent)})"
+
     fun minutes(value: Int?): String = value?.let { "$it min" } ?: NONE
 
     /** Número para campo de edição: "6,5", "11", "" para null. */

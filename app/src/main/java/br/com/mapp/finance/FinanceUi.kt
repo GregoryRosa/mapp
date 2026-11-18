@@ -6,9 +6,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -23,6 +25,7 @@ import androidx.compose.material.icons.outlined.Calculate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -34,7 +37,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +49,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -52,9 +58,13 @@ import br.com.mapp.core.model.Signal
 import br.com.mapp.core.model.VehicleCostConfig
 import br.com.mapp.core.repo.FinanceEntry
 import br.com.mapp.core.repo.OfferRecord
+import br.com.mapp.core.shift.CostBreakdown
+import br.com.mapp.core.shift.CostShare
+import br.com.mapp.core.shift.CostSplit
 import br.com.mapp.core.shift.PeriodMath
 import br.com.mapp.core.shift.PeriodTotals
 import br.com.mapp.overlay.ShiftTracker
+import br.com.mapp.ui.MappColors
 import kotlinx.coroutines.delay
 
 /* Componentes compartilhados pelas telas de finance/. */
@@ -217,9 +227,200 @@ fun rememberPeriodTotals(period: Period, now: Long = rememberNow()): PeriodTotal
     val entries by remember(period) { repos.finance.entries(period.from, period.to) }
         .collectAsStateWithLifecycle(initialValue = emptyList<FinanceEntry>())
     return remember(period, current, history, cost, offers, entries, now) {
-        PeriodMath.totals(period.from, period.to, current, history, offers, entries, cost.costPerKm, now)
+        PeriodMath.totals(
+            period.from, period.to, current, history, offers, entries, cost.costPerKm, now, CostSplit.parts(cost),
+        )
     }
 }
+
+/**
+ * Totais de vários períodos fechados (meses, semanas da Uber) com uma leitura só do banco: corridas
+ * aceitas e lançamentos do intervalo inteiro, divididos em memória. Mesma conta do [rememberPeriodTotals].
+ */
+@Composable
+fun rememberPeriodsTotals(periods: List<Period>, now: Long = rememberNow()): List<PeriodTotals> {
+    val ctx = LocalContext.current
+    val repos = MappApp.repos
+    val current by remember { ShiftTracker.current(ctx) }.collectAsStateWithLifecycle()
+    val history by remember { ShiftTracker.history(ctx) }.collectAsStateWithLifecycle()
+    val cost by remember { repos.vehicle.config() }.collectAsStateWithLifecycle(VehicleCostConfig())
+    val from = periods.minOfOrNull { it.from } ?: 0L
+    val to = periods.maxOfOrNull { it.to } ?: 0L
+    val offers by remember(from, to) { repos.offers.acceptedBetween(from, to) }
+        .collectAsStateWithLifecycle(initialValue = emptyList<OfferRecord>())
+    val entries by remember(from, to) { repos.finance.entries(from, to) }
+        .collectAsStateWithLifecycle(initialValue = emptyList<FinanceEntry>())
+    // Período fechado só muda com o relógio se a jornada aberta começou dentro dele.
+    val clock = if (current?.let { it.startedAt <= to } == true) now else 0L
+    return remember(periods, current, history, cost, offers, entries, clock) {
+        val parts = CostSplit.parts(cost)
+        periods.map { p ->
+            PeriodMath.totals(p.from, p.to, current, history, offers, entries, cost.costPerKm, now, parts)
+        }
+    }
+}
+
+/** Cores das fatias do bruto: custos do carro na ordem de Custos fixos. */
+private val CAR_COLORS = listOf(
+    MappColors.Warn, Color(0xFFF0997B), MappColors.Lilac, MappColors.Periwinkle, MappColors.Aqua,
+    Color(0xFFF06292), Color(0xFFAED581), Color(0xFF4FC3F7), Color(0xFFBA68C8), Color(0xFFA1887F),
+)
+private val EXPENSE_COLOR = MappColors.Loss
+private val NET_COLOR = MappColors.Profit
+
+/**
+ * "Para onde foi o bruto (100%)": barra com as fatias e uma linha por custo — "Combustível (23%)" à
+ * esquerda, o valor à direita —, os gastos lançados por categoria e a sobra. [km] = km do período
+ * (base dos custos do carro).
+ */
+@Composable
+internal fun CostBreakdownBlock(b: CostBreakdown, km: Double) {
+    if (b.isEmpty) return
+    val carColors = b.car.indices.map { CAR_COLORS[it % CAR_COLORS.size] }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            if (b.gross > 0) "Para onde foi o bruto (100%)" else "Custos do período (sem ganho bruto)",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        val slices = b.car.mapIndexed { i, s -> s.amount to carColors[i] } +
+            listOfNotNull(b.expensesTotal?.let { it.amount to EXPENSE_COLOR }) +
+            listOf(b.net.amount to NET_COLOR)
+        val shown = slices.filter { it.first > 0 }
+        if (shown.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp).height(10.dp).clip(RoundedCornerShape(50)),
+                horizontalArrangement = Arrangement.spacedBy(1.dp),
+            ) {
+                shown.forEach { (w, c) -> Box(Modifier.weight(w.toFloat()).fillMaxHeight().background(c)) }
+            }
+        }
+        b.car.forEachIndexed { i, s -> ShareRow(s, carColors[i]) }
+        b.expensesTotal?.let { total ->
+            ShareRow(total, EXPENSE_COLOR)
+            b.expenses.forEach { ShareRow(it, dot = null, indent = true) }
+        }
+        if (b.fuelLaunched > 0) {
+            Text(
+                "⚠ ${Format.brl(b.fuelLaunched)} de combustível lançado em Gastos também já está em " +
+                    "${b.car.firstOrNull()?.name ?: CostSplit.FUEL} (km × R$/km): esse valor conta duas vezes no custo.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MappColors.Warn,
+            )
+        }
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+        ShareRow(
+            b.net,
+            if (b.net.amount < 0) RedSignal else NET_COLOR,
+            valueColor = if (b.net.amount < 0) RedSignal else GreenSignal,
+            strong = true,
+        )
+        if (b.car.isNotEmpty()) {
+            Text(
+                "Custos do carro = ${Format.km(km)} × R$/km de cada item de Custos fixos.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (b.splitEstimated) {
+            Text(
+                "≈ Jornadas antigas não guardaram a divisão do custo: o total do carro é o daquele dia, " +
+                    "dividido pelas proporções dos Custos fixos de hoje.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** "● Combustível (23%) ........ R$ 1.052,00". */
+@Composable
+private fun ShareRow(
+    s: CostShare,
+    dot: Color?,
+    indent: Boolean = false,
+    valueColor: Color = Color.Unspecified,
+    strong: Boolean = false,
+) {
+    val style = if (indent) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium
+    val textColor = if (indent) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified
+    Row(
+        Modifier.fillMaxWidth().padding(start = if (indent) 16.dp else 0.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (dot != null) {
+            Box(Modifier.size(8.dp).background(dot, CircleShape))
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(
+            Format.withPercent(s.name, s.percent),
+            Modifier.weight(1f),
+            style = style,
+            color = if (strong) valueColor else textColor,
+            fontWeight = if (strong) FontWeight.SemiBold else null,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            Format.brl(s.amount),
+            style = style,
+            color = if (indent) textColor else valueColor,
+            fontWeight = if (strong) FontWeight.SemiBold else null,
+        )
+    }
+}
+
+/**
+ * Card menor de um período fechado (mês, semana da Uber), igual às jornadas: título e valor em cima,
+ * resumo embaixo; toque abre [content]. [key] guarda aberto/fechado ao rolar e girar a tela.
+ */
+@Composable
+internal fun ClosedPeriodCard(
+    key: Long,
+    title: String,
+    value: String,
+    summary: String,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    var expanded by rememberSaveable(key) { mutableStateOf(false) }
+    Card(Modifier.fillMaxWidth().clickable { expanded = !expanded }) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(title, Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                Text(value, fontWeight = FontWeight.Bold)
+            }
+            Text(summary, style = MaterialTheme.typography.bodySmall)
+            if (expanded) {
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                content()
+            }
+        }
+    }
+}
+
+/** Três números lado a lado (rótulo pequeno em cima), como na grade das jornadas. */
+@Composable
+internal fun StatRow(vararg stats: Triple<String, String, Color>) {
+    Row(Modifier.fillMaxWidth()) {
+        stats.forEach { (label, value, color) ->
+            Column(Modifier.weight(1f)) {
+                Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    value,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = color,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** Cor do lucro/líquido: vermelho no prejuízo. */
+internal fun profitColor(v: Double): Color = if (v < 0) RedSignal else GreenSignal
 
 /**
  * Botão "tirar os custos": alterna entre o valor bruto (padrão) e o líquido (bruto − custo do carro −

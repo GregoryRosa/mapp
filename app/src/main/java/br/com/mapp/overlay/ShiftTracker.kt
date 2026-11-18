@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.RawOffer
+import br.com.mapp.core.shift.CostPart
 import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftCodec
 import br.com.mapp.core.shift.ShiftMath
@@ -12,6 +13,7 @@ import br.com.mapp.core.shift.TripCategories
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.time.ZoneId
 
 /**
  * Jornada em andamento (play/pausa no ícone "M") e a última encerrada. Fica salva no aparelho
@@ -58,11 +60,21 @@ object ShiftTracker {
 
     fun pause(ctx: Context, now: Long = System.currentTimeMillis()) = update(ctx) { it?.pause(now) }
 
-    /** Encerra, guarda como "última jornada" e no histórico (com o custo/km de agora). */
+    /**
+     * Encerra, guarda como "última jornada" e no histórico (com o custo/km de agora e a divisão dele
+     * por item de Custos fixos, [costParts] — vai para o detalhamento de custos do mês).
+     */
     @Synchronized
-    fun end(ctx: Context, costPerKm: Double? = null, now: Long = System.currentTimeMillis()): Shift? {
+    fun end(
+        ctx: Context,
+        costPerKm: Double? = null,
+        costParts: List<CostPart>? = null,
+        now: Long = System.currentTimeMillis(),
+    ): Shift? {
         load(ctx)
-        val ended = _current.value?.pause(now)?.copy(costPerKm = costPerKm, endedAt = now) ?: return null
+        val ended = _current.value?.pause(now)
+            ?.copy(costPerKm = costPerKm, costParts = costParts?.takeIf { costPerKm != null }, endedAt = now)
+            ?: return null
         val list = (listOf(ended) + _history.value).take(HISTORY_MAX)
         _current.value = null
         _last.value = ended
@@ -75,12 +87,18 @@ object ShiftTracker {
         return ended
     }
 
-    /** Custos do veículo salvos: jornadas de hoje já encerradas passam a usar o custo/km novo. */
+    /** Custos do veículo salvos: jornadas de hoje já encerradas passam a usar o custo/km novo (e a divisão). */
     @Synchronized
-    fun applyCostToday(ctx: Context, costPerKm: Double, now: Long = System.currentTimeMillis()) {
+    fun applyCostToday(
+        ctx: Context,
+        costPerKm: Double,
+        costParts: List<CostPart>? = null,
+        now: Long = System.currentTimeMillis(),
+    ) {
         load(ctx)
-        val list = ShiftMath.withCostToday(_history.value, costPerKm, now)
-        val last = _last.value?.let { ShiftMath.withCostToday(listOf(it), costPerKm, now).single() }
+        val zone = ZoneId.systemDefault()
+        val list = ShiftMath.withCostToday(_history.value, costPerKm, now, zone, costParts)
+        val last = _last.value?.let { ShiftMath.withCostToday(listOf(it), costPerKm, now, zone, costParts).single() }
         if (list == _history.value && last == _last.value) return
         _history.value = list
         _last.value = last

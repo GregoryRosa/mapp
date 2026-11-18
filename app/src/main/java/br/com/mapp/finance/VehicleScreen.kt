@@ -46,6 +46,7 @@ import br.com.mapp.MappApp
 import br.com.mapp.core.model.ExtraKmCost
 import br.com.mapp.core.model.FuelType
 import br.com.mapp.core.model.VehicleCostConfig
+import br.com.mapp.core.shift.CostSplit
 import br.com.mapp.overlay.ShiftTracker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -88,7 +89,7 @@ internal fun FixedCostsTab() {
                 saveScope.launch {
                     repos.vehicle.save(cfg)
                     // Jornadas de hoje já encerradas também passam a usar o custo/km novo.
-                    ShiftTracker.applyCostToday(ctx, cfg.costPerKm)
+                    ShiftTracker.applyCostToday(ctx, cfg.costPerKm, CostSplit.parts(cfg))
                 }
             },
         )

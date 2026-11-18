@@ -89,6 +89,9 @@ class RoomOfferHistoryRepository(private val dao: OfferDao) : OfferHistoryReposi
     override fun between(fromMillis: Long, toMillis: Long): Flow<List<OfferRecord>> =
         dao.between(fromMillis, toMillis).map { list -> list.map { it.toRecord() } }
 
+    override fun acceptedBetween(fromMillis: Long, toMillis: Long): Flow<List<OfferRecord>> =
+        dao.acceptedBetween(fromMillis, toMillis).map { list -> list.map { it.toRecord() } }
+
     private companion object {
         const val PENDING_MAX = 50
     }

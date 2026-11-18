@@ -44,6 +44,8 @@ import br.com.mapp.core.model.ZoneType
 import br.com.mapp.core.repo.FinanceEntry
 import br.com.mapp.core.repo.OfferRecord
 import br.com.mapp.core.shift.ActiveRides
+import br.com.mapp.core.shift.CostPart
+import br.com.mapp.core.shift.CostSplit
 import br.com.mapp.core.shift.Odometer
 import br.com.mapp.core.shift.PeriodMath
 import br.com.mapp.core.shift.PeriodTotals
@@ -110,6 +112,8 @@ class OverlayService : LifecycleService() {
 
     // ---- Jornada ----
     private var costPerKm: Double = 0.0
+    /** Divisão do custo/km por item de Custos fixos (gravada na jornada ao encerrar). */
+    private var costParts: List<CostPart> = emptyList()
     /** Última oferta avaliada (para o +1 do Card e o aceite automático). */
     private var lastOffer: EvaluatedOffer? = null
     /** Tipo lido em algum quadro da oferta atual (o OCR às vezes não lê o "UberX"). */
@@ -256,7 +260,7 @@ class OverlayService : LifecycleService() {
         }
 
         override fun endShift() {
-            val ended = ShiftTracker.end(this@OverlayService, costPerKm) ?: return
+            val ended = ShiftTracker.end(this@OverlayService, costPerKm, costParts) ?: return
             countedKey = null
             matcher.reset()
             saveTripMemory(force = true)
@@ -393,7 +397,13 @@ class OverlayService : LifecycleService() {
     }
 
     private fun startShiftMonitor(loc: LocationProvider) {
-        lifecycleScope.launch { MappApp.repos.vehicle.config().collect { costPerKm = it.costPerKm; pushShift() } }
+        lifecycleScope.launch {
+            MappApp.repos.vehicle.config().collect {
+                costPerKm = it.costPerKm
+                costParts = CostSplit.parts(it)
+                pushShift()
+            }
+        }
         lifecycleScope.launch {
             ShiftTracker.current(this@OverlayService).collect {
                 pushShift()
