@@ -19,6 +19,7 @@
          inicial), repassar o link a ele e, com o motorista no Waze, abrir o app de corrida para ler. -->
     <queries>
         <package android:name="com.waze" />
+        <package android:name="com.google.android.apps.maps" />
         <package android:name="com.ubercab.driver" />
         <package android:name="com.app99.driver" />
         <package android:name="sinet.startup.inDriver" />

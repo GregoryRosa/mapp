@@ -11,6 +11,7 @@ import br.com.mapp.core.geo.PhotoView
 import br.com.mapp.core.geo.StreetViewBudget
 import br.com.mapp.core.geo.SatelliteZoom
 import br.com.mapp.core.geo.StreetZoom
+import br.com.mapp.core.nav.NavApp
 import br.com.mapp.core.nav.NavHold
 import br.com.mapp.core.notify.NoticeLayout
 import br.com.mapp.core.sound.GreatSound
@@ -45,6 +46,7 @@ object OverlayPrefs {
     const val KEY_NAV_HOLD_ON = "nav_hold_on"
     const val KEY_NAV_HOLD_MS = "nav_hold_ms"
     const val KEY_NAV_BRING_ON = "nav_bring_on"
+    const val KEY_NAV_APP = "nav_app"
 
     fun of(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -64,6 +66,13 @@ object OverlayPrefs {
 
     fun setNavBringOn(context: Context, on: Boolean) {
         of(context).edit().putBoolean(KEY_NAV_BRING_ON, on).apply()
+    }
+
+    /** App que recebe a rota depois da espera (padrão: Waze). */
+    fun navApp(context: Context): NavApp = NavApp.fromId(of(context).getString(KEY_NAV_APP, null))
+
+    fun setNavApp(context: Context, app: NavApp) {
+        of(context).edit().putString(KEY_NAV_APP, app.id).apply()
     }
 
     /** Espera máxima do Waze, em ms (um dos [NavHold.DELAYS_MS]). */

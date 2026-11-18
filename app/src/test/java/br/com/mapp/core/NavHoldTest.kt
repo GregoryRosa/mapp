@@ -3,6 +3,7 @@ package br.com.mapp.core
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.TripStage
 import br.com.mapp.core.nav.HoldPlan
+import br.com.mapp.core.nav.NavApp
 import br.com.mapp.core.nav.NavHold
 import br.com.mapp.core.nav.NavLinkState
 import br.com.mapp.core.nav.ReleaseReason
@@ -150,6 +151,43 @@ class NavHoldTest {
             "🧭 Waze aberto depois de 1,4 s · tela da corrida lida (2 leituras da tela)",
             NavHold.describeRelease(1_400, ReleaseReason.STAGE, 2),
         )
+    }
+
+    @Test fun rota_no_google_maps() {
+        val nav = NavHold.parse("waze://?ll=-23.55052,-46.63331&navigate=yes")!!
+        assertEquals("google.navigation:q=-23.550520,-46.633310&mode=d", NavHold.target(nav, NavApp.GOOGLE_MAPS))
+        val point = NavHold.parse("waze://?ll=-23.55052,-46.63331")!!
+        assertEquals("geo:-23.550520,-46.633310?q=-23.550520,-46.633310", NavHold.target(point, NavApp.GOOGLE_MAPS))
+        val address = NavHold.parse("waze://?q=Pra%C3%A7a+da+S%C3%A9&navigate=yes")!!
+        assertEquals("google.navigation:q=Pra%C3%A7a%20da%20S%C3%A9&mode=d", NavHold.target(address, NavApp.GOOGLE_MAPS))
+        // Sem destino (botão Testar): só abre o app.
+        assertNull(NavHold.target(NavHold.parse(NavHold.TEST_URI)!!, NavApp.GOOGLE_MAPS))
+        // Waze: o link de sempre, igual.
+        assertEquals("waze://?ll=-23.55052,-46.63331&navigate=yes", NavHold.target(nav, NavApp.WAZE))
+        assertEquals(
+            "https://www.google.com/maps/dir/?api=1&destination=-23.550520,-46.633310&travelmode=driving",
+            NavHold.mapsWebUrl(nav),
+        )
+    }
+
+    @Test fun escolha_do_app_de_navegacao() {
+        assertEquals(NavApp.WAZE, NavApp.fromId(null))
+        assertEquals(NavApp.WAZE, NavApp.fromId("xpto"))
+        assertEquals(NavApp.GOOGLE_MAPS, NavApp.fromId(NavApp.GOOGLE_MAPS.id))
+        // Google Maps escolhido mas desinstalado: a rota vai para o Waze, nunca fica sem navegação.
+        assertEquals(NavApp.WAZE, NavHold.resolveApp(NavApp.GOOGLE_MAPS, mapsInstalled = false))
+        assertEquals(NavApp.GOOGLE_MAPS, NavHold.resolveApp(NavApp.GOOGLE_MAPS, mapsInstalled = true))
+        assertEquals(NavApp.WAZE, NavHold.resolveApp(NavApp.WAZE, mapsInstalled = true))
+        val r = NavHold.parse("waze://?ll=-23.55052,-46.63331&navigate=yes")!!
+        assertEquals(
+            "🧭 Waze pedido por Uber: -23.55052,-46.63331 · navegar · segurando até 2 s · rota no Google Maps",
+            NavHold.describe(r, uber, HoldPlan(2_000, ""), NavApp.GOOGLE_MAPS),
+        )
+        assertEquals(
+            "🧭 Google Maps aberto depois de 1,4 s · tempo esgotado (0 leituras da tela)",
+            NavHold.describeRelease(1_400, ReleaseReason.TIMEOUT, 0, NavApp.GOOGLE_MAPS),
+        )
+        assertTrue(NavHold.message(NavLinkState.READY, 2_000, NavApp.GOOGLE_MAPS).contains("abre o Google Maps"))
     }
 
     @Test fun tempos_e_site_do_waze() {
