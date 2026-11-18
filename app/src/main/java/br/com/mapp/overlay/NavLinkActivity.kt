@@ -18,6 +18,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.lifecycle.lifecycleScope
 import br.com.mapp.core.bus.OfferBus
 import br.com.mapp.core.model.Platform
+import br.com.mapp.core.nav.NavApp
 import br.com.mapp.core.nav.NavHold
 import br.com.mapp.core.nav.NavLinkState
 import br.com.mapp.core.nav.NavRequest
@@ -44,6 +45,7 @@ class NavLinkActivity : ComponentActivity() {
     private var request: NavRequest? = null
     private var forwarded = false
     private var waiter: NavWaiter? = null
+    private var nav: NavApp = NavApp.WAZE
     private val handler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -58,6 +60,7 @@ class NavLinkActivity : ComponentActivity() {
         })
 
         link = intent?.data
+        nav = NavRelay.navApp(this)
         val req = NavHold.parse(link?.toString())
         request = req
         if (req == null || savedInstanceState != null) {
@@ -80,7 +83,7 @@ class NavLinkActivity : ComponentActivity() {
             lastRideApp = OfferAccessibilityService.lastRideApp,
             sinceLastBringMs = NavRelay.sinceLastBring(),
         )
-        TripLog.add(this, NavHold.describe(req, referrer, plan))
+        TripLog.add(this, NavHold.describe(req, referrer, plan, nav))
         if (plan.holdMs <= 0L) {
             forward(null)
             return
@@ -102,7 +105,7 @@ class NavLinkActivity : ComponentActivity() {
         }
 
         waiter = NavWaiter(lifecycleScope, plan.holdMs) { reason, elapsed, reads ->
-            TripLog.add(this, NavHold.describeRelease(elapsed, reason, reads))
+            TripLog.add(this, NavHold.describeRelease(elapsed, reason, reads, nav))
             forward(reason)
         }.also { it.start() }
         // A janela de aceite da Uber pode fechar logo depois de pedir o Waze (com o Waze por baixo):
@@ -145,9 +148,9 @@ class NavLinkActivity : ComponentActivity() {
     private fun forward(reason: ReleaseReason?) {
         if (forwarded) return
         forwarded = true
-        NavRelay.openWaze(this, link, extrasOrNull(), request)
+        NavRelay.openNav(this, nav, link, extrasOrNull(), request)
         if (request?.test == true) {
-            Toast.makeText(this, "✅ O link do Waze passou pelo MApp e foi entregue ao Waze.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "✅ O link do Waze passou pelo MApp e foi entregue ao ${nav.label}.", Toast.LENGTH_LONG).show()
         }
         finish()
         noAnimation(open = false)

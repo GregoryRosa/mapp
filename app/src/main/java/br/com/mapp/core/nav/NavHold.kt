@@ -3,6 +3,7 @@ package br.com.mapp.core.nav
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.TripStage
 import java.net.URLDecoder
+import java.net.URLEncoder
 import java.util.Locale
 
 /**
@@ -17,6 +18,20 @@ data class NavRequest(
     val test: Boolean = false,
     val rawQuery: String = "",
 )
+
+/**
+ * App que recebe a rota no fim da espera (tela inicial → cartão 🧭 → *Abrir a rota no*). A Uber continua
+ * mandando o link do Waze; com [GOOGLE_MAPS] o MApp converte o destino ([NavHold.target]).
+ */
+enum class NavApp(val id: String, val label: String, val packageName: String) {
+    WAZE("waze", "Waze", "com.waze"),
+    GOOGLE_MAPS("gmaps", "Google Maps", "com.google.android.apps.maps");
+
+    companion object {
+        /** Valor salvo → app; desconhecido ou nulo = [WAZE] (o de sempre). */
+        fun fromId(id: String?): NavApp = entries.firstOrNull { it.id == id } ?: WAZE
+    }
+}
 
 /**
  * Quanto segurar o Waze e por quê (para o Registro). 0 = repassa na hora. [bring] = app de corrida
@@ -224,7 +239,7 @@ object NavHold {
     }
 
     /** Texto do cartão para cada situação. */
-    fun message(state: NavLinkState, delayMs: Long): String = when (state) {
+    fun message(state: NavLinkState, delayMs: Long, app: NavApp = NavApp.WAZE): String = when (state) {
         NavLinkState.OFF ->
             "Quando a Uber abre o Waze logo depois do aceite ou do fim da corrida, a tela some antes de o MApp " +
                 "ler o próximo passageiro. Ligue para o MApp segurar o Waze por até ${label(validDelay(delayMs))}."
@@ -237,12 +252,12 @@ object NavHold {
                 "Abrir por padrão → Limpar padrões; depois toque em Testar e escolha MApp → Sempre."
         NavLinkState.READY ->
             "✅ Pronto: quando a Uber abrir o Waze, o MApp segura até ${label(validDelay(delayMs))} enquanto lê " +
-                "a tela da corrida e então abre o Waze no mesmo destino. Se o Registro não mostrar \"🧭 Waze\" " +
+                "a tela da corrida e então abre o ${app.label} no mesmo destino. Se o Registro não mostrar \"🧭 Waze\" " +
                 "nas próximas corridas, a Uber abre o Waze direto e o atraso não tem efeito."
     }
 
     /** Linha do Registro quando o pedido chega. */
-    fun describe(request: NavRequest, referrer: String?, plan: HoldPlan): String = buildString {
+    fun describe(request: NavRequest, referrer: String?, plan: HoldPlan, app: NavApp = NavApp.WAZE): String = buildString {
         append("🧭 Waze pedido por ")
         append(referrer?.let { Platform.fromPackage(it)?.label ?: it } ?: "app sem nome")
         append(": ")
@@ -263,16 +278,60 @@ object NavHold {
                 else -> "segurando até ${label(plan.holdMs)}"
             },
         )
+        if (app != NavApp.WAZE) append(" · rota no ${app.label}")
     }
 
-    /** Linha do Registro quando o Waze é liberado. */
-    fun describeRelease(elapsedMs: Long, reason: ReleaseReason, frames: Int): String =
-        "🧭 Waze aberto depois de ${String.format(PT_BR, "%.1f", elapsedMs / 1000.0)} s · ${reason.label}" +
+    /** Linha do Registro quando a navegação é liberada. */
+    fun describeRelease(elapsedMs: Long, reason: ReleaseReason, frames: Int, app: NavApp = NavApp.WAZE): String =
+        "🧭 ${app.label} aberto depois de ${String.format(PT_BR, "%.1f", elapsedMs / 1000.0)} s · ${reason.label}" +
             " ($frames ${if (frames == 1) "leitura" else "leituras"} da tela)"
 
     /** Mesmo destino no site do Waze, se o app do Waze sumir do celular. */
     fun webUrl(request: NavRequest): String =
         "https://waze.com/ul" + if (request.rawQuery.isNotEmpty()) "?${request.rawQuery}" else ""
+
+    /**
+     * Link que o app escolhido entende com o mesmo destino. [NavApp.WAZE] = o link original
+     * ([NavRequest.rawQuery] repassado igual). [NavApp.GOOGLE_MAPS]: com "navegar", `google.navigation:`
+     * (já abre a rota); sem, `geo:` (mostra o ponto). null = sem destino: só abrir o app.
+     */
+    fun target(request: NavRequest, app: NavApp): String? {
+        if (app == NavApp.WAZE) return "$SCHEME://" + if (request.rawQuery.isNotEmpty()) "?${request.rawQuery}" else ""
+        val point = pointOf(request)
+        val query = request.query?.let { encode(it) }
+        return when {
+            point != null && request.navigate -> "google.navigation:q=$point&mode=d"
+            point != null -> "geo:$point?q=$point"
+            query != null && request.navigate -> "google.navigation:q=$query&mode=d"
+            query != null -> "geo:0,0?q=$query"
+            else -> null
+        }
+    }
+
+    /** Mesmo destino no site do Google Maps (Google Maps desinstalado no meio do caminho). */
+    fun mapsWebUrl(request: NavRequest): String {
+        val dest = pointOf(request) ?: request.query?.let { encode(it) }
+        return when {
+            dest == null -> "https://www.google.com/maps"
+            request.navigate -> "https://www.google.com/maps/dir/?api=1&destination=$dest&travelmode=driving"
+            else -> "https://www.google.com/maps/search/?api=1&query=$dest"
+        }
+    }
+
+    /**
+     * App que recebe a rota: o escolhido, se estiver instalado; senão o Waze (a navegação nunca fica
+     * sem app por causa da escolha).
+     */
+    fun resolveApp(chosen: NavApp, mapsInstalled: Boolean): NavApp =
+        if (chosen == NavApp.GOOGLE_MAPS && !mapsInstalled) NavApp.WAZE else chosen
+
+    private fun pointOf(request: NavRequest): String? {
+        val lat = request.lat ?: return null
+        val lon = request.lon ?: return null
+        return String.format(Locale.ROOT, "%.6f,%.6f", lat, lon)
+    }
+
+    private fun encode(s: String): String = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 
     private fun decode(s: String): String = try {
         URLDecoder.decode(s, "UTF-8")

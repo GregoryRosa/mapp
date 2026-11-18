@@ -12,6 +12,7 @@ import android.widget.Toast
 import br.com.mapp.core.bus.OfferBus
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.TripStage
+import br.com.mapp.core.nav.NavApp
 import br.com.mapp.core.nav.NavHold
 import br.com.mapp.core.nav.NavRequest
 import br.com.mapp.core.nav.ReleaseReason
@@ -125,9 +126,10 @@ object NavRelay {
         lastBringAt = SystemClock.elapsedRealtime()
         val next = NavWaiter(scope, holdMs) { reason, elapsed, reads ->
             waiter = null
-            TripLog.add(appCtx, NavHold.describeRelease(elapsed, reason, reads) + " · ${app.label} trazido para a frente")
-            // O contexto do leitor conectado é o que garante abrir o Waze com o MApp em segundo plano.
-            openWaze(OfferAccessibilityService.windowContext.value ?: appCtx, link, extras, request)
+            val nav = navApp(appCtx)
+            TripLog.add(appCtx, NavHold.describeRelease(elapsed, reason, reads, nav) + " · ${app.label} trazido para a frente")
+            // O contexto do leitor conectado é o que garante abrir a navegação com o MApp em segundo plano.
+            openNav(OfferAccessibilityService.windowContext.value ?: appCtx, nav, link, extras, request)
         }
         waiter = next
         next.start()
@@ -138,6 +140,49 @@ object NavRelay {
         val launch = ctx.packageManager.getLaunchIntentForPackage(app.packageName) ?: return false
         return try {
             ctx.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * App que recebe a rota: o escolhido no cartão 🧭 (`OverlayPrefs.navApp`), ou o Waze se o Google
+     * Maps não estiver instalado.
+     */
+    fun navApp(ctx: Context): NavApp {
+        val mapsInstalled = ctx.packageManager.getLaunchIntentForPackage(NavApp.GOOGLE_MAPS.packageName) != null
+        return NavHold.resolveApp(OverlayPrefs.navApp(ctx), mapsInstalled)
+    }
+
+    /**
+     * Abre a rota em [app]. Waze: o mesmo [link] ([openWaze]). Google Maps: o destino convertido
+     * ([NavHold.target]); se não abrir, cai no Waze — a navegação não fica sem app.
+     */
+    fun openNav(ctx: Context, app: NavApp, link: Uri?, extras: Bundle?, request: NavRequest?): Boolean {
+        if (app == NavApp.GOOGLE_MAPS && openMaps(ctx, request)) return true
+        return openWaze(ctx, link, extras, request)
+    }
+
+    private fun openMaps(ctx: Context, request: NavRequest?): Boolean {
+        val pkg = NavApp.GOOGLE_MAPS.packageName
+        val target = request?.let { NavHold.target(it, NavApp.GOOGLE_MAPS) }
+        val out = if (target != null) Intent(Intent.ACTION_VIEW, Uri.parse(target)) else ctx.packageManager.getLaunchIntentForPackage(pkg)
+        if (out != null) {
+            out.setPackage(pkg)
+            out.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                ctx.startActivity(out)
+                return true
+            } catch (e: ActivityNotFoundException) {
+                // Google Maps desinstalado: tenta o site abaixo.
+            } catch (e: SecurityException) {
+                // idem
+            }
+        }
+        if (request == null) return false
+        return try {
+            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(NavHold.mapsWebUrl(request))).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             true
         } catch (e: Exception) {
             false

@@ -80,6 +80,7 @@ import br.com.mapp.finance.NetToggle
 import br.com.mapp.finance.ReportMath
 import br.com.mapp.finance.rememberNow
 import br.com.mapp.finance.rememberPeriodTotals
+import br.com.mapp.core.nav.NavApp
 import br.com.mapp.core.nav.NavHold
 import br.com.mapp.core.nav.NavLinkState
 import br.com.mapp.overlay.NavLinkActivity
@@ -291,6 +292,10 @@ private fun WazeHoldCard(refresh: Int) {
     var on by remember { mutableStateOf(OverlayPrefs.isNavHoldOn(ctx)) }
     var delay by remember { mutableLongStateOf(OverlayPrefs.navHoldMs(ctx)) }
     var bring by remember { mutableStateOf(OverlayPrefs.isNavBringOn(ctx)) }
+    var navApp by remember { mutableStateOf(OverlayPrefs.navApp(ctx)) }
+    val mapsInstalled = remember(refresh) {
+        ctx.packageManager.getLaunchIntentForPackage(NavApp.GOOGLE_MAPS.packageName) != null
+    }
     val state = remember(on, refresh) {
         NavLinkActivity.sync(ctx)
         NavLinkActivity.state(ctx)
@@ -316,7 +321,7 @@ private fun WazeHoldCard(refresh: Int) {
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            NavHold.message(state, delay),
+            NavHold.message(state, delay, NavHold.resolveApp(navApp, mapsInstalled)),
             style = MaterialTheme.typography.bodySmall,
             color = when (state) {
                 NavLinkState.READY -> MappColors.Profit
@@ -325,6 +330,32 @@ private fun WazeHoldCard(refresh: Int) {
             },
         )
         if (on && state != NavLinkState.NO_WAZE) {
+            Spacer(Modifier.height(10.dp))
+            Text("Abrir a rota no", style = MaterialTheme.typography.labelMedium, color = MappColors.Text)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                NavApp.entries.forEach { app ->
+                    FilterChip(
+                        selected = app == navApp,
+                        onClick = {
+                            navApp = app
+                            OverlayPrefs.setNavApp(ctx, app)
+                        },
+                        label = { Text(app.label) },
+                    )
+                }
+            }
+            Text(
+                when {
+                    navApp == NavApp.GOOGLE_MAPS && !mapsInstalled ->
+                        "⚠️ Google Maps não instalado: a rota continua indo para o Waze."
+                    navApp == NavApp.GOOGLE_MAPS ->
+                        "Deixe a Uber com o Waze como app de navegação: o MApp recebe a rota e abre no Google Maps, " +
+                            "no mesmo destino."
+                    else -> "A rota abre no Waze, como a Uber pediu."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (navApp == NavApp.GOOGLE_MAPS && !mapsInstalled) MappColors.Warn else MappColors.TextDim,
+            )
             Spacer(Modifier.height(10.dp))
             Text("Esperar no máximo", style = MaterialTheme.typography.labelMedium, color = MappColors.Text)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
