@@ -28,6 +28,7 @@ import br.com.mapp.core.route.RideRoute
 import br.com.mapp.core.sound.OfferSound
 import br.com.mapp.core.sound.OfferSounds
 import br.com.mapp.core.goal.DayGoal
+import br.com.mapp.core.goal.WeekGoals
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
@@ -438,6 +439,7 @@ class OverlayService : LifecycleService() {
      * o histórico de ofertas, os lançamentos, a meta ou o custo/km — e de novo à meia-noite.
      * **Dia de trabalho:** com jornada aberta vale o dia em que ela começou (`ReportMath.workDay`):
      * passar da meia-noite rodando não zera os números nem a meta; o dia vira quando a jornada acaba.
+     * A meta é a do **dia da semana** desse dia (`WeekGoals.goalFor`), ou a geral se ele não tiver uma.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun startDayMonitor() {
@@ -456,7 +458,10 @@ class OverlayService : LifecycleService() {
                     repos.offers.between(p.from, p.to),
                     repos.finance.entries(p.from, p.to),
                     repos.finance.goals(),
-                ) { current, history, offers, entries, goals -> DayInputs(current, history, offers, entries, goals.daily) }
+                ) { current, history, offers, entries, goals ->
+                    // Meta do dia da semana do dia de trabalho (sem meta própria, a geral).
+                    DayInputs(current, history, offers, entries, WeekGoals.goalFor(goals, ReportMath.dateOf(p.from)))
+                }
                 combine(day, repos.vehicle.config()) { d, cost ->
                     val t = PeriodMath.totals(p.from, p.to, d.current, d.history, d.offers, d.entries, cost.costPerKm, System.currentTimeMillis())
                     Triple(p, t, d.goal)

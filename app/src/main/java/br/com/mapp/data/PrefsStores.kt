@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import br.com.mapp.core.model.ExtraKmCostCodec
 import br.com.mapp.core.model.FuelType
+import br.com.mapp.core.goal.WeekGoals
 import br.com.mapp.core.model.VehicleCostConfig
 import br.com.mapp.core.repo.Goals
 import br.com.mapp.core.repo.VehicleRepository
@@ -82,13 +83,20 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
     }
 }
 
-/** Metas diária/mensal de ganhos (usado por [RoomFinanceRepository]). Valores <= 0 = sem meta. */
+/**
+ * Metas de ganhos (usado por [RoomFinanceRepository]): meta geral do dia, meta mensal e a meta de
+ * cada dia da semana (`WeekGoals`). Valores <= 0 = sem meta.
+ */
 class GoalsStore(context: Context) {
     private val appContext = context.applicationContext
     private val prefs: SharedPreferences by lazy { appContext.getSharedPreferences(FILE, Context.MODE_PRIVATE) }
 
     fun goals(): Flow<Goals> = observePrefs({ prefs }) {
-        Goals(daily = getDouble(DAILY), monthly = getDouble(MONTHLY))
+        Goals(
+            daily = getDouble(DAILY),
+            monthly = getDouble(MONTHLY),
+            byWeekday = WeekGoals.decode(getString(BY_WEEKDAY, null)),
+        )
     }
 
     suspend fun save(goals: Goals) {
@@ -96,6 +104,7 @@ class GoalsStore(context: Context) {
             prefs.edit()
                 .putDouble(DAILY, goals.daily?.takeIf { it > 0 })
                 .putDouble(MONTHLY, goals.monthly?.takeIf { it > 0 })
+                .putString(BY_WEEKDAY, WeekGoals.encode(goals.byWeekday))
                 .commit()
         }
     }
@@ -104,5 +113,6 @@ class GoalsStore(context: Context) {
         const val FILE = "goals"
         const val DAILY = "daily"
         const val MONTHLY = "monthly"
+        const val BY_WEEKDAY = "by_weekday"
     }
 }
