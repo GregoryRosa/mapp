@@ -44,6 +44,7 @@ object OverlayPrefs {
     const val KEY_TRIP_MEMORY = "trip_memory"
     const val KEY_NAV_HOLD_ON = "nav_hold_on"
     const val KEY_NAV_HOLD_MS = "nav_hold_ms"
+    const val KEY_NAV_BRING_ON = "nav_bring_on"
 
     fun of(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -53,6 +54,16 @@ object OverlayPrefs {
 
     fun setNavHoldOn(context: Context, on: Boolean) {
         of(context).edit().putBoolean(KEY_NAV_HOLD_ON, on).apply()
+    }
+
+    /**
+     * Atraso do Waze com o motorista já no Waze: abrir a Uber para ler a corrida antes de mandar a rota
+     * ao Waze (padrão: ligado; só vale com o atraso ligado).
+     */
+    fun isNavBringOn(context: Context): Boolean = of(context).getBoolean(KEY_NAV_BRING_ON, true)
+
+    fun setNavBringOn(context: Context, on: Boolean) {
+        of(context).edit().putBoolean(KEY_NAV_BRING_ON, on).apply()
     }
 
     /** Espera máxima do Waze, em ms (um dos [NavHold.DELAYS_MS]). */

@@ -1,5 +1,6 @@
 package br.com.mapp.core
 
+import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.TripStage
 import br.com.mapp.core.nav.HoldPlan
 import br.com.mapp.core.nav.NavHold
@@ -71,6 +72,47 @@ class NavHoldTest {
         assertEquals(0L, plan(test = true).holdMs)
         assertEquals(NavHold.DEFAULT_DELAY_MS, plan(delay = 777).holdMs)
         assertEquals("copiloto parado", plan(copilot = false).reason)
+    }
+
+    @Test fun motorista_no_waze_traz_a_uber_para_ler() {
+        fun plan(
+            onScreen: Boolean = false, bring: Boolean = true, referrer: String? = uber,
+            last: Platform? = null, since: Long? = null,
+        ) = NavHold.plan(true, 2_000, true, true, referrer, own, false, onScreen, bring, last, since)
+
+        // A Uber mandou a rota com o Waze na frente: abre a Uber, espera o tempo + o extra.
+        val p = plan()
+        assertEquals(Platform.UBER, p.bring)
+        assertEquals(2_000L + NavHold.BRING_EXTRA_MS, p.holdMs)
+        // Uber na tela: só segura, como antes.
+        assertNull(plan(onScreen = true).bring)
+        assertEquals(2_000L, plan(onScreen = true).holdMs)
+        // Opção desligada: segurar sem a Uber na tela não adianta, repassa na hora.
+        assertEquals(0L, plan(bring = false).holdMs)
+        assertEquals("Uber fora da tela", plan(bring = false).reason)
+        // Quem pediu não se identificou: traz o último app de corrida visto pelo leitor.
+        assertEquals(Platform.NINETY_NINE, plan(referrer = null, last = Platform.NINETY_NINE).bring)
+        assertEquals(0L, plan(referrer = null, last = null).holdMs)
+        // Acabou de trazer: não traz de novo (sem vaivém se o app reenviar a rota).
+        assertEquals(0L, plan(since = 5_000).holdMs)
+        assertEquals(Platform.UBER, plan(since = NavHold.BRING_COOLDOWN_MS).bring)
+        // Com a Uber na tela, guarda quem trazer se ela sumir logo (janela de aceite por cima do Waze).
+        assertEquals(Platform.UBER, plan(onScreen = true).fallback)
+        assertNull(plan(onScreen = true, bring = false).fallback)
+        assertNull(plan(onScreen = true, since = 5_000).fallback)
+        assertTrue(NavHold.lateBring(reads = 0, rideAppOnScreen = false))
+        assertFalse(NavHold.lateBring(reads = 1, rideAppOnScreen = false))
+        assertFalse(NavHold.lateBring(reads = 0, rideAppOnScreen = true))
+        // Os chamadores antigos (sem os parâmetros novos) continuam segurando como antes.
+        assertEquals(2_000L, NavHold.plan(true, 2_000, true, true, uber, own, false).holdMs)
+    }
+
+    @Test fun registro_quando_traz_a_uber() {
+        val r = NavHold.parse("waze://?ll=-23.55052,-46.63331&navigate=yes")!!
+        assertEquals(
+            "🧭 Waze pedido por Uber: -23.55052,-46.63331 · navegar · Uber fora da tela: trazendo o app para ler (até 3,5 s)",
+            NavHold.describe(r, uber, HoldPlan(3_500, "", bring = Platform.UBER)),
+        )
     }
 
     @Test fun libera_quando_le_a_tela_da_corrida() {
