@@ -88,38 +88,94 @@ enum class FuelType(
     val consumptionSuffix: String get() = "km/$unit"
 }
 
-/** Custo por km criado pelo usuário (ex.: pneus, seguro, aluguel do carro). */
-data class ExtraKmCost(val name: String, val perKm: Double)
+/**
+ * Unidade em que um custo de Custos fixos foi digitado: por km rodado ou o total do mês (o MApp
+ * divide pelos km do mês da [KmBase]).
+ */
+enum class CostUnit(val suffix: String, val label: String) {
+    PER_KM("R$/km", "por km"),
+    PER_MONTH("R$/mês", "por mês"),
+}
+
+/**
+ * Km rodados no mês, a base que transforma custo do mês em R$/km: [kmPerDay] (média por dia rodado)
+ * × [daysPerMonth] (dias rodados no mês). [auto] = vem das jornadas (`core/shift/KmAverages`,
+ * atualizada sozinha); false = digitado pelo motorista.
+ */
+data class KmBase(
+    val kmPerDay: Double = 150.0,
+    val daysPerMonth: Double = 26.0,
+    val auto: Boolean = true,
+) {
+    val monthKm: Double
+        get() = if (kmPerDay > 0 && daysPerMonth > 0) kmPerDay * daysPerMonth else 0.0
+
+    /** R$/km de [amount] digitado em [unit]. Custo do mês sem km na base = 0. */
+    fun perKm(amount: Double, unit: CostUnit): Double = when (unit) {
+        CostUnit.PER_KM -> amount
+        CostUnit.PER_MONTH -> if (monthKm > 0) amount / monthKm else 0.0
+    }
+
+    /** R$/mês de [amount] digitado em [unit] (R$/km × km do mês). */
+    fun perMonth(amount: Double, unit: CostUnit): Double = when (unit) {
+        CostUnit.PER_KM -> amount * monthKm
+        CostUnit.PER_MONTH -> amount
+    }
+}
+
+/** Custo criado pelo usuário (ex.: pneus, seguro, aluguel do carro): [amount] em [unit]. */
+data class ExtraKmCost(val name: String, val amount: Double, val unit: CostUnit = CostUnit.PER_KM)
 
 /**
  * Custos do veículo usados para o lucro líquido. Preço e consumo na unidade de [fuelType] (litro ou kWh).
- * [extraCosts] = custos por km adicionados pelo usuário, somados ao [costPerKm].
+ * Manutenção, depreciação e [extraCosts] (custos adicionados pelo usuário) são digitados por km ou
+ * pelo total do mês; o do mês vira R$/km pela [kmBase]. Tudo somado no [costPerKm].
  */
 data class VehicleCostConfig(
     val fuelType: FuelType = FuelType.GASOLINE,
     val fuelPricePerUnit: Double = 6.00,
     val kmPerUnit: Double = 11.0,
-    val maintenancePerKm: Double = 0.15,
-    val depreciationPerKm: Double = 0.20,
+    val maintenance: Double = 0.15,
+    val depreciation: Double = 0.20,
     val extraCosts: List<ExtraKmCost> = emptyList(),
+    val maintenanceUnit: CostUnit = CostUnit.PER_KM,
+    val depreciationUnit: CostUnit = CostUnit.PER_KM,
+    val kmBase: KmBase = KmBase(),
 ) {
     val energyCostPerKm: Double
         get() = if (kmPerUnit > 0) fuelPricePerUnit / kmPerUnit else 0.0
 
+    val maintenancePerKm: Double
+        get() = kmBase.perKm(maintenance, maintenanceUnit)
+
+    val depreciationPerKm: Double
+        get() = kmBase.perKm(depreciation, depreciationUnit)
+
+    /** R$/km de um custo adicionado pelo usuário. */
+    fun perKmOf(cost: ExtraKmCost): Double = kmBase.perKm(cost.amount, cost.unit)
+
     val extraPerKm: Double
-        get() = extraCosts.sumOf { it.perKm }
+        get() = extraCosts.sumOf { perKmOf(it) }
+
+    /** true = algum custo foi digitado pelo total do mês (depende da [kmBase]). */
+    val usesMonthly: Boolean
+        get() = maintenanceUnit == CostUnit.PER_MONTH || depreciationUnit == CostUnit.PER_MONTH ||
+            extraCosts.any { it.unit == CostUnit.PER_MONTH }
 
     val costPerKm: Double
         get() = energyCostPerKm + maintenancePerKm + depreciationPerKm + extraPerKm
 }
 
-/** Grava/lê [ExtraKmCost] em texto (uma linha por custo). */
+/**
+ * Grava/lê [ExtraKmCost] em texto (uma linha por custo). "v1" = versão antiga, sempre por km;
+ * "v2" leva a unidade.
+ */
 object ExtraKmCostCodec {
     private const val SEP = "\t"
 
     fun encode(costs: List<ExtraKmCost>): String =
         costs.joinToString("\n") { c ->
-            listOf("v1", c.name.replace(Regex("[\t\n\r]"), " ").trim(), c.perKm).joinToString(SEP)
+            listOf("v2", c.name.replace(Regex("[\t\n\r]"), " ").trim(), c.amount, c.unit.name).joinToString(SEP)
         }
 
     /** Linhas inválidas são ignoradas (não derrubam as outras). */
@@ -127,9 +183,16 @@ object ExtraKmCostCodec {
         if (text.isNullOrBlank()) return emptyList()
         return text.split('\n').mapNotNull { row ->
             val c = row.split(SEP)
-            if (c.size < 3 || c[0] != "v1") return@mapNotNull null
-            val perKm = c[2].toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return@mapNotNull null
-            ExtraKmCost(c[1], perKm)
+            if (c.size < 3) return@mapNotNull null
+            val amount = c[2].toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return@mapNotNull null
+            when (c[0]) {
+                "v1" -> ExtraKmCost(c[1], amount, CostUnit.PER_KM)
+                "v2" -> {
+                    val unit = CostUnit.entries.firstOrNull { it.name == c.getOrNull(3) } ?: return@mapNotNull null
+                    ExtraKmCost(c[1], amount, unit)
+                }
+                else -> null
+            }
         }
     }
 }

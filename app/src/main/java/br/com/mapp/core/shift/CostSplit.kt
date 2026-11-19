@@ -5,7 +5,8 @@ import java.text.Normalizer
 
 /**
  * Um item do custo/km do carro (Financeiro → Custos fixos): combustível (ou energia), manutenção,
- * depreciação ou um custo por km adicionado pelo motorista (pneus, seguro, IPVA...).
+ * depreciação ou um custo adicionado pelo motorista (pneus, seguro, IPVA...), sempre em R$/km
+ * (custo digitado pelo total do mês já convertido pela base de km).
  */
 data class CostPart(val name: String, val perKm: Double)
 
@@ -59,7 +60,7 @@ object CostSplit {
         add(CostPart(if (cfg.fuelType.isElectric) ENERGY else FUEL, cfg.energyCostPerKm))
         add(CostPart(MAINTENANCE, cfg.maintenancePerKm))
         add(CostPart(DEPRECIATION, cfg.depreciationPerKm))
-        cfg.extraCosts.forEach { add(CostPart(it.name.trim().ifEmpty { EXTRA }, it.perKm)) }
+        cfg.extraCosts.forEach { add(CostPart(it.name.trim().ifEmpty { EXTRA }, cfg.perKmOf(it))) }
     }
 
     /**

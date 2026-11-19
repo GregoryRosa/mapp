@@ -2,9 +2,11 @@ package br.com.mapp.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import br.com.mapp.core.model.CostUnit
 import br.com.mapp.core.model.ExtraKmCostCodec
 import br.com.mapp.core.model.FuelType
 import br.com.mapp.core.goal.WeekGoals
+import br.com.mapp.core.model.KmBase
 import br.com.mapp.core.model.VehicleCostConfig
 import br.com.mapp.core.repo.Goals
 import br.com.mapp.core.repo.VehicleRepository
@@ -37,6 +39,9 @@ private fun <T> observePrefs(
 
 private fun SharedPreferences.getDouble(key: String): Double? = getString(key, null)?.toDoubleOrNull()
 
+private fun SharedPreferences.getUnit(key: String): CostUnit? =
+    getString(key, null)?.let { name -> CostUnit.entries.firstOrNull { it.name == name } }
+
 private fun SharedPreferences.Editor.putDouble(key: String, value: Double?): SharedPreferences.Editor =
     if (value == null) remove(key) else putString(key, value.toString())
 
@@ -51,9 +56,16 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
                 ?.let { name -> FuelType.entries.firstOrNull { it.name == name } } ?: d.fuelType,
             fuelPricePerUnit = getDouble(FUEL) ?: d.fuelPricePerUnit,
             kmPerUnit = getDouble(KM_PER_LITER) ?: d.kmPerUnit,
-            maintenancePerKm = getDouble(MAINTENANCE) ?: d.maintenancePerKm,
-            depreciationPerKm = getDouble(DEPRECIATION) ?: d.depreciationPerKm,
+            maintenance = getDouble(MAINTENANCE) ?: d.maintenance,
+            depreciation = getDouble(DEPRECIATION) ?: d.depreciation,
             extraCosts = ExtraKmCostCodec.decode(getString(EXTRA_COSTS, null)),
+            maintenanceUnit = getUnit(MAINTENANCE_UNIT) ?: d.maintenanceUnit,
+            depreciationUnit = getUnit(DEPRECIATION_UNIT) ?: d.depreciationUnit,
+            kmBase = KmBase(
+                kmPerDay = getDouble(BASE_KM_PER_DAY) ?: d.kmBase.kmPerDay,
+                daysPerMonth = getDouble(BASE_DAYS) ?: d.kmBase.daysPerMonth,
+                auto = getBoolean(BASE_AUTO, d.kmBase.auto),
+            ),
         )
     }
 
@@ -63,9 +75,14 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
                 .putString(FUEL_TYPE, config.fuelType.name)
                 .putDouble(FUEL, config.fuelPricePerUnit)
                 .putDouble(KM_PER_LITER, config.kmPerUnit)
-                .putDouble(MAINTENANCE, config.maintenancePerKm)
-                .putDouble(DEPRECIATION, config.depreciationPerKm)
+                .putDouble(MAINTENANCE, config.maintenance)
+                .putDouble(DEPRECIATION, config.depreciation)
                 .putString(EXTRA_COSTS, ExtraKmCostCodec.encode(config.extraCosts))
+                .putString(MAINTENANCE_UNIT, config.maintenanceUnit.name)
+                .putString(DEPRECIATION_UNIT, config.depreciationUnit.name)
+                .putDouble(BASE_KM_PER_DAY, config.kmBase.kmPerDay)
+                .putDouble(BASE_DAYS, config.kmBase.daysPerMonth)
+                .putBoolean(BASE_AUTO, config.kmBase.auto)
                 .commit()
         }
     }
@@ -74,12 +91,18 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
         const val FILE = "vehicle_cost"
         const val FUEL_TYPE = "fuel_type"
 
-        // Chaves antigas mantidas (valem por litro ou por kWh conforme o tipo).
+        // Chaves antigas mantidas (valem por litro ou por kWh conforme o tipo; manutenção e
+        // depreciação guardam o valor digitado, na unidade de MAINTENANCE_UNIT/DEPRECIATION_UNIT).
         const val FUEL = "fuel_price_per_liter"
         const val KM_PER_LITER = "km_per_liter"
         const val MAINTENANCE = "maintenance_per_km"
         const val DEPRECIATION = "depreciation_per_km"
         const val EXTRA_COSTS = "extra_costs_per_km"
+        const val MAINTENANCE_UNIT = "maintenance_unit"
+        const val DEPRECIATION_UNIT = "depreciation_unit"
+        const val BASE_KM_PER_DAY = "base_km_per_day"
+        const val BASE_DAYS = "base_days_per_month"
+        const val BASE_AUTO = "base_auto"
     }
 }
 

@@ -23,7 +23,7 @@ import java.time.ZoneId
 import java.time.ZonedDateTime
 
 class RideNoticeTest {
-    private val cost = VehicleCostConfig(fuelPricePerUnit = 6.0, kmPerUnit = 12.0, maintenancePerKm = 0.1, depreciationPerKm = 0.1)
+    private val cost = VehicleCostConfig(fuelPricePerUnit = 6.0, kmPerUnit = 12.0, maintenance = 0.1, depreciation = 0.1)
     private val profile = FilterProfile(minPerKm = 1.5, goodPerKm = 2.0, minPerHour = 30.0, goodPerHour = 45.0, maxPickupKm = 4.0)
     private val sp: ZoneId = ZoneId.of("America/Sao_Paulo")
     /** 14/11/2026 14:16 em São Paulo. */
