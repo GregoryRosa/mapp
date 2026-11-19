@@ -84,6 +84,7 @@ import br.com.mapp.core.nav.NavApp
 import br.com.mapp.core.nav.NavHold
 import br.com.mapp.core.nav.NavLinkState
 import br.com.mapp.overlay.NavLinkActivity
+import br.com.mapp.overlay.NavRelay
 import br.com.mapp.overlay.OverlayPrefs
 import br.com.mapp.overlay.OverlayService
 import br.com.mapp.overlay.ShiftTracker
@@ -248,7 +249,7 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                 }
             }
 
-            WazeHoldCard(refresh)
+            NavHoldCard(refresh)
 
             // Diagnóstico do leitor. O cartão da oferta da Uber só é lido pela IMAGEM da tela (OCR):
             // quando essa leitura falha, nada aparece e o resto do app parece normal (as telas de
@@ -282,28 +283,28 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
 }
 
 /**
- * Atraso do Waze ([NavHold]): liga/desliga, espera máxima, situação no Android e botão Testar (faz o
- * Android perguntar quem abre os links do Waze). [refresh] muda ao voltar das Configurações/do Waze.
+ * Atraso da navegação ([NavHold]): liga/desliga, app que abre a rota (Waze ou Google Maps), situação dos
+ * links de cada app no Android com o botão Testar (faz o Android perguntar quem abre os links), espera
+ * máxima e trazer a Uber. [refresh] muda ao voltar das Configurações/da navegação.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun WazeHoldCard(refresh: Int) {
+private fun NavHoldCard(refresh: Int) {
     val ctx = LocalContext.current
     var on by remember { mutableStateOf(OverlayPrefs.isNavHoldOn(ctx)) }
     var delay by remember { mutableLongStateOf(OverlayPrefs.navHoldMs(ctx)) }
     var bring by remember { mutableStateOf(OverlayPrefs.isNavBringOn(ctx)) }
     var navApp by remember { mutableStateOf(OverlayPrefs.navApp(ctx)) }
-    val mapsInstalled = remember(refresh) {
-        ctx.packageManager.getLaunchIntentForPackage(NavApp.GOOGLE_MAPS.packageName) != null
-    }
-    val state = remember(on, refresh) {
+    val installed = remember(refresh) { NavRelay.installedApps(ctx) }
+    val states = remember(on, refresh) {
         NavLinkActivity.sync(ctx)
-        NavLinkActivity.state(ctx)
+        NavApp.entries.associateWith { NavLinkActivity.state(ctx, it) }
     }
+    val opens = NavHold.resolveApp(navApp, installed, navApp)
     GlassCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("🧭 Segurar o Waze", style = MaterialTheme.typography.titleMedium)
+                Text("🧭 Segurar a navegação", style = MaterialTheme.typography.titleMedium)
                 Text(
                     "Para não perder a corrida aceita na fila",
                     style = MaterialTheme.typography.bodySmall,
@@ -321,15 +322,15 @@ private fun WazeHoldCard(refresh: Int) {
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            NavHold.message(state, delay, NavHold.resolveApp(navApp, mapsInstalled)),
+            NavHold.message(states, delay, opens),
             style = MaterialTheme.typography.bodySmall,
-            color = when (state) {
-                NavLinkState.READY -> MappColors.Profit
-                NavLinkState.ASK, NavLinkState.WAZE_DEFAULT -> MappColors.Warn
+            color = when {
+                states.values.any { it == NavLinkState.READY } -> MappColors.Profit
+                on && installed.isNotEmpty() -> MappColors.Warn
                 else -> MappColors.TextDim
             },
         )
-        if (on && state != NavLinkState.NO_WAZE) {
+        if (on && installed.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
             Text("Abrir a rota no", style = MaterialTheme.typography.labelMedium, color = MappColors.Text)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -345,17 +346,40 @@ private fun WazeHoldCard(refresh: Int) {
                 }
             }
             Text(
-                when {
-                    navApp == NavApp.GOOGLE_MAPS && !mapsInstalled ->
-                        "⚠️ Google Maps não instalado: a rota continua indo para o Waze."
-                    navApp == NavApp.GOOGLE_MAPS ->
-                        "Deixe a Uber com o Waze como app de navegação: o MApp recebe a rota e abre no Google Maps, " +
-                            "no mesmo destino."
-                    else -> "A rota abre no Waze, como a Uber pediu."
+                if (navApp !in installed) {
+                    "⚠️ ${navApp.label} não instalado: a rota vai para o ${opens.label}."
+                } else {
+                    "Vale com a Uber no Waze ou no Google Maps: o MApp recebe a rota e abre no ${navApp.label}, " +
+                        "no mesmo destino."
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = if (navApp == NavApp.GOOGLE_MAPS && !mapsInstalled) MappColors.Warn else MappColors.TextDim,
+                color = if (navApp !in installed) MappColors.Warn else MappColors.TextDim,
             )
+            Spacer(Modifier.height(10.dp))
+            Text("Links que passam pelo MApp", style = MaterialTheme.typography.labelMedium, color = MappColors.Text)
+            NavApp.entries.forEach { app ->
+                val st = states[app] ?: NavLinkState.OFF
+                Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(app.label, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            NavHold.linkMessage(st, app),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = when (st) {
+                                NavLinkState.READY -> MappColors.Profit
+                                NavLinkState.ASK, NavLinkState.APP_DEFAULT -> MappColors.Warn
+                                else -> MappColors.TextDim
+                            },
+                        )
+                    }
+                    if (st == NavLinkState.APP_DEFAULT) {
+                        TextButton(onClick = { NavLinkActivity.openAppSettings(ctx, app) }) { Text("Ajustar", color = MappColors.Teal) }
+                    }
+                    if (st != NavLinkState.NOT_INSTALLED) {
+                        OutlinedButton(onClick = { NavLinkActivity.test(ctx, app) }) { Text("Testar") }
+                    }
+                }
+            }
             Spacer(Modifier.height(10.dp))
             Text("Esperar no máximo", style = MaterialTheme.typography.labelMedium, color = MappColors.Text)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -372,18 +396,18 @@ private fun WazeHoldCard(refresh: Int) {
             }
             Text(
                 "Normalmente abre antes: assim que o MApp lê a tela da corrida. Só segura com o copiloto ligado; " +
-                    "cada vez fica no Registro (Jornadas → Registro) como \"🧭 Waze\".",
+                    "cada vez fica no Registro (Jornadas → Registro) como \"🧭 Waze\" ou \"🧭 Google Maps\".",
                 style = MaterialTheme.typography.bodySmall,
                 color = MappColors.TextDim,
             )
             Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Trazer a Uber quando eu estiver no Waze", style = MaterialTheme.typography.bodyMedium)
+                    Text("Trazer a Uber quando eu estiver na navegação", style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        "Se a chamada chegar com o Waze na frente, a Uber manda a rota direto e a tela dela nem " +
-                            "aparece. Ligado, o MApp abre a Uber por um instante (como tocar no ícone dela), lê a " +
-                            "corrida e então manda a rota ao Waze.",
+                        "Se a chamada chegar com o Waze ou o Google Maps na frente, a Uber manda a rota direto e a " +
+                            "tela dela nem aparece. Ligado, o MApp abre a Uber por um instante (como tocar no ícone " +
+                            "dela), lê a corrida e então abre a rota no ${opens.label}.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MappColors.TextDim,
                     )
@@ -395,13 +419,6 @@ private fun WazeHoldCard(refresh: Int) {
                         OverlayPrefs.setNavBringOn(ctx, it)
                     },
                 )
-            }
-            Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { NavLinkActivity.test(ctx) }) { Text("Testar") }
-                if (state == NavLinkState.WAZE_DEFAULT) {
-                    TextButton(onClick = { NavLinkActivity.openWazeSettings(ctx) }) { Text("Ajustar", color = MappColors.Teal) }
-                }
             }
         }
     }

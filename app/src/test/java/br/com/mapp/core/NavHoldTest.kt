@@ -40,10 +40,82 @@ class NavHoldTest {
         assertEquals("", bare.rawQuery)
     }
 
-    @Test fun nao_e_link_do_waze() {
+    @Test fun nao_e_link_de_navegacao() {
         assertNull(NavHold.parse(null))
-        assertNull(NavHold.parse("google.navigation:q=-23.5,-46.6"))
         assertNull(NavHold.parse("https://maps.google.com/?q=1,2"))
+        assertNull(NavHold.parse("https://example.com/?ll=1,2"))
+    }
+
+    @Test fun le_os_links_do_google_maps() {
+        val nav = NavHold.parse("google.navigation:q=-23.550520,-46.633308&mode=d")!!
+        assertEquals(NavApp.GOOGLE_MAPS, nav.origin)
+        assertEquals(-23.550520, nav.lat!!, 1e-9)
+        assertEquals(-46.633308, nav.lon!!, 1e-9)
+        assertTrue(nav.navigate)
+        assertEquals("google.navigation:q=-23.550520,-46.633308&mode=d", nav.link)
+        val address = NavHold.parse("google.navigation:?q=Pra%C3%A7a+da+S%C3%A9")!!
+        assertEquals("Praça da Sé", address.query)
+        assertNull(address.lat)
+        assertEquals(-23.5, NavHold.parse("google.navigation:ll=-23.5,-46.6")!!.lat!!, 1e-9)
+        // geo: mostra o ponto (não navega).
+        val geo = NavHold.parse("geo:-23.5,-46.6")!!
+        assertEquals(NavApp.GOOGLE_MAPS, geo.origin)
+        assertEquals(-46.6, geo.lon!!, 1e-9)
+        assertFalse(geo.navigate)
+        // Ponto marcado com nome: vale o do q.
+        val marked = NavHold.parse("geo:0,0?q=-23.55,-46.63(Pra%C3%A7a%20da%20S%C3%A9)")!!
+        assertEquals(-23.55, marked.lat!!, 1e-9)
+        assertNull(marked.query)
+        // Endereço procurado perto de um ponto: o destino é o endereço.
+        val near = NavHold.parse("geo:-23.5,-46.6?q=Rua+Augusta+100")!!
+        assertEquals("Rua Augusta 100", near.query)
+        assertNull(near.lat)
+        // geo:0,0 sem q = sem destino.
+        assertNull(NavHold.parse("geo:0,0")!!.lat)
+        assertTrue(NavHold.parse(NavHold.MAPS_TEST_URI)!!.test)
+        assertEquals(NavApp.GOOGLE_MAPS, NavHold.parse(NavHold.MAPS_TEST_URI)!!.origin)
+    }
+
+    @Test fun link_do_google_maps_vai_para_o_app_escolhido() {
+        val nav = NavHold.parse("google.navigation:q=-23.55052,-46.63331&mode=d")!!
+        // Google Maps escolhido: o link segue como chegou.
+        assertEquals("google.navigation:q=-23.55052,-46.63331&mode=d", NavHold.target(nav, NavApp.GOOGLE_MAPS))
+        // Waze escolhido: mesmo destino, já navegando.
+        assertEquals("waze://?ll=-23.550520,-46.633310&navigate=yes", NavHold.target(nav, NavApp.WAZE))
+        assertEquals("waze://?ll=-23.500000,-46.600000", NavHold.target(NavHold.parse("geo:-23.5,-46.6")!!, NavApp.WAZE))
+        assertEquals(
+            "waze://?q=Pra%C3%A7a%20da%20S%C3%A9&navigate=yes",
+            NavHold.target(NavHold.parse("google.navigation:q=Pra%C3%A7a+da+S%C3%A9")!!, NavApp.WAZE),
+        )
+        assertEquals("https://waze.com/ul?ll=-23.550520,-46.633310&navigate=yes", NavHold.webUrl(nav))
+        // Sem destino (botão Testar): só abre o app.
+        assertNull(NavHold.target(NavHold.parse(NavHold.MAPS_TEST_URI)!!, NavApp.WAZE))
+        assertNull(NavHold.target(NavHold.parse(NavHold.MAPS_TEST_URI)!!, NavApp.GOOGLE_MAPS))
+        assertEquals(
+            "🧭 Google Maps pedido por Uber: -23.55052,-46.63331 · navegar · segurando até 2 s · rota no Waze",
+            NavHold.describe(nav, uber, HoldPlan(2_000, ""), NavApp.WAZE),
+        )
+        assertEquals(
+            "🧭 Google Maps pedido por Uber: -23.55052,-46.63331 · navegar · segurando até 2 s",
+            NavHold.describe(nav, uber, HoldPlan(2_000, "")),
+        )
+    }
+
+    @Test fun pedido_de_outro_app_vai_para_o_app_do_link() {
+        val geo = NavHold.parse("geo:-23.5,-46.6")!!
+        val both = setOf(NavApp.WAZE, NavApp.GOOGLE_MAPS)
+        // Endereço aberto pelo WhatsApp: vai para o Google Maps, mesmo com o Waze escolhido — e mesmo com o copiloto parado.
+        val other = NavHold.plan(true, 2_000, false, true, "com.whatsapp", own, false)
+        assertTrue(other.passThrough)
+        assertEquals("pedido de outro app", other.reason)
+        assertEquals(NavApp.GOOGLE_MAPS, NavHold.chooseApp(geo, other, NavApp.WAZE, both))
+        // Pedido da Uber: o escolhido.
+        val ride = NavHold.plan(true, 2_000, true, true, uber, own, false)
+        assertFalse(ride.passThrough)
+        assertEquals(NavApp.WAZE, NavHold.chooseApp(geo, ride, NavApp.WAZE, both))
+        assertEquals(NavApp.WAZE, NavHold.chooseApp(geo, NavHold.plan(true, 2_000, false, true, uber, own, false), NavApp.WAZE, both))
+        assertTrue(NavHold.plan(true, 2_000, true, true, own, own, false).passThrough)
+        assertFalse(NavHold.plan(true, 2_000, true, true, uber, own, true).passThrough)
     }
 
     @Test fun coordenada_impossivel_e_ignorada() {
@@ -128,13 +200,26 @@ class NavHoldTest {
 
     @Test fun situacao_do_padrao_no_android() {
         assertEquals(NavLinkState.OFF, NavHold.state(false, true, own, own))
-        assertEquals(NavLinkState.NO_WAZE, NavHold.state(true, false, null, own))
+        assertEquals(NavLinkState.NOT_INSTALLED, NavHold.state(true, false, null, own))
         assertEquals(NavLinkState.READY, NavHold.state(true, true, own, own))
-        assertEquals(NavLinkState.WAZE_DEFAULT, NavHold.state(true, true, NavHold.WAZE_PACKAGE, own))
+        assertEquals(NavLinkState.APP_DEFAULT, NavHold.state(true, true, NavHold.WAZE_PACKAGE, own))
         assertEquals(NavLinkState.ASK, NavHold.state(true, true, "android", own))
         assertEquals(NavLinkState.ASK, NavHold.state(true, true, null, own))
-        assertTrue(NavHold.message(NavLinkState.ASK, 2_000).contains("MApp → Sempre"))
-        assertTrue(NavHold.message(NavLinkState.READY, 1_500).contains("1,5 s"))
+        val maps = NavApp.GOOGLE_MAPS
+        assertEquals(NavLinkState.APP_DEFAULT, NavHold.state(true, true, maps.packageName, own, maps))
+        assertEquals(NavLinkState.ASK, NavHold.state(true, true, NavHold.WAZE_PACKAGE, own, maps))
+        assertEquals(NavLinkState.READY, NavHold.state(true, true, own, own, maps))
+        assertTrue(NavHold.linkMessage(NavLinkState.ASK, maps).contains("MApp → Sempre"))
+        assertTrue(NavHold.linkMessage(NavLinkState.APP_DEFAULT, maps).contains("O Google Maps está como padrão"))
+        val ask = mapOf(NavApp.WAZE to NavLinkState.ASK, maps to NavLinkState.ASK)
+        assertTrue(NavHold.message(ask, 2_000).contains("MApp → Sempre"))
+        val ready = mapOf(NavApp.WAZE to NavLinkState.NOT_INSTALLED, maps to NavLinkState.READY)
+        assertTrue(NavHold.message(ready, 1_500, maps).contains("1,5 s"))
+        assertTrue(NavHold.message(ready, 1_500, maps).contains("quando a Uber abrir o Google Maps,"))
+        val off = mapOf(NavApp.WAZE to NavLinkState.OFF, maps to NavLinkState.OFF)
+        assertTrue(NavHold.message(off, 2_000).contains("Ligue"))
+        val none = mapOf(NavApp.WAZE to NavLinkState.NOT_INSTALLED, maps to NavLinkState.NOT_INSTALLED)
+        assertTrue(NavHold.message(none, 2_000).contains("Nem o Waze nem o Google Maps"))
     }
 
     @Test fun textos_do_registro() {
@@ -174,10 +259,14 @@ class NavHoldTest {
         assertEquals(NavApp.WAZE, NavApp.fromId(null))
         assertEquals(NavApp.WAZE, NavApp.fromId("xpto"))
         assertEquals(NavApp.GOOGLE_MAPS, NavApp.fromId(NavApp.GOOGLE_MAPS.id))
+        val both = setOf(NavApp.WAZE, NavApp.GOOGLE_MAPS)
         // Google Maps escolhido mas desinstalado: a rota vai para o Waze, nunca fica sem navegação.
-        assertEquals(NavApp.WAZE, NavHold.resolveApp(NavApp.GOOGLE_MAPS, mapsInstalled = false))
-        assertEquals(NavApp.GOOGLE_MAPS, NavHold.resolveApp(NavApp.GOOGLE_MAPS, mapsInstalled = true))
-        assertEquals(NavApp.WAZE, NavHold.resolveApp(NavApp.WAZE, mapsInstalled = true))
+        assertEquals(NavApp.WAZE, NavHold.resolveApp(NavApp.GOOGLE_MAPS, setOf(NavApp.WAZE)))
+        assertEquals(NavApp.GOOGLE_MAPS, NavHold.resolveApp(NavApp.GOOGLE_MAPS, both))
+        assertEquals(NavApp.WAZE, NavHold.resolveApp(NavApp.WAZE, both))
+        // Só o Google Maps instalado (Uber no Google Maps, Waze escolhido): vai para o Google Maps.
+        assertEquals(NavApp.GOOGLE_MAPS, NavHold.resolveApp(NavApp.WAZE, setOf(NavApp.GOOGLE_MAPS), NavApp.GOOGLE_MAPS))
+        assertEquals(NavApp.GOOGLE_MAPS, NavHold.resolveApp(NavApp.WAZE, setOf(NavApp.GOOGLE_MAPS)))
         val r = NavHold.parse("waze://?ll=-23.55052,-46.63331&navigate=yes")!!
         assertEquals(
             "🧭 Waze pedido por Uber: -23.55052,-46.63331 · navegar · segurando até 2 s · rota no Google Maps",
@@ -187,7 +276,9 @@ class NavHoldTest {
             "🧭 Google Maps aberto depois de 1,4 s · tempo esgotado (0 leituras da tela)",
             NavHold.describeRelease(1_400, ReleaseReason.TIMEOUT, 0, NavApp.GOOGLE_MAPS),
         )
-        assertTrue(NavHold.message(NavLinkState.READY, 2_000, NavApp.GOOGLE_MAPS).contains("abre o Google Maps"))
+        val ready = mapOf(NavApp.WAZE to NavLinkState.READY, NavApp.GOOGLE_MAPS to NavLinkState.READY)
+        assertTrue(NavHold.message(ready, 2_000, NavApp.GOOGLE_MAPS).contains("abrir o Waze ou o Google Maps"))
+        assertTrue(NavHold.message(ready, 2_000, NavApp.GOOGLE_MAPS).contains("abre o Google Maps"))
     }
 
     @Test fun tempos_e_site_do_waze() {
