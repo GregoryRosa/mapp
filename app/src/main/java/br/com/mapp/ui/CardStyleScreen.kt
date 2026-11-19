@@ -302,7 +302,7 @@ private fun OfferCardTab() {
                     widthDp = CARD_MEDIA_WIDTH_DP,
                     photoView = photoView,
                     hint = if (OverlayPrefs.streetViewEnabled(ctx)) {
-                        "No Card: toque numa foto troca foto da rua ⇄ satélite; segure para ela ocupar a área toda. " +
+                        "No Card: toque no mapa ou numa foto para ver em tela cheia (novo toque volta); segure uma foto para trocar rua ⇄ satélite. " +
                             "O satélite vem no formato do quadro."
                     } else {
                         "Sem as fotos ligadas e a chave do Google (Fotos da rua e satélite, acima) só o mapa aparece: " +
@@ -1094,7 +1094,7 @@ private fun StreetViewCard(view: PhotoView, onView: (PhotoView) -> Unit) {
             SwitchRow(
                 title = "Fotos da rua e satélite",
                 subtitle = "Coleta (A) e destino, no lugar escolhido em Mapa e fotos (abaixo). " +
-                    "Toque numa foto para trocar entre foto da rua e satélite; segure para ampliar.",
+                    "Toque numa foto para ver em tela cheia; segure para trocar entre foto da rua e satélite.",
                 checked = on,
                 onChange = { on = it; OverlayPrefs.setStreetViewOn(ctx, it) },
             )
