@@ -12,12 +12,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -26,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -38,8 +46,14 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.com.mapp.MappApp
@@ -159,6 +173,25 @@ private fun VehicleForm(
         }
     }
     var nextKey by remember(initial) { mutableStateOf(initial.extraCosts.size) }
+    // Diálogo do nome: null = fechado, NEW_COST = custo novo, outro = key da linha a renomear.
+    var naming by remember { mutableStateOf<Int?>(null) }
+    naming?.let { target ->
+        val index = extras.indexOfFirst { it.key == target }
+        CostNameDialog(
+            title = if (target == NEW_COST) "Novo custo" else "Renomear custo",
+            confirm = if (target == NEW_COST) "Adicionar" else "Salvar",
+            initial = extras.getOrNull(index)?.name.orEmpty(),
+            onConfirm = { name ->
+                if (target == NEW_COST) {
+                    extras.add(ExtraRow(nextKey++, name, "", CostUnit.PER_MONTH))
+                } else if (index >= 0) {
+                    extras[index] = extras[index].copy(name = name)
+                }
+                naming = null
+            },
+            onDismiss = { naming = null },
+        )
+    }
 
     // Base dos custos do mês: média das jornadas encerradas (atualizada sozinha) ou digitada.
     var baseAuto by remember(initial) { mutableStateOf(initial.kmBase.auto) }
@@ -266,32 +299,24 @@ private fun VehicleForm(
         )
 
         Text("Outros custos", style = MaterialTheme.typography.labelLarge)
+        // O nome fica no rótulo do campo, como Manutenção e Depreciação; ⋮ renomeia ou remove.
         extras.forEachIndexed { i, row ->
             key(row.key) {
-                Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = row.name,
-                            onValueChange = { extras[i] = row.copy(name = it) },
-                            label = { Text("Nome") },
-                            placeholder = { Text("Ex.: seguro") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
+                CostInput(
+                    row.name.trim().ifEmpty { CostSplit.EXTRA }, row.value, { extras[i] = row.copy(value = it) }, row.unit,
+                    { u -> extras[i] = row.copy(value = convert(row.value, row.unit, u), unit = u) }, shownBase,
+                    trailingIcon = {
+                        ExtraCostMenu(
+                            onRename = { naming = row.key },
+                            onRemove = { extras.removeAt(i) },
                         )
-                        IconButton(onClick = { extras.removeAt(i) }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Remover custo")
-                        }
-                    }
-                    CostInput(
-                        "Valor", row.value, { extras[i] = row.copy(value = it) }, row.unit,
-                        { u -> extras[i] = row.copy(value = convert(row.value, row.unit, u), unit = u) }, shownBase,
-                    )
-                }
+                    },
+                )
             }
         }
         OutlinedButton(
-            // Custo novo já vem pelo total do mês (seguro, IPVA, aluguel...).
-            onClick = { extras.add(ExtraRow(nextKey++, "", "", CostUnit.PER_MONTH)) },
+            // Pede o nome antes; o custo novo já vem pelo total do mês (seguro, IPVA, aluguel...).
+            onClick = { naming = NEW_COST },
             modifier = Modifier.fillMaxWidth(),
         ) {
             Icon(Icons.Filled.Add, contentDescription = null)
@@ -398,10 +423,11 @@ private fun CostInput(
     unit: CostUnit,
     onUnit: (CostUnit) -> Unit,
     base: KmBase,
+    trailingIcon: (@Composable () -> Unit)? = null,
 ) {
     Column {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            NumberField(label, value, onValue, Modifier.weight(1f), suffix = unit.suffix)
+            NumberField(label, value, onValue, Modifier.weight(1f), suffix = unit.suffix, trailingIcon = trailingIcon)
             FilterChip(
                 selected = unit == CostUnit.PER_MONTH,
                 onClick = { onUnit(CostUnit.PER_MONTH) },
@@ -430,6 +456,67 @@ private fun CostInput(
             )
         }
     }
+}
+
+/** Marca do diálogo de nome para "custo novo" (as linhas usam key ≥ 0). */
+private const val NEW_COST = -1
+
+/** ⋮ dentro do campo de um custo extra: renomear ou remover. */
+@Composable
+private fun ExtraCostMenu(onRename: () -> Unit, onRemove: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) {
+            Icon(Icons.Filled.MoreVert, contentDescription = "Opções do custo")
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text("Renomear") },
+                leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                onClick = { open = false; onRename() },
+            )
+            DropdownMenuItem(
+                text = { Text("Remover") },
+                leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+                onClick = { open = false; onRemove() },
+            )
+        }
+    }
+}
+
+/** Nome do custo extra (vira o rótulo do campo de valor). */
+@Composable
+private fun CostNameDialog(
+    title: String,
+    confirm: String,
+    initial: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by remember { mutableStateOf(TextFieldValue(initial, TextRange(initial.length))) }
+    val focus = remember { FocusRequester() }
+    val ok = name.text.isNotBlank()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Nome") },
+                placeholder = { Text("Ex.: seguro, IPVA, financiamento") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { if (ok) onConfirm(name.text.trim()) }),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(name.text.trim()) }, enabled = ok) { Text(confirm) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
+    )
+    LaunchedEffect(Unit) { focus.requestFocus() }
 }
 
 /** Km rodados no mês: média das jornadas (padrão, atualizada sozinha) ou digitada. */

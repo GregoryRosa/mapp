@@ -158,15 +158,17 @@ internal fun NumberField(
     modifier: Modifier = Modifier,
     suffix: String? = null,
     integer: Boolean = false,
+    trailingIcon: (@Composable () -> Unit)? = null,
 ) {
     val invalid = value.isNotBlank() && Format.parse(value) == null
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        label = { Text(label) },
+        label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         singleLine = true,
         isError = invalid,
         suffix = if (suffix != null) { { Text(suffix) } } else null,
+        trailingIcon = trailingIcon,
         supportingText = if (invalid) { { Text("Número inválido") } } else null,
         keyboardOptions = KeyboardOptions(keyboardType = if (integer) KeyboardType.Number else KeyboardType.Decimal),
         modifier = modifier.fillMaxWidth(),
