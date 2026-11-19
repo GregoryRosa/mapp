@@ -47,6 +47,7 @@ import br.com.mapp.core.repo.OfferRecord
 import br.com.mapp.core.shift.ActiveRides
 import br.com.mapp.core.shift.CostPart
 import br.com.mapp.core.shift.CostSplit
+import br.com.mapp.core.shift.ManualRide
 import br.com.mapp.core.shift.Odometer
 import br.com.mapp.core.shift.PeriodMath
 import br.com.mapp.core.shift.PeriodTotals
@@ -284,6 +285,13 @@ class OverlayService : LifecycleService() {
             )
             return RideActivities(current?.toActivity(), next?.toActivity(), location?.lastKnown, zones)
         }
+
+        override fun rideState(): ManualRide.State =
+            ManualRide.state(ShiftTracker.current(this@OverlayService).value, matcher.openRides)
+
+        override fun finishRide() = closeRideManually(finished = true)
+
+        override fun cancelRide() = closeRideManually(finished = false)
 
         override fun markPin(type: ZoneType) {
             if (pinPending) return
@@ -714,6 +722,48 @@ class OverlayService : LifecycleService() {
 
     /** Quando o aviso de corrida iniciada tocou (para não repetir no mesmo aceite). */
     private var lastRideCueAt: Long? = null
+
+    /**
+     * **Encerrar corrida à mão** (seção "Corrida em andamento" do painel ⚙ do ícone "M"):
+     * [finished] = true → a corrida aberta mais antiga terminou e entra no ganho/lucro;
+     * false → a mais recente não aconteceu e sai da jornada (o caso do **+1 tocado sem querer**).
+     *
+     * Corrida que só o acompanhamento do aceite vê (aceita com a jornada fechada, "M" verde sem
+     * jornada) é fechada só nele — não há valor a somar em jornada nenhuma.
+     */
+    private fun closeRideManually(finished: Boolean) {
+        val shift = ShiftTracker.current(this).value
+        val pending = if (finished) shift?.nextToFinish else shift?.pendingTrip
+        if (pending != null) {
+            TripLog.add(this, "Painel: corrida ${if (finished) "finalizada" else "tirada"} à mão (${ShiftMath.money(pending.price)})")
+            if (finished) finishPending(auto = false) else cancelPending(auto = false)
+            return
+        }
+        if (matcher.openRides == 0) {
+            toast("Nenhuma corrida em andamento")
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (finished) {
+            matcher.closedOldest(now)
+        } else {
+            matcher.closedNewest(now)
+            // Tira a marca de aceita (aba "Aceitas hoje"), a notificação da rota e o menu Atividades.
+            countedOffer?.let { markAccepted(it, null) }
+            countedKey?.let { matcher.forget(it) }
+            countedOffer = null
+            countedKey = null
+        }
+        acceptedSinceFinish = false
+        saveTripMemory(force = true)
+        refreshCountButton()
+        pushShift()
+        TripLog.add(this, "Painel: corrida fora da jornada ${if (finished) "finalizada" else "tirada"} à mão")
+        tripToast(
+            if (finished) "Corrida finalizada ✓ (estava fora da jornada: nada a somar no lucro)"
+            else "Corrida tirada ✓ não estava na jornada",
+        )
+    }
 
     /** Corrida aceita que não aconteceu (✕ no painel, ou outra busca começou sem este embarque). */
     private fun cancelPending(auto: Boolean, platform: Platform? = null) {
