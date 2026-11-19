@@ -55,7 +55,7 @@ object OverlayPrefs {
     fun of(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
-    /** Atraso do Waze (tela inicial → Segurar o Waze): padrão desligado. Ligar/desligar também liga o atalho (`NavLinkActivity.setEnabled`). */
+    /** Atraso da navegação (tela inicial → Segurar a navegação): padrão desligado. Ligar/desligar também liga o atalho (`NavLinkActivity.setEnabled`). */
     fun isNavHoldOn(context: Context): Boolean = of(context).getBoolean(KEY_NAV_HOLD_ON, false)
 
     fun setNavHoldOn(context: Context, on: Boolean) {
@@ -63,8 +63,8 @@ object OverlayPrefs {
     }
 
     /**
-     * Atraso do Waze com o motorista já no Waze: abrir a Uber para ler a corrida antes de mandar a rota
-     * ao Waze (padrão: ligado; só vale com o atraso ligado).
+     * Atraso da navegação com o motorista já no Waze/Google Maps: abrir a Uber para ler a corrida antes de
+     * mandar a rota (padrão: ligado; só vale com o atraso ligado).
      */
     fun isNavBringOn(context: Context): Boolean = of(context).getBoolean(KEY_NAV_BRING_ON, true)
 
@@ -79,7 +79,7 @@ object OverlayPrefs {
         of(context).edit().putString(KEY_NAV_APP, app.id).apply()
     }
 
-    /** Espera máxima do Waze, em ms (um dos [NavHold.DELAYS_MS]). */
+    /** Espera máxima da navegação, em ms (um dos [NavHold.DELAYS_MS]). */
     fun navHoldMs(context: Context): Long = NavHold.validDelay(of(context).getLong(KEY_NAV_HOLD_MS, NavHold.DEFAULT_DELAY_MS))
 
     fun setNavHoldMs(context: Context, ms: Long) {

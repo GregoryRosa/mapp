@@ -88,12 +88,12 @@ internal class NavWaiter(
 }
 
 /**
- * Atraso do Waze com o motorista **no Waze** quando a chamada chegou: a Uber manda a rota direto e a
- * tela dela nem aparece. A tela invisível ([NavLinkActivity]) abre a Uber (igual a tocar no ícone dela —
- * nada é tocado dentro do app) e entrega o pedido aqui; quando o leitor lê a corrida, o mesmo link vai
- * ao Waze. Fica fora da Activity porque ela fecha assim que a Uber cobre a tela.
+ * Atraso da navegação com o motorista **no Waze ou no Google Maps** quando a chamada chegou: a Uber
+ * manda a rota direto e a tela dela nem aparece. A tela invisível ([NavLinkActivity]) abre a Uber (igual
+ * a tocar no ícone dela — nada é tocado dentro do app) e entrega o pedido aqui; quando o leitor lê a
+ * corrida, a rota vai ao app escolhido. Fica fora da Activity porque ela fecha assim que a Uber cobre a tela.
  *
- * Abrir o Waze com o MApp em segundo plano é permitido pelo Android porque o leitor (serviço de
+ * Abrir a navegação com o MApp em segundo plano é permitido pelo Android porque o leitor (serviço de
  * Acessibilidade) está conectado — sem leitor o [NavHold.plan] nem chega a trazer a Uber.
  */
 object NavRelay {
@@ -111,7 +111,7 @@ object NavRelay {
 
     /**
      * Chamado logo depois de a Activity abrir [app]: espera até [holdMs] a leitura da corrida e então
-     * abre o Waze com [link]. Pedido anterior ainda esperando é liberado na hora (não se perde rota).
+     * abre a rota no app escolhido. Pedido anterior ainda esperando é liberado na hora (não se perde rota).
      */
     fun holdAfterBringing(
         ctx: Context,
@@ -126,7 +126,7 @@ object NavRelay {
         lastBringAt = SystemClock.elapsedRealtime()
         val next = NavWaiter(scope, holdMs) { reason, elapsed, reads ->
             waiter = null
-            val nav = navApp(appCtx)
+            val nav = navApp(appCtx, request)
             TripLog.add(appCtx, NavHold.describeRelease(elapsed, reason, reads, nav) + " · ${app.label} trazido para a frente")
             // O contexto do leitor conectado é o que garante abrir a navegação com o MApp em segundo plano.
             openNav(OfferAccessibilityService.windowContext.value ?: appCtx, nav, link, extras, request)
@@ -146,79 +146,62 @@ object NavRelay {
         }
     }
 
-    /**
-     * App que recebe a rota: o escolhido no cartão 🧭 (`OverlayPrefs.navApp`), ou o Waze se o Google
-     * Maps não estiver instalado.
-     */
-    fun navApp(ctx: Context): NavApp {
-        val mapsInstalled = ctx.packageManager.getLaunchIntentForPackage(NavApp.GOOGLE_MAPS.packageName) != null
-        return NavHold.resolveApp(OverlayPrefs.navApp(ctx), mapsInstalled)
-    }
+    /** Apps de navegação instalados. */
+    fun installedApps(ctx: Context): Set<NavApp> =
+        NavApp.entries.filter { ctx.packageManager.getLaunchIntentForPackage(it.packageName) != null }.toSet()
 
     /**
-     * Abre a rota em [app]. Waze: o mesmo [link] ([openWaze]). Google Maps: o destino convertido
-     * ([NavHold.target]); se não abrir, cai no Waze — a navegação não fica sem app.
+     * App que recebe a rota da corrida: o escolhido no cartão 🧭 (`OverlayPrefs.navApp`), ou o do próprio
+     * link / o outro, se o escolhido não estiver instalado.
+     */
+    fun navApp(ctx: Context, request: NavRequest?): NavApp =
+        NavHold.resolveApp(OverlayPrefs.navApp(ctx), installedApps(ctx), request?.origin ?: NavApp.WAZE)
+
+    /**
+     * Abre a rota em [app]: o link como chegou se ele já era desse app, senão o destino convertido
+     * ([NavHold.target]). Se não abrir, tenta o outro app e por fim o site do [app] — a navegação não
+     * fica sem app. Extras do pedido só vão para o app a que o link se destinava.
      */
     fun openNav(ctx: Context, app: NavApp, link: Uri?, extras: Bundle?, request: NavRequest?): Boolean {
-        if (app == NavApp.GOOGLE_MAPS && openMaps(ctx, request)) return true
-        return openWaze(ctx, link, extras, request)
-    }
-
-    private fun openMaps(ctx: Context, request: NavRequest?): Boolean {
-        val pkg = NavApp.GOOGLE_MAPS.packageName
-        val target = request?.let { NavHold.target(it, NavApp.GOOGLE_MAPS) }
-        val out = if (target != null) Intent(Intent.ACTION_VIEW, Uri.parse(target)) else ctx.packageManager.getLaunchIntentForPackage(pkg)
-        if (out != null) {
-            out.setPackage(pkg)
-            out.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val origin = request?.origin ?: NavHold.originOf(link?.toString()) ?: NavApp.WAZE
+        val order = listOf(app) + NavApp.entries.filter { it != app }
+        for (target in order) {
+            val uri = if (request != null) NavHold.target(request, target) else link?.toString()?.takeIf { target == origin }
+            val sameApp = target == origin && request?.test != true
+            if (open(ctx, target, uri, if (sameApp) extras else null)) return true
+        }
+        if (request != null && !request.test) {
             try {
-                ctx.startActivity(out)
+                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(NavHold.webUrl(request, app))).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 return true
-            } catch (e: ActivityNotFoundException) {
-                // Google Maps desinstalado: tenta o site abaixo.
-            } catch (e: SecurityException) {
-                // idem
-            }
-        }
-        if (request == null) return false
-        return try {
-            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(NavHold.mapsWebUrl(request))).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    /**
-     * Abre o Waze com o mesmo [link] (sem link: só abre o Waze). Waze desinstalado → o mesmo destino no
-     * site do Waze. Devolve false se nada abriu.
-     */
-    fun openWaze(ctx: Context, link: Uri?, extras: Bundle?, request: NavRequest?): Boolean {
-        val out = if (link != null) Intent(Intent.ACTION_VIEW, link) else ctx.packageManager.getLaunchIntentForPackage(NavHold.WAZE_PACKAGE)
-        if (out != null) {
-            out.setPackage(NavHold.WAZE_PACKAGE)
-            out.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            try {
-                extras?.let { out.putExtras(it) }
             } catch (e: Exception) {
-                // Extra que o MApp não consegue ler: segue só com o link.
-            }
-            try {
-                ctx.startActivity(out)
-                return true
-            } catch (e: ActivityNotFoundException) {
-                // Waze desinstalado: tenta o site abaixo.
-            } catch (e: SecurityException) {
-                // idem
+                // sem navegador: avisa abaixo
             }
         }
-        val web = request?.let { Intent(Intent.ACTION_VIEW, Uri.parse(NavHold.webUrl(it))) }
-        return try {
-            if (web == null) throw ActivityNotFoundException()
-            ctx.startActivity(web.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            true
+        Toast.makeText(ctx.applicationContext, "Nenhum app de navegação encontrado no celular", Toast.LENGTH_LONG).show()
+        return false
+    }
+
+    /** Abre [uri] no [app] (sem link: só abre o app). false = o app não abriu. */
+    private fun open(ctx: Context, app: NavApp, uri: String?, extras: Bundle?): Boolean {
+        val out = if (uri != null) {
+            Intent(Intent.ACTION_VIEW, Uri.parse(uri))
+        } else {
+            ctx.packageManager.getLaunchIntentForPackage(app.packageName) ?: return false
+        }
+        out.setPackage(app.packageName)
+        out.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            extras?.let { out.putExtras(it) }
         } catch (e: Exception) {
-            Toast.makeText(ctx.applicationContext, "Waze não encontrado no celular", Toast.LENGTH_LONG).show()
+            // Extra que o MApp não consegue ler: segue só com o link.
+        }
+        return try {
+            ctx.startActivity(out)
+            true
+        } catch (e: ActivityNotFoundException) {
+            false
+        } catch (e: SecurityException) {
             false
         }
     }

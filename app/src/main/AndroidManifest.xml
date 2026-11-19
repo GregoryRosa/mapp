@@ -15,8 +15,8 @@
     <!-- Assinatura mensal pela Google Play (Play Billing). -->
     <uses-permission android:name="com.android.vending.BILLING" />
 
-    <!-- Atraso do Waze: saber se o Waze está instalado e quem abre os links waze:// (cartão da tela
-         inicial), repassar o link a ele e, com o motorista no Waze, abrir o app de corrida para ler. -->
+    <!-- Atraso da navegação: saber se Waze/Google Maps estão instalados e quem abre os links deles
+         (cartão da tela inicial), repassar a rota e, com o motorista na navegação, abrir o app de corrida. -->
     <queries>
         <package android:name="com.waze" />
         <package android:name="com.google.android.apps.maps" />
@@ -26,6 +26,14 @@
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="waze" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="google.navigation" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="geo" />
         </intent>
     </queries>
 
@@ -47,10 +55,11 @@
             </intent-filter>
         </activity>
 
-        <!-- Atraso do Waze (core/nav/NavHold): tela invisível que recebe os links waze:// da Uber, segura o
-             Waze enquanto o leitor lê a tela da corrida e repassa o mesmo link ao Waze. Desligada até o
-             motorista ligar "Segurar o Waze" na tela inicial (NavLinkActivity.setEnabled). Tarefa
-             própria (taskAffinity vazio) para não trazer a tela do MApp para a frente da Uber. -->
+        <!-- Atraso da navegação (core/nav/NavHold): tela invisível que recebe os links do Waze (waze://) e
+             do Google Maps (google.navigation:, geo:) da Uber, segura a navegação enquanto o leitor lê a
+             tela da corrida e abre o app escolhido no mesmo destino. Desligada até o motorista ligar
+             "Segurar a navegação" na tela inicial (NavLinkActivity.setEnabled). Tarefa própria
+             (taskAffinity vazio) para não trazer a tela do MApp para a frente da Uber. -->
         <activity
             android:name=".overlay.NavLinkActivity"
             android:enabled="false"
@@ -66,6 +75,8 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="waze" />
+                <data android:scheme="google.navigation" />
+                <data android:scheme="geo" />
             </intent-filter>
         </activity>
 

@@ -27,17 +27,19 @@ import br.com.mapp.reader.OfferAccessibilityService
 import br.com.mapp.reader.ReaderStatus
 
 /**
- * Atraso do Waze ([NavHold]). Com o MApp escolhido como app dos links `waze://`, a Uber abre esta tela
- * em vez do Waze. Ela é **invisível e não recebe toques** (a Uber continua à vista e respondendo ao
- * dedo).
+ * Atraso da navegação ([NavHold]). Com o MApp escolhido como app dos links `waze://` e
+ * `google.navigation:`/`geo:`, a Uber abre esta tela em vez do Waze/Google Maps. Ela é **invisível e
+ * não recebe toques** (a Uber continua à vista e respondendo ao dedo).
  *
  * - **Uber na tela:** pede ao leitor uma rajada de leituras e, assim que ele reconhece a corrida (ou
- *   depois de algumas leituras sem novidade, ou no tempo máximo), abre o Waze com o mesmo link e fecha.
- * - **Motorista no Waze** (a Uber mandou a rota com outro app na frente): abre a Uber — igual a tocar no
- *   ícone dela — e passa a espera para o [NavRelay], que abre o Waze depois da leitura.
+ *   depois de algumas leituras sem novidade, ou no tempo máximo), abre o app escolhido no cartão 🧭 no
+ *   mesmo destino e fecha.
+ * - **Motorista no Waze/Google Maps** (a Uber mandou a rota com outro app na frente): abre a Uber — igual
+ *   a tocar no ícone dela — e passa a espera para o [NavRelay], que abre a navegação depois da leitura.
  *
- * Só atrasa a abertura que a Uber pediu: não toca em nada nem muda o destino. Desligada no manifest
- * (`enabled=false`); só existe para o Android quando o motorista liga o atraso na tela inicial.
+ * Só atrasa a abertura que a Uber pediu: não toca em nada nem muda o destino. Pedido de outro app vai
+ * para o app do próprio link, sem espera. Desligada no manifest (`enabled=false`); só existe para o
+ * Android quando o motorista liga o atraso na tela inicial.
  */
 class NavLinkActivity : ComponentActivity() {
 
@@ -60,9 +62,10 @@ class NavLinkActivity : ComponentActivity() {
         })
 
         link = intent?.data
-        nav = NavRelay.navApp(this)
         val req = NavHold.parse(link?.toString())
         request = req
+        val installed = NavRelay.installedApps(this)
+        nav = NavHold.resolveApp(OverlayPrefs.navApp(this), installed, req?.origin ?: NavApp.WAZE)
         if (req == null || savedInstanceState != null) {
             forward(null)
             return
@@ -83,6 +86,7 @@ class NavLinkActivity : ComponentActivity() {
             lastRideApp = OfferAccessibilityService.lastRideApp,
             sinceLastBringMs = NavRelay.sinceLastBring(),
         )
+        nav = NavHold.chooseApp(req, plan, OverlayPrefs.navApp(this), installed)
         TripLog.add(this, NavHold.describe(req, referrer, plan, nav))
         if (plan.holdMs <= 0L) {
             forward(null)
@@ -99,7 +103,7 @@ class NavLinkActivity : ComponentActivity() {
                 noAnimation(open = false)
                 return
             }
-            TripLog.add(this, "🧭 Não consegui abrir o app ${bring.label}: Waze aberto na hora")
+            TripLog.add(this, "🧭 Não consegui abrir o app ${bring.label}: ${nav.label} aberto na hora")
             forward(null)
             return
         }
@@ -108,7 +112,7 @@ class NavLinkActivity : ComponentActivity() {
             TripLog.add(this, NavHold.describeRelease(elapsed, reason, reads, nav))
             forward(reason)
         }.also { it.start() }
-        // A janela de aceite da Uber pode fechar logo depois de pedir o Waze (com o Waze por baixo):
+        // A janela de aceite da Uber pode fechar logo depois de pedir a navegação (com ela por baixo):
         // confere de novo e, se a Uber sumiu, traz o app para ler.
         plan.fallback?.let { app -> handler.postDelayed({ lateCheck(app, req, plan.holdMs) }, NavHold.LATE_CHECK_MS) }
     }
@@ -121,7 +125,7 @@ class NavLinkActivity : ComponentActivity() {
         w.cancel()
         waiter = null
         forwarded = true
-        TripLog.add(this, "🧭 ${app.label} saiu da tela logo depois de pedir o Waze: trazendo o app para ler")
+        TripLog.add(this, "🧭 ${app.label} saiu da tela logo depois de pedir o ${req.origin.label}: trazendo o app para ler")
         NavRelay.holdAfterBringing(this, app, link, extrasOrNull(), req, holdMs + NavHold.BRING_EXTRA_MS - NavHold.LATE_CHECK_MS)
         finish()
         noAnimation(open = false)
@@ -134,23 +138,23 @@ class NavLinkActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        // Tela apagada, botão início ou outro app por cima: abre o Waze agora (não fica preso aqui).
+        // Tela apagada, botão início ou outro app por cima: abre a navegação agora (não fica preso aqui).
         if (!forwarded && !isChangingConfigurations) release(ReleaseReason.LEFT)
     }
 
-    /** Termina a espera (o [NavWaiter] chama [forward]); sem espera em curso, abre o Waze direto. */
+    /** Termina a espera (o [NavWaiter] chama [forward]); sem espera em curso, abre a navegação direto. */
     private fun release(reason: ReleaseReason) {
         val w = waiter
         if (w != null) w.finish(reason) else forward(reason)
     }
 
-    /** Abre o Waze com o mesmo link (uma vez só) e fecha. [reason] null = sem espera. */
+    /** Abre a rota no app escolhido (uma vez só) e fecha. [reason] null = sem espera. */
     private fun forward(reason: ReleaseReason?) {
         if (forwarded) return
         forwarded = true
         NavRelay.openNav(this, nav, link, extrasOrNull(), request)
-        if (request?.test == true) {
-            Toast.makeText(this, "✅ O link do Waze passou pelo MApp e foi entregue ao ${nav.label}.", Toast.LENGTH_LONG).show()
+        request?.takeIf { it.test }?.let {
+            Toast.makeText(this, "✅ O link do ${it.origin.label} passou pelo MApp e foi entregue ao ${nav.label}.", Toast.LENGTH_LONG).show()
         }
         finish()
         noAnimation(open = false)
@@ -162,7 +166,7 @@ class NavLinkActivity : ComponentActivity() {
         null
     }
 
-    /** Pacote do app que pediu o Waze (a Uber, normalmente); null = não se identificou. */
+    /** Pacote do app que pediu a navegação (a Uber, normalmente); null = não se identificou. */
     private fun callerPackage(): String? =
         callingPackage ?: referrer?.takeIf { it.scheme == "android-app" }?.host
 
@@ -178,7 +182,10 @@ class NavLinkActivity : ComponentActivity() {
     }
 
     companion object {
-        /** Liga/desliga o atalho no Android: desligado, o MApp nem aparece no "Abrir com" do Waze. */
+        /**
+         * Liga/desliga o atalho no Android: desligado, o MApp nem aparece no "Abrir com" do Waze nem do
+         * Google Maps.
+         */
         fun setEnabled(ctx: Context, on: Boolean) {
             val component = ComponentName(ctx, NavLinkActivity::class.java)
             val wanted = if (on) PackageManager.COMPONENT_ENABLED_STATE_ENABLED else PackageManager.COMPONENT_ENABLED_STATE_DISABLED
@@ -195,11 +202,11 @@ class NavLinkActivity : ComponentActivity() {
         /** Deixa o atalho do Android igual ao que está salvo no MApp. */
         fun sync(ctx: Context) = setEnabled(ctx, OverlayPrefs.isNavHoldOn(ctx))
 
-        /** Situação atual (cartão da tela inicial). */
-        fun state(ctx: Context): NavLinkState {
+        /** Situação dos links de [app] (cartão da tela inicial). */
+        fun state(ctx: Context, app: NavApp): NavLinkState {
             val pm = ctx.packageManager
-            val installed = pm.getLaunchIntentForPackage(NavHold.WAZE_PACKAGE) != null
-            val probe = Intent(Intent.ACTION_VIEW, Uri.parse(NavHold.PROBE_URI))
+            val installed = pm.getLaunchIntentForPackage(app.packageName) != null
+            val probe = Intent(Intent.ACTION_VIEW, Uri.parse(NavHold.probeUri(app)))
             val handler = try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     pm.resolveActivity(probe, PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_DEFAULT_ONLY.toLong()))
@@ -210,27 +217,27 @@ class NavLinkActivity : ComponentActivity() {
             } catch (e: Exception) {
                 null
             }
-            return NavHold.state(OverlayPrefs.isNavHoldOn(ctx), installed, handler, ctx.packageName)
+            return NavHold.state(OverlayPrefs.isNavHoldOn(ctx), installed, handler, ctx.packageName, app)
         }
 
-        /** Botão Testar: o Android pergunta quem abre o link (escolha MApp → Sempre). */
-        fun test(ctx: Context) {
+        /** Botão Testar: o Android pergunta quem abre os links de [app] (escolha MApp → Sempre). */
+        fun test(ctx: Context, app: NavApp) {
             try {
-                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(NavHold.TEST_URI)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(NavHold.testUri(app))).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             } catch (e: ActivityNotFoundException) {
-                Toast.makeText(ctx, "Nenhum app abre links do Waze", Toast.LENGTH_LONG).show()
+                Toast.makeText(ctx, "Nenhum app abre links do ${app.label}", Toast.LENGTH_LONG).show()
             }
         }
 
-        /** Tela do Waze nas Configurações (Abrir por padrão → Limpar padrões). */
-        fun openWazeSettings(ctx: Context) {
+        /** Tela do [app] nas Configurações (Abrir por padrão → Limpar padrões). */
+        fun openAppSettings(ctx: Context, app: NavApp) {
             try {
                 ctx.startActivity(
-                    Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${NavHold.WAZE_PACKAGE}"))
+                    Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.packageName}"))
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 )
             } catch (e: Exception) {
-                Toast.makeText(ctx, "Abra Configurações → Apps → Waze → Abrir por padrão", Toast.LENGTH_LONG).show()
+                Toast.makeText(ctx, "Abra Configurações → Apps → ${app.label} → Abrir por padrão", Toast.LENGTH_LONG).show()
             }
         }
     }
