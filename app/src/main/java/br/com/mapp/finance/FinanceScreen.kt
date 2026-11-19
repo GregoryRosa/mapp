@@ -73,6 +73,9 @@ import br.com.mapp.MappApp
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.repo.EntryKind
 import br.com.mapp.core.repo.FinanceEntry
+import br.com.mapp.core.goal.GoalForecast
+import br.com.mapp.core.goal.GoalPace
+import br.com.mapp.core.goal.GoalPlan
 import br.com.mapp.core.goal.WeekGoals
 import br.com.mapp.core.repo.Goals
 import br.com.mapp.core.shift.CostSplit
@@ -82,6 +85,7 @@ import br.com.mapp.ui.MappColors
 import kotlinx.coroutines.launch
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.ZoneId
 import java.time.ZoneOffset
 
@@ -168,6 +172,23 @@ private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
     val dayTotals = rememberPeriodTotals(day, now)
     val weekTotals = rememberPeriodTotals(week, now)
     val monthTotals = rememberPeriodTotals(month, now)
+    // Ganho do dia de trabalho de hoje (mesmo com outro dia escolhido no calendário): base do ritmo.
+    val todayTotals = rememberPeriodTotals(ReportMath.workDay(openShift?.startedAt, now, zone), now)
+
+    // Meta da semana = a meta mensal dividida pelas semanas (ou a soma das metas dos dias, sem mensal).
+    val monday = ReportMath.dateOf(week.from, zone)
+    val yearMonth = YearMonth.from(ReportMath.dateOf(month.from, zone))
+    val weekGoal = remember(goals, monday) { GoalPlan.weekGoal(goals, monday) }
+    val weekProgress = ReportMath.goalProgress(weekTotals.gross, weekGoal?.amount)
+    val monthProgress = ReportMath.goalProgress(monthTotals.gross, goals.monthly)
+    // Em que dia bate a meta no ritmo atual (ou quanto fica faltando).
+    val weight = { d: LocalDate -> GoalPlan.weight(goals, d) }
+    val weekForecast = weekProgress?.let {
+        GoalPace.forecast(it.goal, weekTotals.gross, todayTotals.gross, GoalPlan.weekDays(monday), todayDate, weight)
+    }
+    val monthForecast = monthProgress?.let {
+        GoalPace.forecast(it.goal, monthTotals.gross, todayTotals.gross, GoalPlan.daysOf(yearMonth), todayDate, weight)
+    }
     val monthCosts = remember(monthTotals) { CostSplit.breakdown(monthTotals) }
     // Meses fechados (dia 1 ao último dia), do mais recente para trás; só os que tiveram movimento.
     val closedPeriods = remember(month) { ReportMath.closedMonths(CLOSED_MONTHS, month.from + 1, zone) }
@@ -207,8 +228,10 @@ private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
                     title = "Semana",
                     subtitle = "Seg ${Format.day(week.from)} às 4h até seg ${Format.day(week.to)} às 4h (fechamento da Uber)",
                     totals = weekTotals,
-                    goal = null,
-                    goalHint = false,
+                    goal = weekProgress,
+                    goalHint = true,
+                    forecast = weekForecast?.let { forecastText(it, todayDate, "a semana") },
+                    noGoalText = "Sem meta da semana: defina a meta mensal na bandeira (ela é dividida pelas semanas).",
                 )
             }
             item {
@@ -216,8 +239,9 @@ private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
                     title = "Mês · ${ReportMath.monthName(month.from, zone)}",
                     subtitle = null,
                     totals = monthTotals,
-                    goal = ReportMath.goalProgress(monthTotals.gross, goals.monthly),
+                    goal = monthProgress,
                     goalHint = true,
+                    forecast = monthForecast?.let { forecastText(it, todayDate, "o mês") },
                     footer = {
                         if (!monthCosts.isEmpty) {
                             HorizontalDivider(Modifier.padding(vertical = 4.dp))
@@ -280,6 +304,8 @@ private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
     if (showGoals) {
         GoalsDialog(
             goals = goals,
+            month = yearMonth,
+            monthLabel = ReportMath.monthName(month.from, zone),
             onDismiss = onGoalsDone,
             onSave = { g ->
                 scope.launch { repos.finance.saveGoals(g) }
@@ -348,6 +374,38 @@ private fun dayTitle(date: LocalDate, today: LocalDate): String {
 }
 
 /**
+ * Previsão da meta no ritmo atual, para o card do período ([period] = "o mês" / "a semana").
+ * null = meta já batida (o card já diz).
+ */
+private fun forecastText(f: GoalForecast, today: LocalDate, period: String): String? = when (f) {
+    GoalForecast.Reached -> null
+    GoalForecast.NoPace -> "Ainda sem ganhos neste período para calcular o ritmo."
+    is GoalForecast.ReachOn -> {
+        val pace = "No ritmo atual (média de ${Format.brl(f.perDay)}/dia)"
+        when (f.date) {
+            today -> "📈 $pace, você bate a meta hoje."
+            today.plusDays(1) -> "📈 $pace, você bate a meta amanhã (${shortDate(f.date)})."
+            else -> "📈 $pace, você bate a meta no dia ${shortDate(f.date)}."
+        }
+    }
+    is GoalForecast.Short -> buildString {
+        append("📉 No ritmo atual (média de ${Format.brl(f.perDay)}/dia), não bate: fecha $period com ")
+        append("~${Format.brl(f.projected)}, faltando ${Format.brl(f.missing)}.")
+        val need = f.neededPerDay
+        if (need != null) {
+            append(
+                if (f.daysLeft == 1) " Para bater, precisa de ${Format.brl(need)} hoje."
+                else " Para bater, precisa de ${Format.brl(need)} por dia nos ${f.daysLeft} dias que restam (contando hoje)."
+            )
+        }
+    }
+}
+
+/** "22/11 (dom)". */
+private fun shortDate(date: LocalDate): String =
+    "%02d/%02d (%s)".format(date.dayOfMonth, date.monthValue, Format.WEEKDAYS[date.dayOfWeek.value - 1].lowercase())
+
+/**
  * Resumo de um período: bruto, custos e líquido sempre à vista, corridas e tempo embaixo. O botão
  * Bruto/Líquido troca o R$/km e R$/h entre bruto e líquido e mostra de onde vêm os custos
  * (carro: km × custo/km do veículo; mais os gastos lançados).
@@ -359,6 +417,8 @@ private fun PeriodCard(
     totals: PeriodTotals,
     goal: GoalProgress?,
     goalHint: Boolean,
+    forecast: String? = null,
+    noGoalText: String = "Sem meta definida (toque na bandeira).",
     titleActions: @Composable RowScope.() -> Unit = {},
     footer: @Composable () -> Unit = {},
 ) {
@@ -428,8 +488,9 @@ private fun PeriodCard(
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
+                forecast?.let { Text(it, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold) }
             } else if (goalHint) {
-                Text("Sem meta definida (toque na bandeira).", style = MaterialTheme.typography.bodySmall)
+                Text(noGoalText, style = MaterialTheme.typography.bodySmall)
             }
             footer()
         }
@@ -588,7 +649,13 @@ private fun EntryDialog(initial: FinanceEntry?, onDismiss: () -> Unit, onSave: (
 }
 
 @Composable
-private fun GoalsDialog(goals: Goals, onDismiss: () -> Unit, onSave: (Goals) -> Unit) {
+private fun GoalsDialog(
+    goals: Goals,
+    month: YearMonth,
+    monthLabel: String,
+    onDismiss: () -> Unit,
+    onSave: (Goals) -> Unit,
+) {
     var daily by remember { mutableStateOf(Format.input(goals.daily)) }
     var monthly by remember { mutableStateOf(Format.input(goals.monthly)) }
     var byWeekday by remember { mutableStateOf(goals.byWeekday) }
@@ -598,6 +665,9 @@ private fun GoalsDialog(goals: Goals, onDismiss: () -> Unit, onSave: (Goals) -> 
     // A lista da semana já mostra a meta geral que está sendo digitada agora.
     val preview = Goals(daily = Format.parse(daily)?.takeIf { it > 0 }, byWeekday = byWeekday)
     val dayGoal = Format.parse(dayValue)?.takeIf { it > 0 }
+    // A meta mensal que está sendo digitada, dividida pelas semanas do mês (pesando as metas dos dias).
+    val monthlyPreview = preview.copy(monthly = Format.parse(monthly)?.takeIf { it > 0 })
+    val slices = remember(monthlyPreview, month) { GoalPlan.monthWeeks(monthlyPreview, month) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Metas de ganhos") },
@@ -612,6 +682,36 @@ private fun GoalsDialog(goals: Goals, onDismiss: () -> Unit, onSave: (Goals) -> 
                     style = MaterialTheme.typography.bodySmall,
                 )
                 NumberField("Meta mensal", monthly, { monthly = it }, suffix = "R$")
+                if (slices.isNotEmpty()) {
+                    Text(
+                        "Por semana em $monthLabel (seg a dom, como a Uber):",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    slices.forEach { w ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                if (w.from == w.to) shortDate(w.from) else "${shortDate(w.from)} a ${shortDate(w.to)}",
+                                Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Text(
+                                Format.brl(w.amount),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MappColors.Teal,
+                            )
+                        }
+                    }
+                    Text(
+                        (if (GoalPlan.hasDayGoals(monthlyPreview)) {
+                            "Dividida pelo peso da meta de cada dia (dia de meta maior leva mais). "
+                        } else {
+                            "Dividida igual pelos dias do mês. "
+                        }) + "Semana que vira o mês soma a parte de cada mês. É com ela que Ganhos e gastos " +
+                            "diz se você bate a meta da semana no ritmo atual.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 SectionTitle("Meta por dia da semana")
                 Text(
                     "Toque nos dias, digite o valor e Aplicar. Dá para marcar vários de uma vez.",
