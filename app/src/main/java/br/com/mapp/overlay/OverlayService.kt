@@ -54,6 +54,7 @@ import br.com.mapp.core.shift.PeriodTotals
 import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.core.shift.ShiftTrip
+import br.com.mapp.finance.FixedCostsSync
 import br.com.mapp.finance.ReportMath
 import br.com.mapp.maps.LocationProvider
 import br.com.mapp.maps.PinStore
@@ -263,6 +264,8 @@ class OverlayService : LifecycleService() {
 
         override fun endShift() {
             val ended = ShiftTracker.end(this@OverlayService, costPerKm, costParts) ?: return
+            // Km da jornada entram na média que divide os custos do mês (Custos fixos).
+            FixedCostsSync.afterShiftEnded(this@OverlayService)
             countedKey = null
             matcher.reset()
             saveTripMemory(force = true)

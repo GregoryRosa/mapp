@@ -17,6 +17,8 @@ object Format {
     private val oneDecimal = ThreadLocal.withInitial { DecimalFormat("#,##0.0", symbols) }
     private val threeDecimals = ThreadLocal.withInitial { DecimalFormat("#,##0.000", symbols) }
     private val plain = ThreadLocal.withInitial { DecimalFormat("0.##", symbols) }
+    private val plainPrecise = ThreadLocal.withInitial { DecimalFormat("0.###", symbols) }
+    private val whole = ThreadLocal.withInitial { DecimalFormat("#,##0", symbols) }
     private val time = DateTimeFormatter.ofPattern("HH:mm", PT_BR)
     private val dayTime = DateTimeFormatter.ofPattern("dd/MM HH:mm", PT_BR)
     private val day = DateTimeFormatter.ofPattern("dd/MM", PT_BR)
@@ -31,6 +33,9 @@ object Format {
 
     /** "12,3 km". */
     fun km(value: Double?): String = value?.let { "${oneDecimal.get()!!.format(it)} km" } ?: NONE
+
+    /** "4.440 km" (sem casas: km do mês, média por dia). */
+    fun kmWhole(value: Double?): String = value?.let { "${whole.get()!!.format(it)} km" } ?: NONE
 
     /** "R$ 2,15/km". */
     fun perKm(value: Double?): String = value?.let { "${brl(it)}/km" } ?: NONE
@@ -62,6 +67,9 @@ object Format {
 
     /** Número para campo de edição: "6,5", "11", "" para null. */
     fun input(value: Double?): String = value?.let { plain.get()!!.format(it) } ?: ""
+
+    /** Como [input], com até 3 casas (R$/km: "0,068"). */
+    fun inputPrecise(value: Double?): String = value?.let { plainPrecise.get()!!.format(it) } ?: ""
 
     /**
      * Lê número digitado ("1.234,56", "6,5", "6.5", "R$ 10"). Vazio ou inválido = null.

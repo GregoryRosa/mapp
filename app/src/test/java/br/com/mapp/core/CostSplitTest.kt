@@ -32,8 +32,8 @@ class CostSplitTest {
         fuelType = FuelType.GASOLINE,
         fuelPricePerUnit = 6.0,
         kmPerUnit = 12.0,
-        maintenancePerKm = 0.15,
-        depreciationPerKm = 0.20,
+        maintenance = 0.15,
+        depreciation = 0.20,
         extraCosts = listOf(ExtraKmCost("Pneus", 0.05)),
     )
     private val parts = CostSplit.parts(cfg)

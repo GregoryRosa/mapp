@@ -17,7 +17,7 @@ import org.junit.Test
 import java.time.ZoneId
 
 class RideRouteTest {
-    private val cost = VehicleCostConfig(fuelPricePerUnit = 6.0, kmPerUnit = 12.0, maintenancePerKm = 0.1, depreciationPerKm = 0.1)
+    private val cost = VehicleCostConfig(fuelPricePerUnit = 6.0, kmPerUnit = 12.0, maintenance = 0.1, depreciation = 0.1)
     private val profile = FilterProfile()
     private val sp: ZoneId = ZoneId.of("America/Sao_Paulo")
 
