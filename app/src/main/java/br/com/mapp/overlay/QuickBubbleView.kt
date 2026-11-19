@@ -341,17 +341,17 @@ class QuickBubbleView(
 
     private val rideStateTitle = text(13f, color = WHITE, bold = true)
     private val rideStateHint = text(11f, color = SECONDARY)
-    private val finishRideButton = button("✓ Finalizada") { onRideButton(finishConfirm) }
+    private val finishRideButton: TextView = button("✓ Finalizada") { onRideButton(finishConfirm) }
         .apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
-    private val cancelRideButton = button("✕ Não aconteceu") { onRideButton(cancelConfirm) }
+    private val cancelRideButton: TextView = button("✕ Não aconteceu") { onRideButton(cancelConfirm) }
         .apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
 
     /** 2 toques para encerrar: o 1º pede "Confirmar?" (ninguém encerra corrida sem querer). */
-    private val finishConfirm = Confirm(finishRideButton, "✓ Finalizada") {
+    private val finishConfirm: Confirm = Confirm(finishRideButton, "✓ Finalizada") {
         actions.finishRide()
         bindRideState()
     }
-    private val cancelConfirm = Confirm(cancelRideButton, "✕ Não aconteceu") {
+    private val cancelConfirm: Confirm = Confirm(cancelRideButton, "✕ Não aconteceu") {
         actions.cancelRide()
         bindRideState()
     }
