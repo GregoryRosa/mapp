@@ -33,6 +33,7 @@ import br.com.mapp.core.bubble.SparkLevel
 import br.com.mapp.core.bubble.SpinSpeed
 import br.com.mapp.core.goal.DayGoal
 import br.com.mapp.core.model.ZoneType
+import br.com.mapp.core.shift.ManualRide
 import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.core.sound.GoalSound
@@ -52,8 +53,10 @@ import kotlin.math.sin
  * segurar 3 s parado (no "M" ou no ✕ do menu) = desliga o copiloto (anel vermelho enche).
  * A engrenagem do menu abre os **ajustes do próprio botão**: cores do fundo, do "M", do anel de
  * dentro (status) e do anel de fora (meta), velocidade do giro, som da meta batida, o aviso de
- * corrida iniciada (som e faíscas) e tamanho do botão e dos números em volta dele. O 📋 abre as **Atividades**: corrida atual e próxima, com os
- * dados da notificação da corrida aceita.
+ * corrida iniciada (som e faíscas) e tamanho do botão e dos números em volta dele. No topo desse
+ * painel fica **Corrida em andamento**, para encerrar à mão a corrida que o copiloto ainda vê aberta
+ * (✓ finalizada, ✕ não aconteceu — o caso do +1 tocado sem querer no Card).
+ * O 📋 abre as **Atividades**: corrida atual e próxima, com os dados da notificação da corrida aceita.
  * Só mexe nas configurações do próprio MApp — nunca toca no app de corrida.
  */
 class QuickBubbleView(
@@ -73,6 +76,15 @@ class QuickBubbleView(
 
         /** Corrida atual e próxima (menu Atividades). */
         fun activities(): RideActivities
+
+        /** Corridas que o copiloto vê em andamento (seção "Corrida em andamento" do painel ⚙). */
+        fun rideState(): ManualRide.State
+
+        /** ✓ à mão: a corrida aberta mais antiga terminou (entra no ganho/lucro). */
+        fun finishRide()
+
+        /** ✕ à mão: a corrida aberta mais recente não aconteceu (sai da jornada; ex.: +1 sem querer). */
+        fun cancelRide()
 
         /** Marca um pin no local atual (zona para desenhar depois no editor). */
         fun markPin(type: ZoneType)
@@ -325,6 +337,35 @@ class QuickBubbleView(
 
     private val resetButton = button("Restaurar padrão") { onResetTapped() }
 
+    // ------------------------------------------------------------------ corrida em andamento (encerrar à mão)
+
+    private val rideStateTitle = text(13f, color = WHITE, bold = true)
+    private val rideStateHint = text(11f, color = SECONDARY)
+    private val finishRideButton = button("✓ Finalizada") { onRideButton(finishConfirm) }
+        .apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
+    private val cancelRideButton = button("✕ Não aconteceu") { onRideButton(cancelConfirm) }
+        .apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
+
+    /** 2 toques para encerrar: o 1º pede "Confirmar?" (ninguém encerra corrida sem querer). */
+    private val finishConfirm = Confirm(finishRideButton, "✓ Finalizada") {
+        actions.finishRide()
+        bindRideState()
+    }
+    private val cancelConfirm = Confirm(cancelRideButton, "✕ Não aconteceu") {
+        actions.cancelRide()
+        bindRideState()
+    }
+
+    private val tripBox = section("CORRIDA EM ANDAMENTO").apply {
+        addView(rideStateTitle, fullWidth(6))
+        addView(rideStateHint, fullWidth(2))
+        addView(row(finishRideButton, cancelRideButton, labelWeight = false), fullWidth(8))
+        addView(text(11f, color = SECONDARY).apply {
+            text = "✓ soma o valor no ganho e no lucro do dia. ✕ tira a corrida da jornada — use quando o +1 " +
+                "foi sem querer ou a corrida não aconteceu. Toque duas vezes para confirmar."
+        }, fullWidth(6))
+    }
+
     private val previewRow = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER
@@ -389,6 +430,7 @@ class QuickBubbleView(
         setPadding(dp(12), dp(10), dp(12), dp(10))
 
         addView(text(12f, color = SECONDARY).apply { text = "MApp ${ReaderStatus.versionOf(context)} · AJUSTES DO BOTÃO" })
+        addView(tripBox, fullWidth(8))
         addView(previewRow, fullWidth(8))
         addView(section("TAMANHO").apply {
             addView(iconSizeLabel, fullWidth(8))
@@ -536,6 +578,7 @@ class QuickBubbleView(
         shift = current
         bindRadial()
         paintBubble()
+        refreshRideState()
     }
 
     /** Corrida aceita em andamento pelo acompanhamento do aceite (vale também sem jornada aberta). */
@@ -543,6 +586,14 @@ class QuickBubbleView(
         if (rideOpen == open) return
         rideOpen = open
         paintBubble()
+        refreshRideState()
+    }
+
+    /** Painel aberto: a seção "Corrida em andamento" acompanha a jornada e o acompanhamento do aceite. */
+    private fun refreshRideState() {
+        if (!panelAttached) return
+        bindRideState()
+        remeasurePanel()
     }
 
     private var rideOpen = false
@@ -759,6 +810,10 @@ class QuickBubbleView(
         closeActivities()
         confirmReset = false
         resetButton.text = "Restaurar padrão"
+        finishConfirm.reset()
+        cancelConfirm.reset()
+        rideState = null
+        bindRideState()
         bindBars()
         showStyle(style)
         val dm = context.resources.displayMetrics
@@ -778,6 +833,8 @@ class QuickBubbleView(
         try { windowManager.removeViewImmediate(panelRoot) } catch (e: Exception) { Log.w(TAG, "Falha ao fechar painel", e) }
         panelAttached = false
         confirmReset = false
+        finishConfirm.reset()
+        cancelConfirm.reset()
         showStyle(style) // prévia de um arrasto interrompido não fica no botão
     }
 
@@ -835,6 +892,14 @@ class QuickBubbleView(
         measureActivities()
         if (before == activitiesParams.height to activitiesParams.y) return // GPS/relógio: só o texto mudou
         try { windowManager.updateViewLayout(activitiesRoot, activitiesParams) } catch (e: Exception) { Log.w(TAG, "Falha ao atualizar atividades", e) }
+    }
+
+    private fun remeasurePanel() {
+        if (!panelAttached) return
+        val before = panelParams.height to panelParams.y
+        measurePanel()
+        if (before == panelParams.height to panelParams.y) return
+        try { windowManager.updateViewLayout(panelRoot, panelParams) } catch (e: Exception) { Log.w(TAG, "Falha ao atualizar painel", e) }
     }
 
     /** Altura = conteúdo, limitada à tela (o resto rola); posição perto do ícone. */
@@ -936,6 +1001,76 @@ class QuickBubbleView(
 
     private fun bindBars() {
         bars.forEach { it.view.bind(it.read(style)) }
+    }
+
+    // ------------------------------------------------------------------ corrida em andamento
+
+    /**
+     * Ação do painel que só acontece no **2º toque** (o 1º troca o texto por "Confirmar?" por
+     * [CONFIRM_MS]): encerrar corrida é coisa que não dá para desfazer sem trabalho.
+     */
+    private inner class Confirm(
+        private val button: TextView,
+        private val label: String,
+        private val action: () -> Unit,
+    ) {
+        private var armed = false
+
+        fun tap() {
+            if (!armed) {
+                armed = true
+                button.text = "Confirmar?"
+                button.postDelayed({ reset() }, CONFIRM_MS)
+                return
+            }
+            reset()
+            action()
+        }
+
+        fun reset() {
+            if (!armed) return
+            armed = false
+            button.text = label
+        }
+    }
+
+    /** Sem corrida aberta o botão só avisa (nem arma a confirmação). */
+    private fun onRideButton(confirm: Confirm) {
+        if (rideState?.any != true) {
+            actions.notice("Nenhuma corrida em andamento", CONFIRM_MS)
+            return
+        }
+        confirm.tap()
+    }
+
+    /** Última corrida mostrada na seção (o relógio da jornada chama isso a cada segundo). */
+    private var rideState: ManualRide.State? = null
+
+    /**
+     * Seção "CORRIDA EM ANDAMENTO": o que está aberto agora e se os botões têm o que fechar.
+     * Não mexe no texto dos botões: a confirmação armada tem de sobreviver ao relógio da jornada.
+     */
+    private fun bindRideState() {
+        val s = actions.rideState()
+        if (s == rideState) return
+        rideState = s
+        val label = ManualRide.label(s.oldest)
+        rideStateTitle.text = when {
+            !s.any -> "Nenhuma corrida em andamento"
+            label != null -> label
+            else -> "Corrida aceita (oferta não lida)"
+        }
+        rideStateHint.text = when {
+            !s.any -> "Os botões abaixo só valem com corrida aberta."
+            else -> listOfNotNull(
+                "+${s.queued} na fila".takeIf { s.queued > 0 },
+                if (s.outsideShift) "fora da jornada: nada a somar no lucro" else "soma no lucro ao finalizar",
+            ).joinToString(" · ")
+        }
+        val on = s.any
+        listOf(finishRideButton, cancelRideButton).forEach {
+            it.alpha = if (on) 1f else 0.45f
+        }
     }
 
     private fun onResetTapped() {
