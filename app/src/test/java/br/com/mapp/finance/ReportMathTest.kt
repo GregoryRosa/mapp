@@ -172,6 +172,24 @@ class ReportMathTest {
         assertEquals(listOf(18), minTwo.map { it.hour })
     }
 
+    @Test fun rs_km_em_todas_as_faixas_na_ordem_do_relogio() {
+        val offers = listOf(
+            offer(30.0, 10.0, 20, t(9, 18)), // 18–21h: (30+10)/(10+10) = 2,0
+            offer(10.0, 10.0, 20, t(10, 20, 30)),
+            offer(25.0, 10.0, 20, t(9, 7)), // 06–09h: 2,5
+            offer(99.0, null, 20, t(9, 12)), // sem km: ignorada
+        )
+        val bands = ReportMath.perKmByHour(offers, bucketHours = 3, zone = zone)
+        assertEquals(8, bands.size)
+        assertEquals((0 until 8).map { it * 3 }, bands.map { it.startHour })
+        assertEquals(24, bands.last().endHour)
+        assertEquals(2.5, bands[2].avgPerKm!!, 1e-9)
+        assertEquals(2.0, bands[6].avgPerKm!!, 1e-9)
+        assertEquals(2, bands[6].offers)
+        assertEquals(null, bands[4].avgPerKm) // 12–15h só teve oferta sem km
+        assertEquals(0, bands[4].offers)
+    }
+
     @Test fun contagem_por_semaforo_e_medias_das_ofertas() {
         val offers = listOf(
             offer(20.0, 10.0, 30, t(9, 8), Signal.GREEN),
