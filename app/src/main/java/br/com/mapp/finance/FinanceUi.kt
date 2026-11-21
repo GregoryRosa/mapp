@@ -127,7 +127,14 @@ internal fun StatCard(label: String, value: String, modifier: Modifier = Modifie
 
 /** Linha "rótulo | barra proporcional | valor". [max] <= 0 desenha barra vazia. */
 @Composable
-internal fun BarRow(label: String, value: Double, max: Double, valueText: String, color: Color = MaterialTheme.colorScheme.primary) {
+internal fun BarRow(
+    label: String,
+    value: Double,
+    max: Double,
+    valueText: String,
+    color: Color = MaterialTheme.colorScheme.primary,
+    valueWidth: Dp = 92.dp,
+) {
     val fraction = if (max > 0) (value / max).toFloat().coerceIn(0f, 1f) else 0f
     Row(
         Modifier.fillMaxWidth().padding(vertical = 2.dp),
@@ -145,7 +152,7 @@ internal fun BarRow(label: String, value: Double, max: Double, valueText: String
                 Box(Modifier.fillMaxWidth(fraction).height(16.dp).background(color, RoundedCornerShape(4.dp)))
             }
         }
-        Text(valueText, Modifier.width(92.dp), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End)
+        Text(valueText, Modifier.width(valueWidth), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End)
     }
 }
 

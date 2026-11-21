@@ -71,7 +71,7 @@ internal fun ReportsTab() {
     val byWeekday = remember(all) { ReportMath.incomeByWeekday(all) }
     val byHour = remember(all) { ReportMath.incomeByHour(all, bucketHours = HOUR_BAND) }
     val offerSummary = remember(offers) { ReportMath.summarizeOffers(offers) }
-    val bestHours = remember(offers) { ReportMath.bestHours(offers, top = 5) }
+    val perKmByHour = remember(offers) { ReportMath.perKmByHour(offers, bucketHours = HOUR_BAND) }
 
     // Semanas da Uber já fechadas (segunda 4h → segunda 4h), da mais recente para trás.
     val now = rememberNow()
@@ -142,17 +142,18 @@ internal fun ReportsTab() {
 
         SectionTitle("Melhores horários (R$/km das ofertas)")
         ChartCard {
-            if (bestHours.isEmpty()) {
+            if (perKmByHour.none { it.offers > 0 }) {
                 Text("Sem ofertas com km neste período.", style = MaterialTheme.typography.bodySmall)
             } else {
-                val max = bestHours.maxOf { it.avgPerKm }
-                bestHours.forEach { h ->
+                val max = perKmByHour.maxOf { it.avgPerKm ?: 0.0 }
+                perKmByHour.forEach { h ->
                     BarRow(
-                        "%02d–%02dh".format(h.hour, (h.hour + 1) % 24),
-                        h.avgPerKm,
+                        "%02d–%02dh".format(h.startHour, h.endHour),
+                        h.avgPerKm ?: 0.0,
                         max,
-                        "${Format.perKm(h.avgPerKm)} (${h.offers})",
+                        h.avgPerKm?.let { "${Format.perKm(it)} (${h.offers})" } ?: Format.NONE,
                         color = GreenSignal,
+                        valueWidth = 108.dp,
                     )
                 }
                 Text("Entre parênteses: nº de ofertas vistas.", style = MaterialTheme.typography.bodySmall)

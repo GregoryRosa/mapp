@@ -34,6 +34,9 @@ data class HourBucket(val startHour: Int, val endHour: Int, val total: Double)
 
 data class HourStat(val hour: Int, val avgPerKm: Double, val offers: Int)
 
+/** R$/km médio das ofertas numa faixa de horário; null = nenhuma oferta com km na faixa. */
+data class HourPerKm(val startHour: Int, val endHour: Int, val avgPerKm: Double?, val offers: Int)
+
 /** Corridas aceitas num período: quantidade, soma dos valores e do lucro líquido, médias. */
 data class AcceptedSummary(
     val count: Int,
@@ -248,6 +251,39 @@ object ReportMath {
             .map { HourStat(it, price[it] / km[it], count[it]) }
             .sortedWith(compareByDescending<HourStat> { it.avgPerKm }.thenByDescending { it.offers })
             .take(top)
+    }
+
+    /**
+     * R$/km médio das ofertas em **todas** as faixas do dia, na ordem do relógio (00–03h, 03–06h…),
+     * igual ao "Ganhos por horário". Mesma média ponderada do [bestHours]; faixa sem oferta com km
+     * vem com `avgPerKm = null`.
+     */
+    fun perKmByHour(
+        offers: List<OfferRecord>,
+        bucketHours: Int = 1,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): List<HourPerKm> {
+        require(bucketHours in 1..24 && 24 % bucketHours == 0) { "bucketHours deve dividir 24" }
+        val n = 24 / bucketHours
+        val price = DoubleArray(n)
+        val km = DoubleArray(n)
+        val count = IntArray(n)
+        offers.forEach { r ->
+            val k = r.evaluated.metrics.totalKm ?: return@forEach
+            if (k <= 0) return@forEach
+            val i = at(r.evaluated.raw.capturedAt, zone).hour / bucketHours
+            price[i] += r.evaluated.raw.price
+            km[i] += k
+            count[i]++
+        }
+        return (0 until n).map { i ->
+            HourPerKm(
+                startHour = i * bucketHours,
+                endHour = (i + 1) * bucketHours,
+                avgPerKm = if (count[i] > 0) price[i] / km[i] else null,
+                offers = count[i],
+            )
+        }
     }
 
     fun signalCounts(offers: List<OfferRecord>): Map<Signal, Int> {
