@@ -217,6 +217,12 @@ class ReportMathTest {
         assertEquals(120, over.percent)
         assertEquals(0.0, over.remaining, 1e-9)
         assertTrue(over.reached)
+        // Meta de lucro com o dia no vermelho: 0%, falta a meta + o prejuízo.
+        val negative = ReportMath.goalProgress(-40.0, 300.0)!!
+        assertEquals(0.0, negative.fraction, 1e-9)
+        assertEquals(0, negative.percent)
+        assertEquals(340.0, negative.remaining, 1e-9)
+        assertFalse(negative.reached)
     }
 
     @Test fun formatacao_pt_br() {

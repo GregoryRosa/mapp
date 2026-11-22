@@ -82,6 +82,13 @@ class GoalPaceTest {
         assertEquals(GoalForecast.ReachOn(d(18), 800.0), GoalPace.forecast(2200.0, 1700.0, 100.0, week, d(18), equal))
     }
 
+    @Test fun meta_de_lucro_aceita_dia_negativo() {
+        // Lucro: seg 300, ter 250, quarta (hoje) −20 (só custo até agora). Antes quebrava (coerceIn).
+        assertEquals(GoalForecast.ReachOn(d(22), 275.0), GoalPace.forecast(1800.0, 530.0, -20.0, week, d(18), equal))
+        // Período só com custo: sem ritmo, sem erro.
+        assertEquals(GoalForecast.NoPace, GoalPace.forecast(1800.0, -40.0, -40.0, week, d(18), equal))
+    }
+
     @Test fun primeiro_dia_com_ganho_conta_os_dias_parados() {
         // Seg e ter parado, quarta 300: média de 100/dia.
         val f = GoalPace.forecast(1800.0, 300.0, 300.0, week, d(18), equal) as GoalForecast.Short

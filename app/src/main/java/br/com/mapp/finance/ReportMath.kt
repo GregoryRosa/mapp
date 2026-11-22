@@ -57,7 +57,8 @@ data class OfferSummary(
 data class GoalProgress(val goal: Double, val achieved: Double) {
     /** Fração 0..1 para barras de progresso. */
     val fraction: Double get() = (achieved / goal).coerceIn(0.0, 1.0)
-    val percent: Int get() = (achieved / goal * 100).toInt()
+    /** Lucro negativo (mais custo que ganho) fica em 0%. */
+    val percent: Int get() = (achieved / goal * 100).toInt().coerceAtLeast(0)
     val remaining: Double get() = (goal - achieved).coerceAtLeast(0.0)
     val reached: Boolean get() = achieved >= goal
 }

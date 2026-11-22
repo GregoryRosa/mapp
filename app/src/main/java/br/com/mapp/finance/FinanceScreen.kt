@@ -172,22 +172,23 @@ private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
     val dayTotals = rememberPeriodTotals(day, now)
     val weekTotals = rememberPeriodTotals(week, now)
     val monthTotals = rememberPeriodTotals(month, now)
-    // Ganho do dia de trabalho de hoje (mesmo com outro dia escolhido no calendário): base do ritmo.
+    // Lucro do dia de trabalho de hoje (mesmo com outro dia escolhido no calendário): base do ritmo.
     val todayTotals = rememberPeriodTotals(ReportMath.workDay(openShift?.startedAt, now, zone), now)
 
+    // Metas são de LUCRO LÍQUIDO (bruto − custo do carro − gastos lançados): é o que precisa sobrar.
     // Meta da semana = a meta mensal dividida pelas semanas (ou a soma das metas dos dias, sem mensal).
     val monday = ReportMath.dateOf(week.from, zone)
     val yearMonth = YearMonth.from(ReportMath.dateOf(month.from, zone))
     val weekGoal = remember(goals, monday) { GoalPlan.weekGoal(goals, monday) }
-    val weekProgress = ReportMath.goalProgress(weekTotals.gross, weekGoal?.amount)
-    val monthProgress = ReportMath.goalProgress(monthTotals.gross, goals.monthly)
+    val weekProgress = ReportMath.goalProgress(weekTotals.net, weekGoal?.amount)
+    val monthProgress = ReportMath.goalProgress(monthTotals.net, goals.monthly)
     // Em que dia bate a meta no ritmo atual (ou quanto fica faltando).
     val weight = { d: LocalDate -> GoalPlan.weight(goals, d) }
     val weekForecast = weekProgress?.let {
-        GoalPace.forecast(it.goal, weekTotals.gross, todayTotals.gross, GoalPlan.weekDays(monday), todayDate, weight)
+        GoalPace.forecast(it.goal, weekTotals.net, todayTotals.net, GoalPlan.weekDays(monday), todayDate, weight)
     }
     val monthForecast = monthProgress?.let {
-        GoalPace.forecast(it.goal, monthTotals.gross, todayTotals.gross, GoalPlan.daysOf(yearMonth), todayDate, weight)
+        GoalPace.forecast(it.goal, monthTotals.net, todayTotals.net, GoalPlan.daysOf(yearMonth), todayDate, weight)
     }
     val monthCosts = remember(monthTotals) { CostSplit.breakdown(monthTotals) }
     // Meses fechados (dia 1 ao último dia), do mais recente para trás; só os que tiveram movimento.
@@ -211,7 +212,7 @@ private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
                     title = dayTitle(date, todayDate),
                     subtitle = null,
                     totals = dayTotals,
-                    goal = ReportMath.goalProgress(dayTotals.gross, WeekGoals.goalFor(goals, date)),
+                    goal = ReportMath.goalProgress(dayTotals.net, WeekGoals.goalFor(goals, date)),
                     goalHint = true,
                     titleActions = {
                         IconButton(onClick = { showPicker = true }) {
@@ -379,9 +380,9 @@ private fun dayTitle(date: LocalDate, today: LocalDate): String {
  */
 private fun forecastText(f: GoalForecast, today: LocalDate, period: String): String? = when (f) {
     GoalForecast.Reached -> null
-    GoalForecast.NoPace -> "Ainda sem ganhos neste período para calcular o ritmo."
+    GoalForecast.NoPace -> "Ainda sem lucro neste período para calcular o ritmo."
     is GoalForecast.ReachOn -> {
-        val pace = "No ritmo atual (média de ${Format.brl(f.perDay)}/dia)"
+        val pace = "No ritmo atual (lucro médio de ${Format.brl(f.perDay)}/dia)"
         when (f.date) {
             today -> "📈 $pace, você bate a meta hoje."
             today.plusDays(1) -> "📈 $pace, você bate a meta amanhã (${shortDate(f.date)})."
@@ -389,7 +390,7 @@ private fun forecastText(f: GoalForecast, today: LocalDate, period: String): Str
         }
     }
     is GoalForecast.Short -> buildString {
-        append("📉 No ritmo atual (média de ${Format.brl(f.perDay)}/dia), não bate: fecha $period com ")
+        append("📉 No ritmo atual (lucro médio de ${Format.brl(f.perDay)}/dia), não bate: fecha $period com ")
         append("~${Format.brl(f.projected)}, faltando ${Format.brl(f.missing)}.")
         val need = f.neededPerDay
         if (need != null) {
@@ -482,9 +483,9 @@ private fun PeriodCard(
                 LinearProgressIndicator(progress = { goal.fraction.toFloat() }, modifier = Modifier.fillMaxWidth())
                 Text(
                     if (goal.reached) {
-                        "Meta de ${Format.brl(goal.goal)} batida! (${goal.percent}%)"
+                        "Meta de lucro de ${Format.brl(goal.goal)} batida! (${goal.percent}%)"
                     } else {
-                        "Meta ${Format.brl(goal.goal)} · ${goal.percent}% · faltam ${Format.brl(goal.remaining)}"
+                        "Meta de lucro ${Format.brl(goal.goal)} · ${goal.percent}% · faltam ${Format.brl(goal.remaining)}"
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -670,12 +671,18 @@ private fun GoalsDialog(
     val slices = remember(monthlyPreview, month) { GoalPlan.monthWeeks(monthlyPreview, month) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Metas de ganhos") },
+        title = { Text("Metas de lucro") },
         text = {
             Column(
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                Text(
+                    "As metas são do lucro líquido: o que sobra depois de descontar o custo do carro " +
+                        "(km × custo/km de Custos fixos) e os gastos lançados.",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
                 NumberField("Meta geral do dia", daily, { daily = it }, suffix = "R$")
                 Text(
                     "Vale nos dias sem meta própria. Deixe em branco para não usar meta.",
