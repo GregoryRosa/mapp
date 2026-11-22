@@ -245,7 +245,9 @@ class OverlayService : LifecycleService() {
         }
 
         override fun stopCopilot() {
-            Toast.makeText(this@OverlayService, "Copiloto parado", Toast.LENGTH_SHORT).show()
+            val ctx = this@OverlayService
+            snoozeAutoStart(ctx)
+            Toast.makeText(ctx, stoppedMessage(ctx), Toast.LENGTH_LONG).show()
             stopSelf()
         }
 
@@ -877,6 +879,8 @@ class OverlayService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         if (intent?.action == ACTION_STOP) {
+            // "Parar" na notificação: parado à mão, o automático espera a Uber ficar offline/online.
+            snoozeAutoStart(this)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -886,6 +890,10 @@ class OverlayService : LifecycleService() {
             Toast.makeText(this, "Assinatura do MApp inativa: abra o app para assinar.", Toast.LENGTH_LONG).show()
             stopSelf()
             return START_NOT_STICKY
+        }
+        intent?.getStringExtra(EXTRA_AUTO)?.let { app ->
+            TripLog.add(this, "▶ Copiloto ligado sozinho: $app aberta e online")
+            toast("▶ Copiloto ligado sozinho ($app online)")
         }
         return START_STICKY
     }
@@ -1065,13 +1073,19 @@ class OverlayService : LifecycleService() {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
             else -> 0
         }
-        return try {
-            ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), type)
+        fun tryStart(t: Int): Boolean = try {
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), t)
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Não foi possível iniciar em primeiro plano", e)
+            Log.e(TAG, "Não foi possível iniciar em primeiro plano (tipo $t)", e)
             false
         }
+        if (tryStart(type)) return true
+        // Ligado sozinho (Uber online) com o MApp em segundo plano: se o Android recusar o tipo
+        // localização, sobe sem ele em vez de não ligar.
+        val withLocation = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            (type and ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION) != 0
+        return withLocation && tryStart(ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
     }
 
     private fun buildNotification(): Notification {
@@ -1124,6 +1138,8 @@ class OverlayService : LifecycleService() {
         private const val CHANNEL_ID = "copiloto"
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP = "br.com.mapp.overlay.STOP"
+        /** Ligado pelo copiloto automático ([CopilotAutoStart]): nome do app de corrida que ficou online. */
+        private const val EXTRA_AUTO = "br.com.mapp.overlay.AUTO"
         private const val SHIFT_TICK_MS = 30_000L
         /** Folga depois da meia-noite para o dia novo começar. */
         private const val DAY_ROLL_MS = 2_000L
@@ -1144,13 +1160,46 @@ class OverlayService : LifecycleService() {
         /** true enquanto o copiloto (serviço) está ativo — a tela inicial mostra o estado. */
         val running: StateFlow<Boolean> = _running.asStateFlow()
 
+        /** Ligar à mão (tela inicial): acaba a pausa do copiloto automático. */
         fun start(ctx: Context) {
+            OverlayPrefs.setAutoStartSnoozedAt(ctx, 0L)
             ContextCompat.startForegroundService(ctx, Intent(ctx, OverlayService::class.java))
         }
 
+        /**
+         * Copiloto automático ([CopilotAutoStart]): a Uber abriu online. Chamado com o MApp em segundo
+         * plano — o leitor de Acessibilidade conectado é o que permite ao Android subir o serviço.
+         */
+        fun startAuto(ctx: Context, platform: Platform) {
+            try {
+                ContextCompat.startForegroundService(
+                    ctx,
+                    Intent(ctx, OverlayService::class.java).putExtra(EXTRA_AUTO, platform.label),
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Copiloto automático recusado pelo Android", e)
+                TripLog.add(ctx, "⚠ ${platform.label} online, mas o Android não deixou ligar o copiloto sozinho")
+            }
+        }
+
+        /** Parar à mão (tela inicial). */
         fun stop(ctx: Context) {
+            snoozeAutoStart(ctx)
             ctx.stopService(Intent(ctx, OverlayService::class.java))
         }
+
+        /** Parado à mão: o automático não religa até a Uber ficar offline e online de novo. */
+        private fun snoozeAutoStart(ctx: Context) {
+            OverlayPrefs.setAutoStartSnoozedAt(ctx, System.currentTimeMillis())
+        }
+
+        /** Aviso de copiloto parado à mão (diz quando ele volta sozinho). */
+        fun stoppedMessage(ctx: Context): String =
+            if (OverlayPrefs.isAutoStartOn(ctx)) {
+                "Copiloto parado. Liga sozinho de novo quando você ficar offline e online na Uber."
+            } else {
+                "Copiloto parado"
+            }
     }
 }
 

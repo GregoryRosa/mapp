@@ -1,8 +1,12 @@
 package br.com.mapp.core.bus
 
+import br.com.mapp.core.copilot.OnlineState
+import br.com.mapp.core.copilot.RideOnline
 import br.com.mapp.core.model.EvaluatedOffer
+import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.RawOffer
 import br.com.mapp.core.model.TripEvent
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -46,6 +50,21 @@ object OfferBus {
     /** Chamado pelo leitor quando a tela muda de etapa ou de passageiro (sem repetir). */
     fun publishTripStage(event: TripEvent) {
         _tripStages.tryEmit(event)
+    }
+
+    private val _rideOnline = MutableSharedFlow<RideOnline>(
+        extraBufferCapacity = 4,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    /**
+     * Motorista online/offline na tela inicial do app de corrida, a cada leitura do texto — com o
+     * copiloto ligado ou não (é o que liga o copiloto sozinho: `overlay/CopilotAutoStart`).
+     */
+    val rideOnline: SharedFlow<RideOnline> = _rideOnline.asSharedFlow()
+
+    /** Chamado pelo leitor (qualquer thread) quando a tela diz se o motorista está online ou offline. */
+    fun publishRideOnline(platform: Platform, state: OnlineState) {
+        _rideOnline.tryEmit(RideOnline(platform, state))
     }
 
     /** Chamado pelo leitor quando a tela de oferta some. */

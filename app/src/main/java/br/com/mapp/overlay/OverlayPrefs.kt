@@ -51,9 +51,25 @@ object OverlayPrefs {
     const val KEY_NAV_HOLD_MS = "nav_hold_ms"
     const val KEY_NAV_BRING_ON = "nav_bring_on"
     const val KEY_NAV_APP = "nav_app"
+    const val KEY_AUTO_START_ON = "auto_start_on"
+    const val KEY_AUTO_START_SNOOZED_AT = "auto_start_snoozed_at"
 
     fun of(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
+
+    /** Ligar o copiloto sozinho com a Uber aberta e online (tela inicial; padrão: ligado). */
+    fun isAutoStartOn(context: Context): Boolean = of(context).getBoolean(KEY_AUTO_START_ON, true)
+
+    fun setAutoStartOn(context: Context, on: Boolean) {
+        of(context).edit().putBoolean(KEY_AUTO_START_ON, on).apply()
+    }
+
+    /** Quando o copiloto foi parado à mão (0 = sem pausa do automático — ver `core/copilot/AutoStart`). */
+    fun autoStartSnoozedAt(context: Context): Long = of(context).getLong(KEY_AUTO_START_SNOOZED_AT, 0L)
+
+    fun setAutoStartSnoozedAt(context: Context, at: Long) {
+        of(context).edit().putLong(KEY_AUTO_START_SNOOZED_AT, at).apply()
+    }
 
     /** Atraso da navegação (tela inicial → Segurar a navegação): padrão desligado. Ligar/desligar também liga o atalho (`NavLinkActivity.setEnabled`). */
     fun isNavHoldOn(context: Context): Boolean = of(context).getBoolean(KEY_NAV_HOLD_ON, false)
