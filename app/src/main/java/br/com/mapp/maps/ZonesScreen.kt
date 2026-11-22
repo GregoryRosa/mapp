@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -60,8 +60,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -145,6 +148,9 @@ private fun MyZonesTab() {
     var current by remember { mutableStateOf<GeoPoint?>(null) }
     var showSaveDialog by remember { mutableStateOf(false) }
     var zoneToDelete by remember { mutableStateOf<Zone?>(null) }
+    var pinToDelete by remember { mutableStateOf<ZonePin?>(null) }
+    /** Aba da lista de baixo: 0 = Zonas criadas, 1 = Pins para criar. */
+    var listTab by rememberSaveable { mutableIntStateOf(0) }
 
     // Pins marcados na rua pelo 📍 do menu circular do "M".
     val pins by remember { PinStore.pins(ctx) }.collectAsStateWithLifecycle()
@@ -284,64 +290,86 @@ private fun MyZonesTab() {
             }
         }
 
+        // Lista em duas abas com altura FIXA de 3 linhas: o mapa fica com o resto da tela e não
+        // encolhe conforme as zonas e os pins vão sendo criados (as linhas a mais rolam).
         HorizontalDivider()
-        if (pins.isNotEmpty() && !drawing.value) {
-            Text(
-                "📍 Pins para desenhar (${pins.size})",
-                modifier = Modifier.padding(start = 16.dp, top = 8.dp),
-                style = MaterialTheme.typography.titleSmall,
-            )
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 160.dp)) {
-                items(pins, key = { "pin${it.id}" }) { pin ->
-                    ListItem(
-                        modifier = Modifier.clickable {
-                            MapViews.centerOn(mapView, pin.point, zoom = PIN_ZOOM)
-                            selectedPin = pin
-                        },
-                        leadingContent = {
-                            Box(Modifier.size(18.dp).background(Color(pinColor(pin)), CircleShape))
-                        },
-                        headlineContent = { Text(pin.type.label) },
-                        supportingContent = { Text("Marcado em ${pinTime(pin)} · toque para transformar em zona") },
-                    )
-                }
+        TabRow(selectedTabIndex = listTab, containerColor = Color.Transparent, contentColor = MappColors.Teal) {
+            listOf("Zonas criadas (${zones.size})", "Pins para criar (${pins.size})").forEachIndexed { i, label ->
+                Tab(
+                    selected = listTab == i,
+                    onClick = { listTab = i },
+                    selectedContentColor = MappColors.Teal,
+                    unselectedContentColor = MappColors.TextDim,
+                    text = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                )
             }
-            HorizontalDivider()
         }
-        if (zones.isEmpty()) {
-            Text(
-                "Nenhuma zona salva. Desenhe áreas perigosas ou de alta demanda para receber alertas.",
-                modifier = Modifier.padding(16.dp),
-                style = MaterialTheme.typography.bodyMedium,
-            )
+        // Altura de uma linha medida na própria lista (acompanha o tamanho da fonte do celular);
+        // antes da 1ª medida, uma estimativa pela escala da fonte.
+        val density = LocalDensity.current
+        var rowPx by remember { mutableIntStateOf(0) }
+        val rowHeight = if (rowPx > 0) {
+            with(density) { rowPx.toDp() }
         } else {
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 240.dp)) {
-                items(zones, key = { it.id }) { zone ->
-                    ListItem(
-                        modifier = Modifier.clickable { MapViews.frame(mapView, zone.polygon) },
-                        leadingContent = {
-                            Box(
-                                Modifier.size(18.dp).background(
-                                    Color(zone.colorArgb.toInt() or 0xFF000000.toInt()),
-                                    CircleShape,
-                                ),
+            maxOf(MIN_ROW_HEIGHT, (44f * density.fontScale + 16f).dp)
+        }
+        val measureRow = Modifier.onSizeChanged { if (it.height > rowPx) rowPx = it.height }
+        Box(Modifier.fillMaxWidth().height(rowHeight * VISIBLE_ROWS)) {
+            if (listTab == 0) {
+                if (zones.isEmpty()) {
+                    EmptyListText("Nenhuma zona salva. Desenhe áreas perigosas ou de alta demanda para receber alertas.")
+                } else {
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        items(zones, key = { it.id }) { zone ->
+                            ListItem(
+                                modifier = measureRow.clickable { MapViews.frame(mapView, zone.polygon) },
+                                leadingContent = { ColorDot(zone.colorArgb.toInt() or 0xFF000000.toInt()) },
+                                headlineContent = { OneLine(zone.name) },
+                                supportingContent = {
+                                    OneLine(zone.type.label + if (zone.alertEnabled) " · alerta ligado" else " · sem alerta")
+                                },
+                                trailingContent = {
+                                    Row {
+                                        IconButton(onClick = { MapViews.frame(mapView, zone.polygon) }) {
+                                            Icon(Icons.Filled.Place, contentDescription = "Ver no mapa")
+                                        }
+                                        IconButton(onClick = { zoneToDelete = zone }) {
+                                            Icon(Icons.Filled.Delete, contentDescription = "Excluir")
+                                        }
+                                    }
+                                },
                             )
-                        },
-                        headlineContent = { Text(zone.name) },
-                        supportingContent = {
-                            Text(zone.type.label + if (zone.alertEnabled) " · alerta ligado" else " · sem alerta")
-                        },
-                        trailingContent = {
-                            Row {
-                                IconButton(onClick = { MapViews.frame(mapView, zone.polygon) }) {
-                                    Icon(Icons.Filled.Place, contentDescription = "Ver no mapa")
-                                }
-                                IconButton(onClick = { zoneToDelete = zone }) {
-                                    Icon(Icons.Filled.Delete, contentDescription = "Excluir")
-                                }
-                            }
-                        },
-                    )
+                        }
+                    }
+                }
+            } else {
+                if (pins.isEmpty()) {
+                    EmptyListText("Nenhum pin. Toque no 📍 do menu do ícone \"M\" para marcar o local atual e desenhar a zona depois.")
+                } else {
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        items(pins, key = { "pin${it.id}" }) { pin ->
+                            ListItem(
+                                // Desenhando outra zona, o toque no pin não abre o diálogo (perderia o desenho).
+                                modifier = measureRow.clickable(enabled = !drawing.value) {
+                                    MapViews.centerOn(mapView, pin.point, zoom = PIN_ZOOM)
+                                    selectedPin = pin
+                                },
+                                leadingContent = { ColorDot(pinColor(pin)) },
+                                headlineContent = { OneLine(pin.type.label) },
+                                supportingContent = { OneLine("${pinTime(pin)} · toque para criar") },
+                                trailingContent = {
+                                    Row {
+                                        IconButton(onClick = { MapViews.centerOn(mapView, pin.point, zoom = PIN_ZOOM) }) {
+                                            Icon(Icons.Filled.Place, contentDescription = "Ver no mapa")
+                                        }
+                                        IconButton(onClick = { pinToDelete = pin }) {
+                                            Icon(Icons.Filled.Delete, contentDescription = "Apagar pin")
+                                        }
+                                    }
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -360,6 +388,7 @@ private fun MyZonesTab() {
                 val polygon = quickPolygon ?: vertices.toList()
                 showSaveDialog = false
                 resetDrawing()
+                listTab = 0
                 scope.launch {
                     repos.zones.save(Zone(name = name, type = type, polygon = polygon, alertEnabled = alert))
                     pin?.let { PinStore.remove(ctx, it.id) }
@@ -404,6 +433,21 @@ private fun MyZonesTab() {
                 }) { Text("Apagar pin") }
             },
             dismissButton = { TextButton(onClick = { selectedPin = null }) { Text("Fechar") } },
+        )
+    }
+
+    pinToDelete?.let { pin ->
+        AlertDialog(
+            onDismissRequest = { pinToDelete = null },
+            title = { Text("Apagar pin?") },
+            text = { Text("O pin \"${pin.type.label}\" marcado em ${pinTime(pin)} será removido.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pinToDelete = null
+                    PinStore.remove(ctx, pin.id)
+                }) { Text("Apagar") }
+            },
+            dismissButton = { TextButton(onClick = { pinToDelete = null }) { Text("Cancelar") } },
         )
     }
 
@@ -477,6 +521,26 @@ internal fun SaveZoneDialog(
 }
 
 private const val PIN_ZOOM = 17.0
+
+/** Linhas visíveis na lista de zonas/pins (as demais rolam). */
+private const val VISIBLE_ROWS = 3
+
+/** Altura mínima de uma linha de duas linhas de texto no Material 3. */
+private val MIN_ROW_HEIGHT = 72.dp
+
+@Composable
+private fun OneLine(text: String) = Text(text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+
+@Composable
+private fun ColorDot(argb: Int) = Box(Modifier.size(18.dp).background(Color(argb), CircleShape))
+
+@Composable
+private fun EmptyListText(text: String) = Text(
+    text,
+    modifier = Modifier.padding(16.dp),
+    style = MaterialTheme.typography.bodyMedium,
+    color = MappColors.TextDim,
+)
 private val PIN_TIME = SimpleDateFormat("dd/MM HH:mm", Locale.forLanguageTag("pt-BR"))
 
 private fun pinTime(pin: ZonePin): String = PIN_TIME.format(Date(pin.id))
