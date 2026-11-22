@@ -15,6 +15,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import br.com.mapp.core.bus.OfferBus
+import br.com.mapp.core.copilot.OnlineScreen
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.RawOffer
 import br.com.mapp.reader.parser.OcrLayout
@@ -225,6 +226,9 @@ class OfferAccessibilityService : AccessibilityService() {
     /** Roda no [worker]: percorre a árvore e interpreta. */
     private fun readTree(platform: Platform): RawOffer? {
         val texts = collectTexts(platform.packageName)
+        // Tela inicial "Você está online"/"offline": liga o copiloto sozinho (overlay/CopilotAutoStart).
+        // Vale também com o copiloto parado — é só o texto, sem captura de imagem.
+        OnlineScreen.detect(platform, texts)?.let { OfferBus.publishRideOnline(platform, it) }
 
         return if (platform == lastPlatform && texts == lastTexts) {
             lastParsed

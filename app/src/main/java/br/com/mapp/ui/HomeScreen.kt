@@ -174,7 +174,7 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                     OutlinedButton(
                         onClick = {
                             OverlayService.stop(ctx)
-                            Toast.makeText(ctx, "Copiloto parado", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(ctx, OverlayService.stoppedMessage(ctx), Toast.LENGTH_LONG).show()
                         },
                         modifier = Modifier.fillMaxWidth().height(50.dp),
                         shape = RoundedCornerShape(16.dp),
@@ -196,6 +196,8 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                         }
                     }
                 }
+                Spacer(Modifier.height(12.dp))
+                AutoStartRow()
             }
 
             ShiftCard(running)
@@ -287,6 +289,33 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
  * links de cada app no Android com o botão Testar (faz o Android perguntar quem abre os links), espera
  * máxima e trazer a Uber. [refresh] muda ao voltar das Configurações/da navegação.
  */
+/** Copiloto automático: Uber aberta e online liga o copiloto sozinho (`overlay/CopilotAutoStart`). */
+@Composable
+private fun AutoStartRow() {
+    val ctx = LocalContext.current
+    var on by remember { mutableStateOf(OverlayPrefs.isAutoStartOn(ctx)) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Ligar sozinho com a Uber online", style = MaterialTheme.typography.titleSmall, color = MappColors.Text)
+            Text(
+                if (on) "Abriu a Uber em \"Você está online\" (ou ficou online): o copiloto liga sozinho. " +
+                    "Parado à mão, só volta depois de ficar offline e online de novo."
+                else "Desligado: o copiloto só liga pelo botão acima.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MappColors.TextDim,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Switch(
+            checked = on,
+            onCheckedChange = {
+                on = it
+                OverlayPrefs.setAutoStartOn(ctx, it)
+            },
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NavHoldCard(refresh: Int) {
