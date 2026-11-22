@@ -460,7 +460,8 @@ class OverlayService : LifecycleService() {
     // ------------------------------------------------------------------ dia e meta (ícone "M")
 
     /**
-     * Números junto ao "M" (km e custo em cima, valor bruto embaixo) e anel da meta diária: mesma
+     * Números junto ao "M" (km e custo em cima, valor bruto embaixo) e anel da meta diária (de **lucro
+     * líquido**: bruto − custo do carro − gastos lançados, como em Ganhos e gastos): mesma
      * conta da tela Ganhos e gastos → Hoje (`PeriodMath.totals`), recalculada quando muda a jornada,
      * o histórico de ofertas, os lançamentos, a meta ou o custo/km — e de novo à meia-noite.
      * **Dia de trabalho:** com jornada aberta vale o dia em que ela começou (`ReportMath.workDay`):
@@ -496,7 +497,7 @@ class OverlayService : LifecycleService() {
                 dayTotals = totals
                 dailyGoal = goal
                 pushDay()
-                celebrateGoal(ReportMath.dateOf(p.from), totals.gross, goal)
+                celebrateGoal(ReportMath.dateOf(p.from), totals.net, goal)
             }
         }
     }
@@ -525,6 +526,7 @@ class OverlayService : LifecycleService() {
                 km = t.km,
                 carCost = t.carCost,
                 gross = t.gross,
+                net = t.net,
                 goal = dailyGoal,
                 hasData = t.shifts > 0 || t.gross > 0 || t.km > 0,
             ),
@@ -532,14 +534,14 @@ class OverlayService : LifecycleService() {
     }
 
     /**
-     * Meta do dia batida: som de dinheiro + aviso, uma vez por dia de trabalho e por valor de meta
-     * (a meia-noite com a jornada aberta não repete o som).
+     * Meta do dia batida (lucro líquido): som de dinheiro + aviso, uma vez por dia de trabalho e por
+     * valor de meta (a meia-noite com a jornada aberta não repete o som).
      */
-    private fun celebrateGoal(workDate: java.time.LocalDate, gross: Double, goal: Double?) {
-        val mark = DayGoal.celebration(gross, goal, workDate.toString(), OverlayPrefs.goalMark(this)) ?: return
+    private fun celebrateGoal(workDate: java.time.LocalDate, net: Double, goal: Double?) {
+        val mark = DayGoal.celebration(net, goal, workDate.toString(), OverlayPrefs.goalMark(this)) ?: return
         OverlayPrefs.setGoalMark(this, mark)
         cashSound?.playGoal() // som escolhido nos ajustes do botão "M"
-        tripToast("🎯 Meta do dia batida! ${ShiftMath.money(gross)} de ${ShiftMath.money(goal ?: gross)}")
+        tripToast("🎯 Meta do dia batida! Lucro de ${ShiftMath.money(net)} de ${ShiftMath.money(goal ?: net)}")
     }
 
     private fun offerLabel(raw: RawOffer): String {

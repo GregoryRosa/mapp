@@ -92,7 +92,9 @@ sealed interface GoalForecast {
 }
 
 /**
- * Em que dia, no ritmo atual, a meta do período fica batida. O ritmo é o ganho por "peso" dos dias já
+ * Em que dia, no ritmo atual, a meta do período fica batida. A meta é de **lucro líquido** (o que sobra
+ * depois do custo do carro e dos gastos lançados), então os valores podem ser negativos: dia com mais
+ * custo que ganho puxa o ritmo para baixo. O ritmo é o lucro por "peso" dos dias já
  * rodados ([GoalPlan.weight]: com metas por dia, sábado de meta R$ 1.000 rende mais que segunda de
  * R$ 250; sem elas, todo dia igual) e vale para os dias que faltam.
  *
@@ -102,20 +104,21 @@ sealed interface GoalForecast {
 object GoalPace {
 
     /**
-     * [days] = dias do período, em ordem; [today] = dia de trabalho; [achieved] = bruto do período até
-     * agora, [todayGross] = parte dele ganha hoje.
+     * [days] = dias do período, em ordem; [today] = dia de trabalho; [achieved] = lucro líquido do
+     * período até agora, [todayAchieved] = parte dele feita hoje (pode ser negativa: só custo até agora).
      */
     fun forecast(
         goal: Double,
         achieved: Double,
-        todayGross: Double,
+        todayAchieved: Double,
         days: List<LocalDate>,
         today: LocalDate,
         weight: (LocalDate) -> Double,
     ): GoalForecast {
         if (achieved >= goal) return GoalForecast.Reached
         val inPeriod = today in days
-        val todayEarned = if (inPeriod) todayGross.coerceIn(0.0, achieved) else 0.0
+        // Lucro de hoje (negativo = só custo até agora). O dos dias anteriores é o resto do período.
+        val todayEarned = if (inPeriod) todayAchieved else 0.0
         val prev = days.filter { it < today }
         val future = days.filter { it > today }
         // Sem peso nenhum (dias sem meta, com metas por dia): todo dia pesa igual.

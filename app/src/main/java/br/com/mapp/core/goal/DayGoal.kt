@@ -3,8 +3,9 @@ package br.com.mapp.core.goal
 import java.util.Locale
 
 /**
- * Meta diária no anel do ícone "M": valor bruto do dia ÷ meta diária (a mesma de Ganhos e gastos).
- * O anel enche até 100%; ao bater, toca o som de dinheiro uma vez por dia e por valor de meta.
+ * Meta diária no anel do ícone "M": **lucro líquido** do dia (bruto − custo do carro − gastos lançados)
+ * ÷ meta diária (a mesma de Ganhos e gastos). Lucro negativo = anel vazio. O anel enche até 100%; ao
+ * bater, toca o som de dinheiro uma vez por dia e por valor de meta.
  */
 object DayGoal {
 

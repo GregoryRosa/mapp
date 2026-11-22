@@ -144,7 +144,15 @@ class QuickBubbleView(
     // ------------------------------------------------------------------ textos do dia (em volta do "M")
 
     /** Números do dia junto ao "M" (mesma conta de Ganhos e gastos → Hoje) e a meta diária. */
-    data class DayInfo(val km: Double, val carCost: Double, val gross: Double, val goal: Double?, val hasData: Boolean)
+    /** [gross] = número embaixo do "M"; [net] = lucro líquido, que enche o anel da meta. */
+    data class DayInfo(
+        val km: Double,
+        val carCost: Double,
+        val gross: Double,
+        val net: Double,
+        val goal: Double?,
+        val hasData: Boolean,
+    )
 
     private var day: DayInfo? = null
     private var labelsAttached = false
@@ -1231,9 +1239,9 @@ class QuickBubbleView(
 
     private fun bindDay() {
         val d = day
-        // Anel da meta: enche com o bruto do dia; batida = anel com o gradiente do MApp por fora.
-        val fraction = d?.let { DayGoal.fraction(it.gross, it.goal) }
-        val reached = d != null && DayGoal.reached(d.gross, d.goal)
+        // Anel da meta: enche com o lucro líquido do dia; batida = anel com o gradiente do MApp por fora.
+        val fraction = d?.let { DayGoal.fraction(it.net, it.goal) }
+        val reached = d != null && DayGoal.reached(d.net, d.goal)
         bubble.setGoal(fraction?.toFloat(), reached)
         bubble.contentDescription = "MApp – toque abre o menu, segure 3 segundos para desligar" +
             (fraction?.let { " · meta do dia ${(it * 100).toInt()}%" } ?: "")
