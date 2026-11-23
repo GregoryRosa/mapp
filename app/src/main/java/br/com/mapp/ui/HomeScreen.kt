@@ -86,6 +86,7 @@ import br.com.mapp.core.nav.NavLinkState
 import br.com.mapp.overlay.NavLinkActivity
 import br.com.mapp.overlay.NavRelay
 import br.com.mapp.overlay.OverlayPrefs
+import br.com.mapp.core.status.PhoneSetup
 import br.com.mapp.overlay.OverlayService
 import br.com.mapp.overlay.ShiftTracker
 import br.com.mapp.core.status.ReaderCheck
@@ -203,7 +204,8 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
             ShiftCard(running)
 
             // Permissões: completas = uma linha; faltando = lista com "Ativar"
-            val allOk = p.location && p.overlay && problem == ReaderProblem.NONE && p.battery
+            val allOk = p.location && p.overlay && problem == ReaderProblem.NONE && p.battery &&
+                (!p.autoLaunchNeeded || p.autoLaunch) && p.unusedPauseOff
             GlassCard {
                 Text("Permissões", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(6.dp))
@@ -246,6 +248,32 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                     PermRow("Sem otimização de bateria", p.battery) {
                         ctx.startActivity(
                             Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}"))
+                        )
+                    }
+                    // O Android não diz se estes estão feitos (início automático nunca; "Pausar…" às vezes):
+                    // o botão abre a tela certa e o motorista confirma com "Já fiz".
+                    if (p.autoLaunchNeeded) {
+                        ManualPermRow(
+                            label = "Início automático em segundo plano",
+                            ok = p.autoLaunch,
+                            hint = PhoneSetup.autoLaunchPath(PhoneSettings.brand) + " " + PhoneSetup.AUTO_LAUNCH_WHY,
+                            onOpen = { PhoneSettings.openAutoLaunch(ctx) },
+                            onDone = {
+                                PhoneSettings.setAutoLaunchConfirmed(ctx, true)
+                                refresh++
+                            },
+                        )
+                    }
+                    if (PhoneSettings.hasUnusedPause) {
+                        ManualPermRow(
+                            label = "Desmarcar \"Pausar atividade do app quando sem uso\"",
+                            ok = p.unusedPauseOff,
+                            hint = PhoneSetup.UNUSED_PATH,
+                            onOpen = { PhoneSettings.openAppInfo(ctx) },
+                            onDone = {
+                                PhoneSettings.setUnusedPauseConfirmed(ctx, true)
+                                refresh++
+                            },
                         )
                     }
                 }
@@ -631,7 +659,40 @@ private fun PermRow(label: String, ok: Boolean, onFix: () -> Unit) {
     }
 }
 
-data class Perms(val location: Boolean, val overlay: Boolean, val accessibility: Boolean, val battery: Boolean) {
+/**
+ * Itens que o MApp ainda pede depois de abrir uma tela de ajuste (como [PermRow]), mas que o Android não
+ * informa: [onOpen] abre a tela do celular e "Já fiz" ([onDone]) marca como feito.
+ */
+@Composable
+private fun ManualPermRow(label: String, ok: Boolean, hint: String, onOpen: () -> Unit, onDone: () -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                (if (ok) "✅ " else "⚠️ ") + label, Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (ok) MappColors.Text else MappColors.Warn,
+            )
+            if (!ok) TextButton(onClick = onOpen) { Text("Abrir", color = MappColors.Teal) }
+        }
+        if (!ok) {
+            Text(hint, style = MaterialTheme.typography.bodySmall, color = MappColors.TextDim)
+            TextButton(onClick = onDone) { Text("✓ Já fiz", color = MappColors.Teal) }
+        }
+    }
+}
+
+data class Perms(
+    val location: Boolean,
+    val overlay: Boolean,
+    val accessibility: Boolean,
+    val battery: Boolean,
+    /** O fabricante tem lista de início automático (Xiaomi, OPPO/realme/OnePlus, vivo...). */
+    val autoLaunchNeeded: Boolean,
+    /** Início automático confirmado pelo motorista. */
+    val autoLaunch: Boolean,
+    /** "Pausar atividade do app quando sem uso" desmarcado (ou não existe neste Android). */
+    val unusedPauseOff: Boolean,
+) {
     companion object {
         fun check(ctx: Context): Perms {
             val loc = ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION) ==
@@ -639,7 +700,15 @@ data class Perms(val location: Boolean, val overlay: Boolean, val accessibility:
             val overlay = Settings.canDrawOverlays(ctx)
             val enabled = ReaderStatus.settingEnabled(ctx)
             val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
-            return Perms(loc, overlay, enabled, pm.isIgnoringBatteryOptimizations(ctx.packageName))
+            return Perms(
+                location = loc,
+                overlay = overlay,
+                accessibility = enabled,
+                battery = pm.isIgnoringBatteryOptimizations(ctx.packageName),
+                autoLaunchNeeded = PhoneSetup.needsAutoLaunch(PhoneSettings.brand),
+                autoLaunch = PhoneSettings.autoLaunchConfirmed(ctx),
+                unusedPauseOff = PhoneSettings.unusedPauseOff(ctx),
+            )
         }
     }
 }
