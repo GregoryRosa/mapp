@@ -212,7 +212,8 @@ private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
                     title = dayTitle(date, todayDate),
                     subtitle = null,
                     totals = dayTotals,
-                    goal = ReportMath.goalProgress(dayTotals.net, WeekGoals.goalFor(goals, date)),
+                    // Com meta mensal, a parte dela no dia (igual à semana); sem ela, a meta do dia.
+                    goal = ReportMath.goalProgress(dayTotals.net, GoalPlan.dayGoal(goals, date)),
                     goalHint = true,
                     titleActions = {
                         IconButton(onClick = { showPicker = true }) {
@@ -714,8 +715,9 @@ private fun GoalsDialog(
                             "Dividida pelo peso da meta de cada dia (dia de meta maior leva mais). "
                         } else {
                             "Dividida igual pelos dias do mês. "
-                        }) + "Semana que vira o mês soma a parte de cada mês. É com ela que Ganhos e gastos " +
-                            "diz se você bate a meta da semana no ritmo atual.",
+                        }) + "Semana que vira o mês soma a parte de cada mês. A meta de cada dia (seção Hoje " +
+                            "e anel do ícone M) também sai da meta mensal, do mesmo jeito; as metas por dia " +
+                            "abaixo viram o peso de cada dia.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
