@@ -29,6 +29,15 @@ object GoalPlan {
         return if (total > 0) monthly * weight(goals, date) / total else monthly / days.size
     }
 
+    /**
+     * Meta do dia: com meta mensal, a parte dela que cabe no dia ([monthShare] — a mesma conta da
+     * semana, pesando as metas de cada dia da semana); sem mensal, a meta do dia ([WeekGoals.goalFor]).
+     * null = sem meta. Com metas por dia, dia sem meta própria nem geral pesa zero: fica sem meta.
+     */
+    fun dayGoal(goals: Goals, date: LocalDate): Double? =
+        if (WeekGoals.valid(goals.monthly) != null) monthShare(goals, date)?.takeIf { it > 0 }
+        else WeekGoals.goalFor(goals, date)
+
     /** De onde veio a meta da semana. */
     enum class WeekSource { MONTHLY, DAILY }
 

@@ -57,6 +57,22 @@ class GoalPaceTest {
         assertTrue(GoalPlan.monthWeeks(weekend, nov).isEmpty())
     }
 
+    @Test fun meta_do_dia_sai_da_meta_mensal() {
+        // Com mensal: a parte do dia, igual à semana.
+        assertEquals(200.0, GoalPlan.dayGoal(Goals(daily = 250.0, monthly = 6000.0), d(5))!!, eps)
+        val g = weekend.copy(monthly = 7125.0)
+        assertEquals(500.0, GoalPlan.dayGoal(g, d(21))!!, eps) // sábado
+        assertEquals(125.0, GoalPlan.dayGoal(g, d(18))!!, eps) // quarta
+        // Os dias da semana somam a meta da semana.
+        assertEquals(GoalPlan.weekGoal(g, d(16))!!.amount, week.sumOf { GoalPlan.dayGoal(g, it)!! }, eps)
+        // Sem mensal: a meta do dia da semana (ou a geral).
+        assertEquals(250.0, GoalPlan.dayGoal(weekend, d(18))!!, eps)
+        assertEquals(1000.0, GoalPlan.dayGoal(weekend, d(21))!!, eps)
+        assertNull(GoalPlan.dayGoal(Goals(), d(18)))
+        // Só o sábado com meta: dia sem meta pesa zero e fica sem meta.
+        assertNull(GoalPlan.dayGoal(Goals(monthly = 3000.0, byWeekday = mapOf(6 to 500.0)), d(18)))
+    }
+
     // --- Em que dia bate a meta no ritmo atual ---
 
     @Test fun hoje_em_andamento_fecha_como_um_dia_normal() {
