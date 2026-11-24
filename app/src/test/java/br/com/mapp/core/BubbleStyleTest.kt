@@ -161,4 +161,15 @@ class BubbleStyleTest {
         assertEquals(GreatSound.CHIME, RideSound.CHIME.great)
         assertEquals(null, RideSound.POP.great)
     }
+
+    @Test fun numero_embaixo_do_m_bruto_ou_liquido() {
+        // Padrão = bruto, como antes; estilo gravado antes da opção também fica no bruto.
+        assertEquals(false, BubbleStyle().showNet)
+        assertEquals(false, BubbleStyle.decode("v1;bg=FF16404A").showNet)
+        val net = BubbleStyle(showNet = true)
+        assertEquals(net, BubbleStyle.decode(net.encode()))
+        assertTrue(net.encode().contains("value=net"))
+        assertEquals(false, BubbleStyle.decode(BubbleStyle().encode()).showNet)
+        assertEquals(false, BubbleStyle.decode("v1;value=xyz").showNet)
+    }
 }
