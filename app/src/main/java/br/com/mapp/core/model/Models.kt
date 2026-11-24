@@ -89,37 +89,57 @@ enum class FuelType(
 }
 
 /**
- * Unidade em que um custo de Custos fixos foi digitado: por km rodado ou o total do mês (o MApp
- * divide pelos km do mês da [KmBase]).
+ * Como um custo de Custos fixos entra na conta:
+ * - [PER_KM] e [PER_MONTH] = **desgaste** (combustível, pneus, manutenção...): conta a cada km rodado.
+ *   [PER_MONTH] é o total do mês dividido pelos km do mês da [KmBase].
+ * - [FIXED_MONTH] = **custo fixo** (seguro, financiamento, IPVA...): não depende dos km; o total do
+ *   mês é dividido pelas corridas do mês da [KmBase] e descontado a cada corrida finalizada.
  */
 enum class CostUnit(val suffix: String, val label: String) {
     PER_KM("R$/km", "por km"),
     PER_MONTH("R$/mês", "por mês"),
+    FIXED_MONTH("R$/mês", "fixo do mês"),
+    ;
+
+    /** true = custo fixo, descontado por corrida (não por km). */
+    val isFixed: Boolean get() = this == FIXED_MONTH
 }
 
 /**
- * Km rodados no mês, a base que transforma custo do mês em R$/km: [kmPerDay] (média por dia rodado)
- * × [daysPerMonth] (dias rodados no mês). [auto] = vem das jornadas (`core/shift/KmAverages`,
- * atualizada sozinha); false = digitado pelo motorista.
+ * Base do mês que reparte os custos digitados pelo total do mês: [kmPerDay] (média por dia rodado) ×
+ * [daysPerMonth] (dias rodados no mês) = km do mês, para o desgaste em R$/km; [ridesPerDay] ×
+ * [daysPerMonth] = corridas do mês, para os custos fixos em R$ por corrida. [auto] = vem das jornadas
+ * (`core/shift/KmAverages`, atualizada sozinha); false = digitado pelo motorista.
  */
 data class KmBase(
     val kmPerDay: Double = 150.0,
     val daysPerMonth: Double = 26.0,
     val auto: Boolean = true,
+    val ridesPerDay: Double = 20.0,
 ) {
     val monthKm: Double
         get() = if (kmPerDay > 0 && daysPerMonth > 0) kmPerDay * daysPerMonth else 0.0
 
-    /** R$/km de [amount] digitado em [unit]. Custo do mês sem km na base = 0. */
+    val monthRides: Double
+        get() = if (ridesPerDay > 0 && daysPerMonth > 0) ridesPerDay * daysPerMonth else 0.0
+
+    /** R$/km de [amount] digitado em [unit]. Custo do mês sem km na base = 0; custo fixo = 0 (é por corrida). */
     fun perKm(amount: Double, unit: CostUnit): Double = when (unit) {
         CostUnit.PER_KM -> amount
         CostUnit.PER_MONTH -> if (monthKm > 0) amount / monthKm else 0.0
+        CostUnit.FIXED_MONTH -> 0.0
+    }
+
+    /** R$ por corrida de [amount]: só o custo fixo (total do mês ÷ corridas do mês); desgaste = 0. */
+    fun perRide(amount: Double, unit: CostUnit): Double = when (unit) {
+        CostUnit.FIXED_MONTH -> if (monthRides > 0) amount / monthRides else 0.0
+        CostUnit.PER_KM, CostUnit.PER_MONTH -> 0.0
     }
 
     /** R$/mês de [amount] digitado em [unit] (R$/km × km do mês). */
     fun perMonth(amount: Double, unit: CostUnit): Double = when (unit) {
         CostUnit.PER_KM -> amount * monthKm
-        CostUnit.PER_MONTH -> amount
+        CostUnit.PER_MONTH, CostUnit.FIXED_MONTH -> amount
     }
 }
 
@@ -128,8 +148,9 @@ data class ExtraKmCost(val name: String, val amount: Double, val unit: CostUnit 
 
 /**
  * Custos do veículo usados para o lucro líquido. Preço e consumo na unidade de [fuelType] (litro ou kWh).
- * Manutenção, depreciação e [extraCosts] (custos adicionados pelo usuário) são digitados por km ou
- * pelo total do mês; o do mês vira R$/km pela [kmBase]. Tudo somado no [costPerKm].
+ * **Desgaste** (combustível, manutenção, depreciação e custos extras por km/mês) vira R$/km — [costPerKm],
+ * contado a cada km rodado. **Custos fixos** ([CostUnit.FIXED_MONTH]: seguro, financiamento...) viram
+ * R$ por corrida — [fixedPerRide], descontado a cada corrida finalizada.
  */
 data class VehicleCostConfig(
     val fuelType: FuelType = FuelType.GASOLINE,
@@ -157,43 +178,83 @@ data class VehicleCostConfig(
     val extraPerKm: Double
         get() = extraCosts.sumOf { perKmOf(it) }
 
-    /** true = algum custo foi digitado pelo total do mês (depende da [kmBase]). */
+    /** R$ por corrida de um custo adicionado pelo usuário (só os fixos; desgaste = 0). */
+    fun perRideOf(cost: ExtraKmCost): Double = kmBase.perRide(cost.amount, cost.unit)
+
+    /** true = algum custo de desgaste foi digitado pelo total do mês (depende dos km da [kmBase]). */
     val usesMonthly: Boolean
         get() = maintenanceUnit == CostUnit.PER_MONTH || depreciationUnit == CostUnit.PER_MONTH ||
             extraCosts.any { it.unit == CostUnit.PER_MONTH }
 
+    /** Custos fixos do mês somados (R$/mês). */
+    val fixedMonthTotal: Double
+        get() = listOf(maintenance to maintenanceUnit, depreciation to depreciationUnit)
+            .plus(extraCosts.map { it.amount to it.unit })
+            .filter { it.second.isFixed }
+            .sumOf { it.first }
+
+    val hasFixed: Boolean
+        get() = maintenanceUnit.isFixed || depreciationUnit.isFixed || extraCosts.any { it.unit.isFixed }
+
+    /** Desgaste: R$ por km rodado (combustível + manutenção + depreciação + extras de desgaste). */
     val costPerKm: Double
         get() = energyCostPerKm + maintenancePerKm + depreciationPerKm + extraPerKm
+
+    /** Custos fixos: R$ descontados a cada corrida finalizada (total do mês ÷ corridas do mês). */
+    val fixedPerRide: Double
+        get() = kmBase.perRide(fixedMonthTotal, CostUnit.FIXED_MONTH)
+
+    /** Custo de uma corrida de [km]: desgaste dos km + a parte dela nos custos fixos. */
+    fun rideCost(km: Double): Double = km * costPerKm + fixedPerRide
 }
 
 /**
  * Grava/lê [ExtraKmCost] em texto (uma linha por custo). "v1" = versão antiga, sempre por km;
- * "v2" leva a unidade.
+ * "v2" leva a unidade (de antes dos custos fixos por corrida); "v3" = atual.
  */
 object ExtraKmCostCodec {
     private const val SEP = "\t"
 
     fun encode(costs: List<ExtraKmCost>): String =
         costs.joinToString("\n") { c ->
-            listOf("v2", c.name.replace(Regex("[\t\n\r]"), " ").trim(), c.amount, c.unit.name).joinToString(SEP)
+            listOf("v3", c.name.replace(Regex("[\t\n\r]"), " ").trim(), c.amount, c.unit.name).joinToString(SEP)
         }
 
-    /** Linhas inválidas são ignoradas (não derrubam as outras). */
+    /**
+     * Linhas inválidas são ignoradas (não derrubam as outras). Custo "por mês" gravado antes dos custos
+     * fixos ("v2") com nome de custo fixo (seguro, financiamento, IPVA...) passa a ser fixo do mês,
+     * uma vez só: depois de gravado como "v3", vale o que o motorista escolheu.
+     */
     fun decode(text: String?): List<ExtraKmCost> {
         if (text.isNullOrBlank()) return emptyList()
         return text.split('\n').mapNotNull { row ->
             val c = row.split(SEP)
             if (c.size < 3) return@mapNotNull null
             val amount = c[2].toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return@mapNotNull null
+            val unit = CostUnit.entries.firstOrNull { it.name == c.getOrNull(3) }
             when (c[0]) {
                 "v1" -> ExtraKmCost(c[1], amount, CostUnit.PER_KM)
                 "v2" -> {
-                    val unit = CostUnit.entries.firstOrNull { it.name == c.getOrNull(3) } ?: return@mapNotNull null
-                    ExtraKmCost(c[1], amount, unit)
+                    unit ?: return@mapNotNull null
+                    val migrated = if (unit == CostUnit.PER_MONTH && looksFixed(c[1])) CostUnit.FIXED_MONTH else unit
+                    ExtraKmCost(c[1], amount, migrated)
                 }
+                "v3" -> ExtraKmCost(c[1], amount, unit ?: return@mapNotNull null)
                 else -> null
             }
         }
+    }
+
+    private val FIXED_WORDS = Regex(
+        "seguro|financ|parcela|prestac|consorcio|ipva|licenciament|dpvat|aluguel|locac|" +
+            "rastreador|mensalidade|internet|celular|plano|garagem|documenta",
+    )
+
+    /** Nome de custo que não depende dos km (seguro, financiamento, IPVA, aluguel do carro...). */
+    fun looksFixed(name: String): Boolean {
+        val k = java.text.Normalizer.normalize(name, java.text.Normalizer.Form.NFD)
+            .replace(Regex("\\p{M}+"), "").lowercase()
+        return FIXED_WORDS.containsMatchIn(k)
     }
 }
 

@@ -222,7 +222,8 @@ fun rememberNow(): Long {
 
 /**
  * Totais do período com a mesma conta em todas as telas ([PeriodMath.totals]): jornadas (km do GPS,
- * tempo, custo), corridas aceitas fora de jornada e lançamentos manuais.
+ * tempo, custo: desgaste por km + fixos por corrida finalizada), corridas aceitas fora de jornada e
+ * lançamentos manuais.
  */
 @Composable
 fun rememberPeriodTotals(period: Period, now: Long = rememberNow()): PeriodTotals {
@@ -238,6 +239,7 @@ fun rememberPeriodTotals(period: Period, now: Long = rememberNow()): PeriodTotal
     return remember(period, current, history, cost, offers, entries, now) {
         PeriodMath.totals(
             period.from, period.to, current, history, offers, entries, cost.costPerKm, now, CostSplit.parts(cost),
+            cost.fixedPerRide,
         )
     }
 }
@@ -264,7 +266,7 @@ fun rememberPeriodsTotals(periods: List<Period>, now: Long = rememberNow()): Lis
     return remember(periods, current, history, cost, offers, entries, clock) {
         val parts = CostSplit.parts(cost)
         periods.map { p ->
-            PeriodMath.totals(p.from, p.to, current, history, offers, entries, cost.costPerKm, now, parts)
+            PeriodMath.totals(p.from, p.to, current, history, offers, entries, cost.costPerKm, now, parts, cost.fixedPerRide)
         }
     }
 }

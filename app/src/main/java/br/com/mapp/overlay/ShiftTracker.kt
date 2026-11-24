@@ -61,19 +61,26 @@ object ShiftTracker {
     fun pause(ctx: Context, now: Long = System.currentTimeMillis()) = update(ctx) { it?.pause(now) }
 
     /**
-     * Encerra, guarda como "última jornada" e no histórico (com o custo/km de agora e a divisão dele
-     * por item de Custos fixos, [costParts] — vai para o detalhamento de custos do mês).
+     * Encerra, guarda como "última jornada" e no histórico (com o custo/km de agora, os custos fixos
+     * por corrida [fixedPerRide] e a divisão por item de Custos fixos, [costParts] — vai para o
+     * detalhamento de custos do mês).
      */
     @Synchronized
     fun end(
         ctx: Context,
         costPerKm: Double? = null,
         costParts: List<CostPart>? = null,
+        fixedPerRide: Double = 0.0,
         now: Long = System.currentTimeMillis(),
     ): Shift? {
         load(ctx)
         val ended = _current.value?.pause(now)
-            ?.copy(costPerKm = costPerKm, costParts = costParts?.takeIf { costPerKm != null }, endedAt = now)
+            ?.copy(
+                costPerKm = costPerKm,
+                fixedPerRide = fixedPerRide.takeIf { costPerKm != null },
+                costParts = costParts?.takeIf { costPerKm != null },
+                endedAt = now,
+            )
             ?: return null
         val list = (listOf(ended) + _history.value).take(HISTORY_MAX)
         _current.value = null
@@ -87,18 +94,24 @@ object ShiftTracker {
         return ended
     }
 
-    /** Custos do veículo salvos: jornadas de hoje já encerradas passam a usar o custo/km novo (e a divisão). */
+    /**
+     * Custos do veículo salvos: jornadas de hoje já encerradas passam a usar o custo/km novo, os custos
+     * fixos por corrida novos e a divisão.
+     */
     @Synchronized
     fun applyCostToday(
         ctx: Context,
         costPerKm: Double,
         costParts: List<CostPart>? = null,
+        fixedPerRide: Double = 0.0,
         now: Long = System.currentTimeMillis(),
     ) {
         load(ctx)
         val zone = ZoneId.systemDefault()
-        val list = ShiftMath.withCostToday(_history.value, costPerKm, now, zone, costParts)
-        val last = _last.value?.let { ShiftMath.withCostToday(listOf(it), costPerKm, now, zone, costParts).single() }
+        val list = ShiftMath.withCostToday(_history.value, costPerKm, now, zone, costParts, fixedPerRide)
+        val last = _last.value?.let {
+            ShiftMath.withCostToday(listOf(it), costPerKm, now, zone, costParts, fixedPerRide).single()
+        }
         if (list == _history.value && last == _last.value) return
         _history.value = list
         _last.value = last

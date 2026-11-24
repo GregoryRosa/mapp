@@ -87,7 +87,8 @@ object OfferEvaluator {
         val totalMin = legs.minutes?.let { Math.round(it).toInt() }
         val perKm = totalKm?.takeIf { it > 0 }?.let { raw.price / it }
         val perHour = legs.minutes?.takeIf { it > 0 }?.let { raw.price / it * 60.0 }
-        val net = totalKm?.let { raw.price - it * cost.costPerKm }
+        // Lucro da corrida: valor − desgaste dos km − a parte dela nos custos fixos (seguro, financiamento...).
+        val net = totalKm?.let { raw.price - cost.rideCost(it) }
         val netPerKm = if (net != null && totalKm > 0) net / totalKm else null
         return OfferMetrics(totalKm, totalMin, perKm, perHour, net, netPerKm)
     }
