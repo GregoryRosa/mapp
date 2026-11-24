@@ -463,8 +463,8 @@ private fun PeriodCard(
             }
             if (net) {
                 Text(
-                    "Custos: carro ${Format.brl(t.carCost)} (${Format.km(t.km)} × ${Format.perKm(t.carCostPerKm)})" +
-                        " + gastos lançados ${Format.brl(t.expenses)}",
+                    "Custos: desgaste ${Format.brl(t.kmCost)} (${Format.km(t.km)} × ${Format.perKm(t.kmCostPerKm)})" +
+                        fixedCostText(t) + " + gastos lançados ${Format.brl(t.expenses)}",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -680,7 +680,7 @@ private fun GoalsDialog(
             ) {
                 Text(
                     "As metas são do lucro líquido: o que sobra depois de descontar o custo do carro " +
-                        "(km × custo/km de Custos fixos) e os gastos lançados.",
+                        "(desgaste por km e custos fixos por corrida, de Custos fixos) e os gastos lançados.",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -797,4 +797,10 @@ private fun GoalsDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
     )
+}
+
+/** " + fixos R$ 9,00 (3 corridas × R$ 3,00)" — vazio sem custos fixos no período. */
+internal fun fixedCostText(t: PeriodTotals): String {
+    val perRide = t.fixedPerRide ?: return ""
+    return " + fixos ${Format.brl(t.fixedCost)} (${t.rides} corrida${if (t.rides == 1) "" else "s"} × ${Format.brl(perRide)})"
 }

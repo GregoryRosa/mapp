@@ -619,8 +619,11 @@ private fun ShiftCard(copilotRunning: Boolean) {
                 Text("Ganho ${ShiftMath.money(t.gross)} · Custos ${ShiftMath.money(t.cost)}", style = MaterialTheme.typography.bodyMedium)
                 if (net) {
                     Text(
-                        "Carro ${ShiftMath.money(t.carCost)} (${ShiftMath.km(t.km)} × R$ " +
-                            "${t.carCostPerKm?.let { ShiftMath.num(it, 2) } ?: "—"}/km)" +
+                        "Desgaste ${ShiftMath.money(t.kmCost)} (${ShiftMath.km(t.km)} × R$ " +
+                            "${t.kmCostPerKm?.let { ShiftMath.num(it, 2) } ?: "—"}/km)" +
+                            (t.fixedPerRide?.let { fixed ->
+                                " + fixos ${ShiftMath.money(t.fixedCost)} (${t.rides} × ${ShiftMath.money(fixed)})"
+                            } ?: "") +
                             if (t.expenses > 0) " + gastos lançados ${ShiftMath.money(t.expenses)}" else "",
                         style = dim, color = MappColors.TextDim,
                     )

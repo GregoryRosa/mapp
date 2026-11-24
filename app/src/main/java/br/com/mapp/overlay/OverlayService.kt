@@ -114,8 +114,11 @@ class OverlayService : LifecycleService() {
     private var announcedFilters: Set<String> = emptySet()
 
     // ---- Jornada ----
+    /** Desgaste: R$ por km rodado. */
     private var costPerKm: Double = 0.0
-    /** Divisão do custo/km por item de Custos fixos (gravada na jornada ao encerrar). */
+    /** Custos fixos (seguro, financiamento...): R$ descontados a cada corrida finalizada. */
+    private var fixedPerRide: Double = 0.0
+    /** Divisão do custo por item de Custos fixos (gravada na jornada ao encerrar). */
     private var costParts: List<CostPart> = emptyList()
     /** Última oferta avaliada (para o +1 do Card e o aceite automático). */
     private var lastOffer: EvaluatedOffer? = null
@@ -265,13 +268,13 @@ class OverlayService : LifecycleService() {
         }
 
         override fun endShift() {
-            val ended = ShiftTracker.end(this@OverlayService, costPerKm, costParts) ?: return
+            val ended = ShiftTracker.end(this@OverlayService, costPerKm, costParts, fixedPerRide) ?: return
             // Km da jornada entram na média que divide os custos do mês (Custos fixos).
             FixedCostsSync.afterShiftEnded(this@OverlayService)
             countedKey = null
             matcher.reset()
             saveTripMemory(force = true)
-            val s = ShiftMath.summary(ended, costPerKm, System.currentTimeMillis())
+            val s = ShiftMath.summary(ended, costPerKm, System.currentTimeMillis(), fixedPerRide)
             tripToast("Jornada encerrada: ${s.trips} corridas · lucro ${ShiftMath.money(s.profit)}")
         }
 
@@ -414,6 +417,7 @@ class OverlayService : LifecycleService() {
         lifecycleScope.launch {
             MappApp.repos.vehicle.config().collect {
                 costPerKm = it.costPerKm
+                fixedPerRide = it.fixedPerRide
                 costParts = CostSplit.parts(it)
                 pushShift()
             }
@@ -491,7 +495,10 @@ class OverlayService : LifecycleService() {
                     DayInputs(current, history, offers, entries, GoalPlan.dayGoal(goals, ReportMath.dateOf(p.from)))
                 }
                 combine(day, repos.vehicle.config()) { d, cost ->
-                    val t = PeriodMath.totals(p.from, p.to, d.current, d.history, d.offers, d.entries, cost.costPerKm, System.currentTimeMillis())
+                    val t = PeriodMath.totals(
+                        p.from, p.to, d.current, d.history, d.offers, d.entries, cost.costPerKm,
+                        System.currentTimeMillis(), fixedPerRide = cost.fixedPerRide,
+                    )
                     Triple(p, t, d.goal)
                 }
             }.collect { (p, totals, goal) ->

@@ -99,7 +99,7 @@ internal fun ReportsTab() {
 
         Text(
             "Bruto = ${totals.rides} corridas (${Format.brl(totals.ridesGross)}) + ganhos lançados " +
-                "(${Format.brl(totals.manualIncome)}). Custos = carro (km × custo/km) + gastos lançados.",
+                "(${Format.brl(totals.manualIncome)}). Custos = desgaste (km × custo/km) + fixos (por corrida) + gastos lançados.",
             style = MaterialTheme.typography.bodySmall,
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

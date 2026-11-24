@@ -65,6 +65,7 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
                 kmPerDay = getDouble(BASE_KM_PER_DAY) ?: d.kmBase.kmPerDay,
                 daysPerMonth = getDouble(BASE_DAYS) ?: d.kmBase.daysPerMonth,
                 auto = getBoolean(BASE_AUTO, d.kmBase.auto),
+                ridesPerDay = getDouble(BASE_RIDES_PER_DAY) ?: d.kmBase.ridesPerDay,
             ),
         )
     }
@@ -83,6 +84,7 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
                 .putDouble(BASE_KM_PER_DAY, config.kmBase.kmPerDay)
                 .putDouble(BASE_DAYS, config.kmBase.daysPerMonth)
                 .putBoolean(BASE_AUTO, config.kmBase.auto)
+                .putDouble(BASE_RIDES_PER_DAY, config.kmBase.ridesPerDay)
                 .commit()
         }
     }
@@ -103,6 +105,7 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
         const val BASE_KM_PER_DAY = "base_km_per_day"
         const val BASE_DAYS = "base_days_per_month"
         const val BASE_AUTO = "base_auto"
+        const val BASE_RIDES_PER_DAY = "base_rides_per_day"
     }
 }
 
