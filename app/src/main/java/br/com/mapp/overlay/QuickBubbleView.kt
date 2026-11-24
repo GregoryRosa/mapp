@@ -143,8 +143,11 @@ class QuickBubbleView(
 
     // ------------------------------------------------------------------ textos do dia (em volta do "M")
 
-    /** Números do dia junto ao "M" (mesma conta de Ganhos e gastos → Hoje) e a meta diária. */
-    /** [gross] = número embaixo do "M"; [net] = lucro líquido, que enche o anel da meta. */
+    /**
+     * Números do dia junto ao "M" (mesma conta de Ganhos e gastos → Hoje) e a meta diária.
+     * Embaixo do "M": [gross] ou [net], conforme [BubbleStyle.showNet]; [net] = lucro líquido, que
+     * enche o anel da meta.
+     */
     data class DayInfo(
         val km: Double,
         val carCost: Double,
@@ -159,13 +162,15 @@ class QuickBubbleView(
     private val kmLabel = dayLabel(DAY_KM)
     private val costLabel = dayLabel(DAY_COST)
     private val grossLabel = dayLabel(DAY_GROSS)
+    /** Meta do dia, embaixo do valor (só com meta definida). */
+    private val goalLabel = dayLabel(DAY_TARGET)
 
     /**
-     * Só números, centralizados com o "M": km e custo em cima, valor bruto embaixo.
-     * Contorno preto para ler em fundo claro; sem fundo e não recebe toques.
+     * Só números, centralizados com o "M": km e custo em cima, valor bruto ou líquido embaixo e, abaixo
+     * dele, a meta do dia. Contorno preto para ler em fundo claro; sem fundo e não recebe toques.
      */
     private val labelsRoot = FrameLayout(context).apply {
-        listOf(kmLabel, costLabel, grossLabel).forEach {
+        listOf(kmLabel, costLabel, grossLabel, goalLabel).forEach {
             addView(it, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(LABEL_LINE_DP)))
         }
         visibility = View.GONE
@@ -173,7 +178,7 @@ class QuickBubbleView(
 
     private val labelsParams = WindowManager.LayoutParams(
         dp(LABEL_WIDTH_DP),
-        dp(3 * LABEL_LINE_DP) + sizePx,
+        dp(4 * LABEL_LINE_DP) + sizePx,
         host.type,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
@@ -334,6 +339,28 @@ class QuickBubbleView(
         }.apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
     }
 
+    /** Número embaixo do "M": bruto (false) ou líquido (true). */
+    private val valueChips = listOf(false to "Bruto", true to "Líquido").associate { (net, label) ->
+        net to button(label) { commitStyle(style.copy(showNet = net)) }
+            .apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
+    }
+
+    private val valueBox = section("NÚMERO EMBAIXO DO M").apply {
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            listOf(false, true).forEachIndexed { i, net ->
+                addView(
+                    valueChips.getValue(net),
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = dp(4) },
+                )
+            }
+        }, fullWidth(6))
+        addView(text(11f, color = SECONDARY).apply {
+            text = "Bruto = tudo o que entrou no dia. Líquido = o que sobra depois do desgaste dos km, dos custos " +
+                "fixos das corridas finalizadas e dos gastos lançados (o mesmo do anel da meta)."
+        }, fullWidth(4))
+    }
+
     /** Som do aviso de corrida iniciada; tocar escolhe e já toca com o efeito, para ver e ouvir. */
     private val rideChips = RideSound.entries.associateWith { sound ->
         button(sound.label) {
@@ -440,6 +467,7 @@ class QuickBubbleView(
         addView(text(12f, color = SECONDARY).apply { text = "MApp ${ReaderStatus.versionOf(context)} · AJUSTES DO BOTÃO" })
         addView(tripBox, fullWidth(8))
         addView(previewRow, fullWidth(8))
+        addView(valueBox, fullWidth(8))
         addView(section("TAMANHO").apply {
             addView(iconSizeLabel, fullWidth(8))
             addView(iconSizeBar.view, fullWidth(2))
@@ -959,6 +987,8 @@ class QuickBubbleView(
         soundChips.forEach { (sound, chip) -> paintChip(chip, sound == s.goalSound) }
         sparkChips.forEach { (level, chip) -> paintChip(chip, level == s.sparkLevel) }
         rideChips.forEach { (sound, chip) -> paintChip(chip, sound == s.rideSound) }
+        valueChips.forEach { (net, chip) -> paintChip(chip, net == s.showNet) }
+        bindDay()
     }
 
     /** Botão de escolha: o selecionado fica com o fundo verde-água do MApp. */
@@ -1222,12 +1252,20 @@ class QuickBubbleView(
         labelsParams.y = bubbleParams.y - 2 * labelLine
     }
 
-    /** Tamanho da letra, das linhas e da janela dos números: km e custo em cima, bruto embaixo do "M". */
+    /**
+     * Tamanho da letra, das linhas e da janela dos números: km e custo em cima, bruto/líquido embaixo
+     * do "M" e a meta do dia logo abaixo.
+     */
     private fun layoutLabels() {
         labelLine = (dp(LABEL_LINE_DP) * labelScale).roundToInt()
         labelsParams.width = max((dp(LABEL_WIDTH_DP) * labelScale).roundToInt(), sizePx + dp(8))
-        labelsParams.height = 3 * labelLine + sizePx
-        listOf(kmLabel to 0, costLabel to labelLine, grossLabel to 2 * labelLine + sizePx).forEach { (label, top) ->
+        labelsParams.height = 4 * labelLine + sizePx
+        listOf(
+            kmLabel to 0,
+            costLabel to labelLine,
+            grossLabel to 2 * labelLine + sizePx,
+            goalLabel to 3 * labelLine + sizePx,
+        ).forEach { (label, top) ->
             label.layoutParams = (label.layoutParams as FrameLayout.LayoutParams).apply {
                 height = labelLine
                 topMargin = top
@@ -1250,8 +1288,18 @@ class QuickBubbleView(
         if (!show || d == null) return
         kmLabel.text = ShiftMath.num(d.km, 1)
         costLabel.text = ShiftMath.num(d.carCost, 2)
-        grossLabel.text = ShiftMath.num(d.gross, 2)
-        grossLabel.color = if (reached) DAY_GOAL else DAY_GROSS
+        // Embaixo: bruto ou líquido (ajustes do botão). Meta batida = lilás; líquido negativo = vermelho.
+        val value = if (shown.showNet) d.net else d.gross
+        grossLabel.text = ShiftMath.num(value, 2)
+        grossLabel.color = when {
+            reached -> DAY_GOAL
+            value < 0 -> DAY_NEGATIVE
+            else -> DAY_GROSS
+        }
+        // Meta do dia (de lucro líquido) embaixo do valor, em azul-claro para não confundir com ele.
+        val goal = d.goal?.takeIf { it > 0 }
+        goalLabel.visibility = if (goal != null) View.VISIBLE else View.GONE
+        if (goal != null) goalLabel.text = "meta " + ShiftMath.num(goal, 0)
     }
 
     // ------------------------------------------------------------------ views
@@ -1371,8 +1419,12 @@ class QuickBubbleView(
         private val DAY_KM = 0xFFF2F2F2.toInt()
         private val DAY_COST = 0xFFFFCC80.toInt()
         private val DAY_GROSS = 0xFF8EE69A.toInt()
-        /** Lilás da marca: valor bruto com a meta do dia batida. */
+        /** Lilás da marca: valor embaixo do "M" com a meta do dia batida. */
         private val DAY_GOAL = 0xFFC9B5FF.toInt()
+        /** Líquido do dia negativo (o custo ainda passa do que entrou). */
+        private val DAY_NEGATIVE = 0xFFFF8A80.toInt()
+        /** Meta do dia, embaixo do valor: azul-claro, diferente do verde/lilás do valor. */
+        private val DAY_TARGET = 0xFF8FD3FF.toInt()
         private val GRAY_LIGHT = 0xFF9E9E9E.toInt()
         private val NEON_GREEN = 0xFF00E64D.toInt()
         private val NEON_YELLOW = 0xFFFFD600.toInt()

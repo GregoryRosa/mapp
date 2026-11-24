@@ -21,7 +21,9 @@ import kotlin.math.roundToInt
  * - [iconSize]/[textSize]: tamanho do botão e dos números em volta dele, em % do padrão ([BubbleSize]);
  * - [pinSize]: tamanho do pin de chegada (só aparece em corrida), em % do padrão;
  * - [arrowSize]/[arrowColor]: tamanho (% do padrão) e cor da seta (o carro, só em corrida);
- *   [arrowColor] null = acompanha o gradiente do "M" (padrão).
+ *   [arrowColor] null = acompanha o gradiente do "M" (padrão);
+ * - [showNet]: número embaixo do "M" — false = valor **bruto** do dia (padrão), true = **lucro líquido**
+ *   (bruto − desgaste dos km − custos fixos das corridas finalizadas − gastos lançados).
  * O padrão é o visual original do MApp (com o botão um pouco maior: 60 dp).
  */
 data class BubbleStyle(
@@ -41,6 +43,7 @@ data class BubbleStyle(
     val pinSize: Int = BubbleSize.DEFAULT,
     val arrowSize: Int = BubbleSize.DEFAULT,
     val arrowColor: Int? = null,
+    val showNet: Boolean = false,
 ) {
     /**
      * Cores do gradiente do anel da meta, em volta do círculo (a partir do topo). Com as cores
@@ -67,6 +70,7 @@ data class BubbleStyle(
         "text=$textSize",
         "pin=$pinSize",
         "arrow=$arrowSize",
+        "value=" + if (showNet) "net" else "gross",
     ).plus(listOfNotNull(arrowColor?.let { "ac=" + hex(it) })).joinToString(";")
 
     companion object {
@@ -107,6 +111,7 @@ data class BubbleStyle(
                 pinSize = map["pin"]?.toIntOrNull()?.takeIf { it in BubbleSize.PIN_STEPS } ?: d.pinSize,
                 arrowSize = map["arrow"]?.toIntOrNull()?.takeIf { it in BubbleSize.ARROW_STEPS } ?: d.arrowSize,
                 arrowColor = map["ac"]?.let(::parseHex),
+                showNet = map["value"] == "net",
             )
         }
 
