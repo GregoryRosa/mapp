@@ -265,7 +265,9 @@ private fun ProfileEditorDialog(initial: FilterProfile?, onDismiss: () -> Unit, 
                             color = MappColors.TextDim,
                         )
                         FilterCriterion.entries.forEach { c ->
-                            CriterionCard(c, ranges.getValue(c)) { ranges[c] = it }
+                            // A mudança é aplicada sobre a faixa atual do mapa (nunca sobre uma cópia
+                            // guardada pela tela): mexer num botão não volta o outro para o valor antigo.
+                            CriterionCard(c, ranges.getValue(c)) { change -> ranges[c] = change(ranges.getValue(c)) }
                         }
                         Spacer(Modifier.height(24.dp))
                     }
@@ -304,13 +306,16 @@ private fun FilterCriterion.segmentColors(): List<Color> =
     if (higherIsBetter) listOf(SliderRed, SliderYellow, SliderGreen) else listOf(SliderGreen, SliderYellow, SliderRed)
 
 @Composable
-private fun CriterionCard(criterion: FilterCriterion, range: ThresholdRange, onChange: (ThresholdRange) -> Unit) {
+private fun CriterionCard(
+    criterion: FilterCriterion,
+    range: ThresholdRange,
+    onChange: ((ThresholdRange) -> ThresholdRange) -> Unit,
+) {
     // A escala cresce para caber o que foi digitado (o slider acompanha) e não encolhe de volta.
     var scale by remember { mutableStateOf(criterion.scale.fitting(range.low, range.high)) }
     var typing by remember { mutableStateOf<Int?>(null) }
     val colors = criterion.thumbColors()
     val values = listOf(range.low, range.high)
-    fun set(index: Int, v: Double) = onChange(if (index == 0) range.withLow(v) else range.withHigh(v))
 
     GlassCard(padding = PaddingValues(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -346,7 +351,8 @@ private fun CriterionCard(criterion: FilterCriterion, range: ThresholdRange, onC
                 )
             }
         }
-        ThresholdTrack(criterion, scale, values, onValue = ::set)
+        // Arrastar: só o botão tocado anda (para em cima do outro, sem empurrar).
+        ThresholdTrack(criterion, scale, values, onValue = { i, v -> onChange { it.dragged(i, v) } })
         Spacer(Modifier.height(6.dp))
         Text(
             caption(criterion, range),
@@ -366,7 +372,7 @@ private fun CriterionCard(criterion: FilterCriterion, range: ThresholdRange, onC
             onConfirm = { v ->
                 typing = null
                 scale = scale.fitting(v)
-                set(i, v)
+                onChange { it.typed(i, v) }
             },
         )
     }
@@ -456,9 +462,13 @@ private fun ThresholdTrack(
                     val thumb = pick(down.position.x)
                     val start = awaitHorizontalTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
                     if (start != null) {
-                        move(thumb, start.position.x)
+                        // Botões um em cima do outro: quem anda é o do lado para onde o dedo foi
+                        // (arrastando um botão não empurra o outro, então o "errado" ficaria travado).
+                        val together = abs(xOf(current[0]) - xOf(current[1])) < 1f
+                        val dragged = if (together) (if (start.position.x > down.position.x) 1 else 0) else thumb
+                        move(dragged, start.position.x)
                         horizontalDrag(start.id) { change ->
-                            move(thumb, change.position.x)
+                            move(dragged, change.position.x)
                             change.consume()
                         }
                     } else {
