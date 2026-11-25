@@ -171,6 +171,32 @@ class CardLayoutTest {
     }
 
     @Test
+    fun `lucro liquido com as marcas do perfil e sem elas pelo sinal`() {
+        // Custo 0,70/km, sem fixo: 10 km = R$ 7.
+        val cost = VehicleCostConfig(fuelPricePerUnit = 6.0, kmPerUnit = 12.0, maintenance = 0.1, depreciation = 0.1)
+        val raw = RawOffer(Platform.UBER, 15.0, tripKm = 9.0, tripMin = 15, pickupKm = 1.0, pickupMin = 3) // lucro R$ 8
+        val profile = FilterProfile(minProfit = 5.0, goodProfit = 10.0)
+        fun tone(r: RawOffer = raw, p: FilterProfile = profile, c: VehicleCostConfig = cost) =
+            CardValues.tone(NET_PROFIT, OfferEvaluator.evaluate(r, p, c), p)
+
+        assertEquals(Signal.YELLOW, tone())
+        assertEquals(Signal.RED, tone(raw.copy(price = 11.5))) // R$ 4,50
+        assertEquals(Signal.GREEN, tone(raw.copy(price = 17.5))) // R$ 10,50
+        // O mesmo lucro de R$ 4,50 sem as marcas fica verde pelo sinal (positivo).
+        assertEquals(Signal.GREEN, tone(raw.copy(price = 11.5), FilterProfile()))
+        // Sem marcas de lucro: como antes, negativo vermelho, senão verde.
+        assertEquals(Signal.GREEN, tone(p = FilterProfile()))
+        assertEquals(Signal.RED, tone(p = FilterProfile(), c = VehicleCostConfig(fuelPricePerUnit = 6.0, kmPerUnit = 1.0)))
+        assertEquals(Signal.GREEN, CardValues.tone(NET_PROFIT, OfferEvaluator.evaluate(raw, FilterProfile(), cost), null))
+        // Lucro não calculado (sem km): sem barrinha.
+        assertNull(tone(RawOffer(Platform.UBER, 15.0)))
+        // Lucro amarelo no Card: não é corrida ótima.
+        val easy = profile.copy(minPerKm = 0.4, goodPerKm = 0.5, minPerHour = 5.0, goodPerHour = 10.0)
+        assertEquals(false, CardValues.allGreen(OfferEvaluator.evaluate(raw, easy, cost), easy, def))
+        assertEquals(true, CardValues.allGreen(OfferEvaluator.evaluate(raw.copy(price = 17.5), easy, cost), easy, def))
+    }
+
+    @Test
     fun `tamanho das letras salva, limita e le texto antigo`() {
         val l = def.withFont(CardLine.TOP, 130).withFont(CardLine.BOTTOM, 500)
         assertEquals(130, l.topFont)

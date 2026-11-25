@@ -51,6 +51,7 @@ data class ThresholdScale(val min: Double, val max: Double, val step: Double) {
         val PER_HOUR = ThresholdScale(10.0, 120.0, 1.0)
         val RATING = ThresholdScale(4.0, 5.0, 0.01)
         val MIN_PRICE = ThresholdScale(0.0, 40.0, 0.5)
+        val PROFIT = ThresholdScale(0.0, 50.0, 0.5)
         val PICKUP_KM = ThresholdScale(0.5, 12.0, 0.1)
         val PICKUP_MIN = ThresholdScale(1.0, 30.0, 1.0)
     }

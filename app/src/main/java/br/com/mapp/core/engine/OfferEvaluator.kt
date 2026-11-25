@@ -15,10 +15,13 @@ import br.com.mapp.core.model.ZoneType
 
 /**
  * Regras do semáforo (cada critério do perfil tem marca amarela e verde — ver FilterProfile):
- * - VERMELHO se qualquer critério passar da marca amarela (R$/km, R$/h, valor ou nota abaixo do
- *   mínimo; busca acima do máximo em km ou minutos) ou coleta/destino estiver em zona perigosa com alerta.
- * - VERDE se TODOS os critérios atingirem a marca verde: R$/km, R$/h, valor e nota ≥ "bom"; busca
- *   km e minutos ≤ "bom". Valor não lido ou marca verde desligada (null) não impedem o verde.
+ * - VERMELHO se qualquer critério passar da marca amarela (R$/km, R$/h, valor, nota ou lucro líquido
+ *   da corrida abaixo do mínimo; busca acima do máximo em km ou minutos) ou coleta/destino estiver em
+ *   zona perigosa com alerta.
+ * - VERDE se TODOS os critérios atingirem a marca verde: R$/km, R$/h, valor, nota e lucro líquido
+ *   ≥ "bom"; busca km e minutos ≤ "bom". Valor não lido (lucro sem km conhecido) ou marca verde
+ *   desligada (null) não impedem o verde.
+ * Lucro líquido da corrida = valor − desgaste dos km − custo fixo por corrida ([metrics]).
  * - AMARELO nos demais casos.
  * Km/min totais = deslocamento até o passageiro + viagem. Trecho com km mas sem tempo (ou o
  * contrário) — o leitor não conseguiu ler um dos números — tem a parte que falta estimada pela
@@ -131,6 +134,7 @@ object OfferEvaluator {
         profile.minPrice?.let { if (raw.price < it) reasons += "Valor abaixo de R$ %.2f".format(it) }
         profile.minPerKm?.let { min -> m.perKm?.let { if (it < min) reasons += "R$/km abaixo de %.2f".format(min) } }
         profile.minPerHour?.let { min -> m.perHour?.let { if (it < min) reasons += "R$/h abaixo de %.0f".format(min) } }
+        profile.minProfit?.let { min -> m.netProfit?.let { if (it < min) reasons += "Lucro líquido abaixo de R$ %.2f".format(min) } }
         profile.maxPickupKm?.let { max -> raw.pickupKm?.let { if (it > max) reasons += "Busca acima de %.1f km".format(max) } }
         profile.maxPickupMin?.let { max -> raw.pickupMin?.let { if (it > max) reasons += "Busca acima de $max min" } }
         profile.minRating?.let { min -> raw.passengerRating?.let { if (it < min) reasons += "Nota do passageiro abaixo de $min" } }
@@ -156,6 +160,7 @@ object OfferEvaluator {
         meets(m.perKm, p.goodPerKm) &&
             meets(m.perHour, p.goodPerHour) &&
             meets(raw.price, p.goodPrice) &&
+            meets(m.netProfit, p.goodProfit) &&
             meets(raw.passengerRating, p.goodRating) &&
             atMost(raw.pickupKm, p.goodPickupKm) &&
             atMost(raw.pickupMin?.toDouble(), p.goodPickupMin?.toDouble())

@@ -43,8 +43,8 @@ data class RawOffer(
 /**
  * Perfil de filtro (ex.: "Dia", "Noite", "Aeroporto"). Valores null = critério desligado.
  * Cada critério tem duas marcas do semáforo (ver `core/filter/FilterCriterion`):
- * - mais é melhor (R$/km, R$/h, valor, nota): `min*` = amarelo a partir de (abaixo = vermelho),
- *   `good*` = verde a partir de;
+ * - mais é melhor (R$/km, R$/h, valor, nota, lucro líquido da corrida — valor − desgaste dos km −
+ *   custo fixo por corrida): `min*` = amarelo a partir de (abaixo = vermelho), `good*` = verde a partir de;
  * - menos é melhor (busca km/min): `maxPickup*` = amarelo até (acima = vermelho),
  *   `goodPickup*` = verde até.
  * `good*` null = o critério não impede o verde (perfis antigos continuam com o mesmo semáforo).
@@ -68,6 +68,13 @@ data class FilterProfile(
     val minRating: Double? = null,
     /** Nota do passageiro verde a partir de ([minRating] = amarelo a partir de). */
     val goodRating: Double? = null,
+    /**
+     * Lucro líquido da corrida (valor − desgaste dos km − custo fixo por corrida,
+     * `OfferMetrics.netProfit`) amarelo a partir de; abaixo = vermelho.
+     */
+    val minProfit: Double? = null,
+    /** Lucro líquido da corrida verde a partir de ([minProfit] = amarelo a partir de). */
+    val goodProfit: Double? = null,
     val active: Boolean = true,
 )
 

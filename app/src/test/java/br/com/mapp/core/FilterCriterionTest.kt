@@ -7,6 +7,7 @@ import br.com.mapp.core.filter.FilterCriterion.PER_KM
 import br.com.mapp.core.filter.FilterCriterion.PICKUP_KM
 import br.com.mapp.core.filter.FilterCriterion.PICKUP_MIN
 import br.com.mapp.core.filter.FilterCriterion.PRICE
+import br.com.mapp.core.filter.FilterCriterion.PROFIT
 import br.com.mapp.core.filter.FilterCriterion.RATING
 import br.com.mapp.core.filter.ThresholdRange
 import br.com.mapp.core.model.FilterProfile
@@ -27,11 +28,12 @@ class FilterCriterionTest {
         PER_HOUR to ThresholdRange(32.0, 50.0),
         RATING to ThresholdRange(4.75, 4.92),
         PRICE to ThresholdRange(9.0, 14.5),
+        PROFIT to ThresholdRange(6.5, 12.0),
         PICKUP_KM to ThresholdRange(1.5, 3.5),
         PICKUP_MIN to ThresholdRange(4.0, 9.0),
     )
 
-    @Test fun faixa_vai_e_volta_nos_seis_criterios() {
+    @Test fun faixa_vai_e_volta_nos_sete_criterios() {
         assertEquals(FilterCriterion.entries.toSet(), faixas.keys)
         faixas.forEach { (c, r) -> assertEquals(c.name, r, c.range(c.apply(FilterProfile(), r))) }
         // Todos no mesmo perfil: um critério não mexe no outro.
@@ -57,6 +59,12 @@ class FilterCriterionTest {
             assertEquals(8.0, it.minPrice!!, 1e-9)
             assertEquals(12.0, it.goodPrice!!, 1e-9)
         }
+        // Lucro líquido da corrida: mais é melhor, low = mínimo, high = bom.
+        PROFIT.apply(p, ThresholdRange(5.0, 10.0)).let {
+            assertEquals(5.0, it.minProfit!!, 1e-9)
+            assertEquals(10.0, it.goodProfit!!, 1e-9)
+            assertEquals(p.copy(minProfit = 5.0, goodProfit = 10.0), it) // não mexe no valor da corrida
+        }
         // Menos é melhor: low = verde até, high = amarelo até (máximo).
         PICKUP_KM.apply(p, ThresholdRange(2.0, 4.5)).let {
             assertEquals(2.0, it.goodPickupKm!!, 1e-9)
@@ -72,6 +80,7 @@ class FilterCriterionTest {
         var p = FilterProfile(
             minPrice = 8.0, goodPrice = 12.0, goodPickupKm = 2.0,
             maxPickupMin = 8, goodPickupMin = 5, minRating = 4.7, goodRating = 4.9,
+            minProfit = 5.0, goodProfit = 10.0,
         )
         FilterCriterion.entries.forEach { c ->
             assertNotNull(c.name, c.range(p))
@@ -92,6 +101,10 @@ class FilterCriterionTest {
         assertEquals(ThresholdRange(4.7, 4.7), RATING.range(antigo))
         assertEquals(ThresholdRange(4.0, 4.0), PICKUP_KM.range(antigo))
         assertEquals(ThresholdRange(10.0, 10.0), PICKUP_MIN.range(antigo))
+        assertNull(PROFIT.range(antigo)) // perfil de antes do lucro: critério desligado
+        // Só uma das marcas do lucro: como os outros "mais é melhor".
+        assertEquals(ThresholdRange(5.0, 5.0), PROFIT.range(FilterProfile(minProfit = 5.0)))
+        assertEquals(ThresholdRange(0.0, 10.0), PROFIT.range(FilterProfile(goodProfit = 10.0)))
         // Salvar de novo o que os sliders leram não muda a cor de nenhuma oferta.
         val salvo = FilterCriterion.entries.fold(antigo) { p, c -> c.apply(p, c.range(p)) }
         val cost = VehicleCostConfig()
@@ -123,6 +136,10 @@ class FilterCriterionTest {
 
     @Test fun sentido_inteiros_e_sugestao() {
         assertTrue(PER_KM.higherIsBetter && PER_HOUR.higherIsBetter && RATING.higherIsBetter && PRICE.higherIsBetter)
+        assertTrue(PROFIT.higherIsBetter)
+        assertEquals("Lucro líquido", PROFIT.title)
+        // Ordem da tela: o lucro logo depois do valor da corrida.
+        assertEquals(listOf(PER_KM, PER_HOUR, RATING, PRICE, PROFIT, PICKUP_KM, PICKUP_MIN), FilterCriterion.entries)
         assertFalse(PICKUP_KM.higherIsBetter)
         assertFalse(PICKUP_MIN.higherIsBetter)
         assertTrue(PICKUP_MIN.integer)
@@ -141,6 +158,8 @@ class FilterCriterionTest {
         assertEquals("R$ 42,5", PER_HOUR.format(42.5))
         assertEquals("4,71", RATING.format(4.71))
         assertEquals("R$ 8,00", PRICE.format(8.0))
+        assertEquals("R$ 5,00", PROFIT.format(5.0))
+        assertEquals("R$ 12,50", PROFIT.format(12.5))
         assertEquals("4,0 km", PICKUP_KM.format(4.0))
         assertEquals("8 min", PICKUP_MIN.format(8.0))
     }
