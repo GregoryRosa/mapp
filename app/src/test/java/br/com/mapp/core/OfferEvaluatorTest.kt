@@ -2,7 +2,10 @@ package br.com.mapp.core
 
 import br.com.mapp.core.engine.OfferEvaluator
 import br.com.mapp.core.geo.Geo
+import br.com.mapp.core.model.CostUnit
+import br.com.mapp.core.model.ExtraKmCost
 import br.com.mapp.core.model.FilterProfile
+import br.com.mapp.core.model.FixedLedger
 import br.com.mapp.core.model.GeoPoint
 import br.com.mapp.core.model.OfferMetrics
 import br.com.mapp.core.model.Platform
@@ -15,6 +18,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Locale
 
 class OfferEvaluatorTest {
     private val cost = VehicleCostConfig(fuelPricePerUnit = 6.0, kmPerUnit = 12.0, maintenance = 0.1, depreciation = 0.1)
@@ -159,6 +163,63 @@ class OfferEvaluatorTest {
         assertEquals(Signal.RED, signal(boa.copy(passengerRating = 4.6)))
         assertEquals(Signal.RED, signal(boa.copy(pickupMin = 11)))
         assertEquals(Signal.RED, signal(RawOffer(Platform.UBER, 7.5, tripKm = 2.0, tripMin = 5)))
+    }
+
+    /** Só o lucro líquido no perfil (custo 0,70/km, sem fixo): busca 1 km + viagem 9 km = 10 km = R$ 7. */
+    private val soLucro = FilterProfile(
+        minPerKm = null, goodPerKm = null, minPerHour = null, goodPerHour = null, maxPickupKm = null,
+        minProfit = 5.0, goodProfit = 10.0,
+    )
+
+    @Test fun lucro_liquido_abaixo_do_minimo_fica_vermelho() {
+        val padrao = Locale.getDefault()
+        Locale.setDefault(Locale.forLanguageTag("pt-BR")) // o motivo sai como no celular
+        try {
+            val e = OfferEvaluator.evaluate(boa.copy(price = 11.5), soLucro, cost) // lucro R$ 4,50
+            assertEquals(4.5, e.metrics.netProfit!!, 1e-9)
+            assertEquals(Signal.RED, e.signal)
+            assertEquals(listOf("Lucro líquido abaixo de R$ 5,00"), e.reasons)
+        } finally {
+            Locale.setDefault(padrao)
+        }
+    }
+
+    @Test fun lucro_liquido_entre_minimo_e_bom_fica_amarelo_e_verde_exige_o_bom() {
+        val amarelo = OfferEvaluator.evaluate(boa.copy(price = 15.0), soLucro, cost) // lucro R$ 8
+        assertEquals(Signal.YELLOW, amarelo.signal)
+        assertTrue(amarelo.reasons.isEmpty())
+        assertEquals(Signal.GREEN, OfferEvaluator.evaluate(boa.copy(price = 17.5), soLucro, cost).signal) // R$ 10,50
+        // Com todos os critérios: a oferta boa (lucro R$ 18) só é verde se o lucro também passar do bom.
+        assertEquals(Signal.GREEN, OfferEvaluator.evaluate(boa, completo.copy(minProfit = 5.0, goodProfit = 10.0), cost).signal)
+        assertEquals(Signal.YELLOW, OfferEvaluator.evaluate(boa, completo.copy(minProfit = 5.0, goodProfit = 20.0), cost).signal)
+        assertEquals(Signal.RED, OfferEvaluator.evaluate(boa, completo.copy(minProfit = 19.0, goodProfit = 20.0), cost).signal)
+        // Custo fixo por corrida também sai do lucro: R$ 18 − R$ 11 = R$ 7 → amarelo; − R$ 14 = R$ 4 → vermelho.
+        val seguro = listOf(ExtraKmCost("Seguro", 300.0, CostUnit.FIXED_MONTH))
+        val comFixo = cost.copy(extraCosts = seguro, ledger = FixedLedger(today = 11.0))
+        val p = completo.copy(minProfit = 5.0, goodProfit = 10.0)
+        assertEquals(7.0, OfferEvaluator.evaluate(boa, p, comFixo).metrics.netProfit!!, 1e-9)
+        assertEquals(Signal.YELLOW, OfferEvaluator.evaluate(boa, p, comFixo).signal)
+        assertEquals(Signal.RED, OfferEvaluator.evaluate(boa, p, comFixo.copy(ledger = FixedLedger(today = 14.0))).signal)
+    }
+
+    @Test fun lucro_nao_calculado_nao_bloqueia_nem_o_verde() {
+        // Sem km nem tempo lidos não há lucro: as marcas do lucro não decidem nada.
+        val semKm = RawOffer(Platform.UBER, 25.0, passengerRating = 4.95)
+        val e = OfferEvaluator.evaluate(semKm, completo.copy(minProfit = 50.0, goodProfit = 100.0), cost)
+        assertEquals(null, e.metrics.netProfit)
+        assertEquals(Signal.GREEN, e.signal)
+        assertTrue(e.reasons.isEmpty())
+    }
+
+    @Test fun perfil_sem_marcas_de_lucro_da_o_mesmo_de_antes() {
+        assertEquals(null, FilterProfile().minProfit)
+        assertEquals(null, FilterProfile().goodProfit)
+        // Carro caro: lucro negativo, mas sem marcas de lucro o semáforo segue só os outros critérios.
+        val caro = VehicleCostConfig(fuelPricePerUnit = 6.0, kmPerUnit = 1.0)
+        val e = OfferEvaluator.evaluate(boa, completo, caro)
+        assertTrue(e.metrics.netProfit!! < 0)
+        assertEquals(Signal.GREEN, e.signal)
+        assertTrue(e.reasons.isEmpty())
     }
 
     @Test fun ponto_no_poligono() {

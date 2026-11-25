@@ -55,6 +55,8 @@ fun ProfileEntity.toModel() = FilterProfile(
     goodRating = goodRating,
     goodPickupKm = goodPickupKm,
     goodPickupMin = goodPickupMin,
+    minProfit = minProfit,
+    goodProfit = goodProfit,
 )
 
 fun FilterProfile.toEntity() = ProfileEntity(
@@ -73,6 +75,8 @@ fun FilterProfile.toEntity() = ProfileEntity(
     goodRating = goodRating,
     goodPickupKm = goodPickupKm,
     goodPickupMin = goodPickupMin,
+    minProfit = minProfit,
+    goodProfit = goodProfit,
 )
 
 // ---------- Zonas ----------

@@ -27,6 +27,9 @@ data class ProfileEntity(
     val goodRating: Double? = null,
     val goodPickupKm: Double? = null,
     val goodPickupMin: Int? = null,
+    // Versão 4: lucro líquido por corrida (amarelo a partir de / verde a partir de; null = desligado).
+    val minProfit: Double? = null,
+    val goodProfit: Double? = null,
 )
 
 /** [polygon] serializado como "lat,lon;lat,lon;..." (ver [PolygonCodec]). */

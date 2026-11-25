@@ -272,10 +272,11 @@ object CardValues {
     }
 
     /**
-     * Cor da informação pelo perfil ativo. Mais é melhor (R$/km, R$/h, valor, nota): vermelho abaixo
-     * do mínimo, amarelo entre mínimo e "bom", verde a partir do "bom". Busca (menos é melhor, km e
-     * minutos): vermelho acima do máximo, amarelo entre "bom" e máximo, verde até o "bom" — vale a
-     * pior das duas. Null = sem critério para comparar (fica sem barrinha).
+     * Cor da informação pelo perfil ativo. Mais é melhor (R$/km, R$/h, valor, nota, lucro líquido da
+     * corrida): vermelho abaixo do mínimo, amarelo entre mínimo e "bom", verde a partir do "bom". Busca
+     * (menos é melhor, km e minutos): vermelho acima do máximo, amarelo entre "bom" e máximo, verde até
+     * o "bom" — vale a pior das duas. Lucro sem as marcas no perfil (e lucro/h, lucro %): pelo sinal
+     * (negativo = vermelho, senão verde). Null = sem critério para comparar (fica sem barrinha).
      */
     fun tone(metric: CardMetric, o: EvaluatedOffer, profile: FilterProfile?): Signal? {
         val m = o.metrics
@@ -288,7 +289,7 @@ object CardValues {
                 rangeMax(o.raw.pickupKm, profile?.maxPickupKm, profile?.goodPickupKm),
                 rangeMax(o.raw.pickupMin?.toDouble(), profile?.maxPickupMin?.toDouble(), profile?.goodPickupMin?.toDouble()),
             )
-            CardMetric.NET_PROFIT -> sign(m.netProfit)
+            CardMetric.NET_PROFIT -> range(m.netProfit, profile?.minProfit, profile?.goodProfit) ?: sign(m.netProfit)
             CardMetric.NET_PER_HOUR -> sign(netPerHour(o))
             CardMetric.NET_PERCENT -> sign(netPercent(o))
             CardMetric.TOTAL_TIME, CardMetric.TOTAL_KM, CardMetric.PER_MIN -> null

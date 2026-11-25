@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.outlined.AttachMoney
 import androidx.compose.material.icons.outlined.NearMe
 import androidx.compose.material.icons.outlined.Payments
+import androidx.compose.material.icons.outlined.Savings
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.Timer
@@ -178,6 +179,7 @@ private val SHORT = mapOf(
     FilterCriterion.PER_HOUR to "R$/h",
     FilterCriterion.RATING to "nota",
     FilterCriterion.PRICE to "valor",
+    FilterCriterion.PROFIT to "lucro líquido",
     FilterCriterion.PICKUP_KM to "busca",
     FilterCriterion.PICKUP_MIN to "busca",
 )
@@ -284,9 +286,14 @@ private fun FilterCriterion.icon(): ImageVector = when (this) {
     FilterCriterion.PER_HOUR -> Icons.Outlined.Schedule
     FilterCriterion.RATING -> Icons.Outlined.StarBorder
     FilterCriterion.PRICE -> Icons.Outlined.Payments
+    FilterCriterion.PROFIT -> Icons.Outlined.Savings
     FilterCriterion.PICKUP_KM -> Icons.Outlined.NearMe
     FilterCriterion.PICKUP_MIN -> Icons.Outlined.Timer
 }
+
+/** Explicação curta embaixo do título, só onde o nome não basta. */
+private fun FilterCriterion.hint(): String? =
+    if (this == FilterCriterion.PROFIT) "Lucro líquido = valor − desgaste dos km − custo fixo por corrida" else null
 
 /** Cor de cada botão/número: mais é melhor = amarelo, verde; menos é melhor = verde, amarelo. */
 private fun FilterCriterion.thumbColors(): List<Color> =
@@ -312,12 +319,17 @@ private fun CriterionCard(criterion: FilterCriterion, range: ThresholdRange, onC
                 contentAlignment = Alignment.Center,
             ) { Icon(criterion.icon(), contentDescription = null, tint = MappColors.Text) }
             Spacer(Modifier.width(14.dp))
-            Text(
-                criterion.title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MappColors.Text,
-            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    criterion.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MappColors.Text,
+                )
+                criterion.hint()?.let { hint ->
+                    Text(hint, style = MaterialTheme.typography.bodySmall, color = MappColors.TextDim)
+                }
+            }
         }
         Spacer(Modifier.height(10.dp))
         ThumbLabels(fractions = values.map { scale.fraction(it).toFloat() }, thumbRadius = THUMB_RADIUS) {

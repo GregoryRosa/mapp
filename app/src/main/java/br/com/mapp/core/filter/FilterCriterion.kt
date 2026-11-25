@@ -8,11 +8,14 @@ import kotlin.math.roundToInt
  * Critérios do perfil de filtro, cada um com duas marcas do semáforo (amarelo e verde) guardadas
  * em dois campos do [FilterProfile]:
  * - [PER_KM] ↔ minPerKm/goodPerKm; [PER_HOUR] ↔ minPerHour/goodPerHour; [RATING] ↔ minRating/goodRating;
- *   [PRICE] ↔ minPrice/goodPrice (mais é melhor: low = mínimo, high = bom);
+ *   [PRICE] ↔ minPrice/goodPrice; [PROFIT] ↔ minProfit/goodProfit — lucro líquido da corrida (valor −
+ *   desgaste dos km − custo fixo por corrida, `OfferMetrics.netProfit`) (mais é melhor: low = mínimo,
+ *   high = bom);
  * - [PICKUP_KM] ↔ goodPickupKm/maxPickupKm; [PICKUP_MIN] ↔ goodPickupMin/maxPickupMin (menos é
  *   melhor: low = bom, high = máximo).
- * Usado pelos sliders da tela Perfis e pelo painel rápido; a regra do semáforo está em
- * `core/engine/OfferEvaluator` e a cor de cada informação em `core/card/CardValues.tone`.
+ * A ordem do enum é a ordem da tela. Usado pelos sliders da tela Perfis e pelo painel rápido; a
+ * regra do semáforo está em `core/engine/OfferEvaluator` e a cor de cada informação em
+ * `core/card/CardValues.tone`.
  */
 enum class FilterCriterion(
     val title: String,
@@ -26,6 +29,7 @@ enum class FilterCriterion(
     PER_HOUR("Valor por hora", ThresholdScale.PER_HOUR, true, ThresholdRange(30.0, 45.0)),
     RATING("Nota do passageiro", ThresholdScale.RATING, true, ThresholdRange(4.70, 4.90)),
     PRICE("Valor da corrida", ThresholdScale.MIN_PRICE, true, ThresholdRange(8.0, 12.0)),
+    PROFIT("Lucro líquido", ThresholdScale.PROFIT, true, ThresholdRange(5.0, 10.0)),
     PICKUP_KM("Busca (km)", ThresholdScale.PICKUP_KM, false, ThresholdRange(2.0, 4.0)),
     PICKUP_MIN("Busca (minutos)", ThresholdScale.PICKUP_MIN, false, ThresholdRange(5.0, 8.0));
 
@@ -41,6 +45,7 @@ enum class FilterCriterion(
         PER_HOUR -> ThresholdRange.of(p.minPerHour, p.goodPerHour)
         RATING -> ThresholdRange.of(p.minRating, p.goodRating)
         PRICE -> ThresholdRange.of(p.minPrice, p.goodPrice)
+        PROFIT -> ThresholdRange.of(p.minProfit, p.goodProfit)
         PICKUP_KM -> ThresholdRange.ofMax(p.goodPickupKm, p.maxPickupKm)
         PICKUP_MIN -> ThresholdRange.ofMax(p.goodPickupMin?.toDouble(), p.maxPickupMin?.toDouble())
     }
@@ -51,19 +56,20 @@ enum class FilterCriterion(
         PER_HOUR -> p.copy(minPerHour = r?.low, goodPerHour = r?.high)
         RATING -> p.copy(minRating = r?.low, goodRating = r?.high)
         PRICE -> p.copy(minPrice = r?.low, goodPrice = r?.high)
+        PROFIT -> p.copy(minProfit = r?.low, goodProfit = r?.high)
         PICKUP_KM -> p.copy(goodPickupKm = r?.low, maxPickupKm = r?.high)
         PICKUP_MIN -> p.copy(goodPickupMin = r?.low?.roundToInt(), maxPickupMin = r?.high?.roundToInt())
     }
 
     /**
      * Texto pt-BR: PER_KM "R$ 1,60"; PER_HOUR "R$ 40" (sem casas se inteiro, senão "R$ 42,5");
-     * RATING "4,71"; PRICE "R$ 8,00"; PICKUP_KM "4,0 km"; PICKUP_MIN "8 min".
+     * RATING "4,71"; PRICE e PROFIT "R$ 8,00"; PICKUP_KM "4,0 km"; PICKUP_MIN "8 min".
      */
     fun format(v: Double): String = when (this) {
         PER_KM -> "R$ " + num(v, 2)
         PER_HOUR -> "R$ " + num(v, 2).trimEnd('0').trimEnd(',')
         RATING -> num(v, 2)
-        PRICE -> "R$ " + num(v, 2)
+        PRICE, PROFIT -> "R$ " + num(v, 2)
         PICKUP_KM -> num(v, 1) + " km"
         PICKUP_MIN -> "${v.roundToInt()} min"
     }

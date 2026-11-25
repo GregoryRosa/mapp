@@ -11,7 +11,7 @@ import br.com.mapp.reader.parser.OfferParsers
 
 @Database(
     entities = [ProfileEntity::class, ZoneEntity::class, OfferEntity::class, FinanceEntryEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -55,6 +55,14 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v4: lucro mínimo/bom por corrida nos perfis (colunas vazias = como antes). */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE profiles ADD COLUMN minProfit REAL")
+                db.execSQL("ALTER TABLE profiles ADD COLUMN goodProfit REAL")
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -62,7 +70,7 @@ abstract class AppDatabase : RoomDatabase() {
         fun get(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, NAME)
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { instance = it }
             }
