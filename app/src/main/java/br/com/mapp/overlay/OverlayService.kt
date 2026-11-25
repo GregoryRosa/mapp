@@ -210,6 +210,9 @@ class OverlayService : LifecycleService() {
         startDayMonitor()
         // Telas lidas enquanto as ofertas do histórico carregam esperam na fila.
         lifecycleScope.launch { OfferBus.tripStages.collect { preload.await(); onTripStage(it) } }
+        // "Hoje" da tela inicial da Uber maior que as corridas contadas: a diferença vira ganho extra.
+        val uberExtra = UberExtraSync(this, ridesOpen = { matcher.openRides }, notify = { toast(it, TRIP_NOTICE_MS) })
+        lifecycleScope.launch { OfferBus.dayEarnings.collect { preload.await(); uberExtra.onReading(it) } }
 
         // Ícone flutuante "M" com o menu circular (e cartão): recriados quando o leitor liga/desliga.
         lifecycleScope.launch { OfferAccessibilityService.windowContext.collect { useHost(it) } }

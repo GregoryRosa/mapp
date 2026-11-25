@@ -488,19 +488,12 @@ object PeriodMath {
         parts: List<CostPart> = emptyList(),
         fixedPerRide: Double = 0.0,
     ): PeriodTotals {
-        val spans = listOfNotNull(current).map { it to max(now, it.startedAt) } +
-            history.map { it to (it.endedAt ?: (it.startedAt + it.activeMs)) }
+        val spans = shiftSpans(current, history, now)
         val inPeriod = spans.map { it.first }.filter { it.startedAt in from..to }
         val pairs = inPeriod.map { it to ShiftMath.summary(it, costPerKm, now, fixedPerRide) }
         val summaries = pairs.map { it.second }
 
-        val loose = offers.filter { r ->
-            val raw = r.evaluated.raw
-            r.accepted == true && raw.capturedAt in from..to &&
-                spans.none { (s, end) ->
-                    raw.capturedAt in s.startedAt..end || s.tripIndexFor(raw.platform, raw.price, raw.capturedAt) >= 0
-                }
-        }
+        val loose = looseOffers(from, to, spans, offers)
         val looseKm = loose.sumOf { offerKm(it) }
         val looseHours = loose.sumOf { it.evaluated.metrics.totalMin ?: 0 } / 60.0
 
@@ -548,6 +541,33 @@ object PeriodMath {
             fixedCost = summaries.sumOf { it.fixedCost },
         )
     }
+
+    /**
+     * Corridas marcadas como aceitas no histórico, vistas em [from]..[to], **fora** de qualquer jornada
+     * (nem no horário dela, nem contadas nela): as que só o histórico de ofertas conta.
+     */
+    fun looseOffers(
+        from: Long,
+        to: Long,
+        current: Shift?,
+        history: List<Shift>,
+        offers: List<OfferRecord>,
+        now: Long,
+    ): List<OfferRecord> = looseOffers(from, to, shiftSpans(current, history, now), offers)
+
+    private fun looseOffers(from: Long, to: Long, spans: List<Pair<Shift, Long>>, offers: List<OfferRecord>): List<OfferRecord> =
+        offers.filter { r ->
+            val raw = r.evaluated.raw
+            r.accepted == true && raw.capturedAt in from..to &&
+                spans.none { (s, end) ->
+                    raw.capturedAt in s.startedAt..end || s.tripIndexFor(raw.platform, raw.price, raw.capturedAt) >= 0
+                }
+        }
+
+    /** Jornadas com o fim de cada uma: a aberta vai até [now]. */
+    private fun shiftSpans(current: Shift?, history: List<Shift>, now: Long): List<Pair<Shift, Long>> =
+        listOfNotNull(current).map { it to max(now, it.startedAt) } +
+            history.map { it to (it.endedAt ?: (it.startedAt + it.activeMs)) }
 
     /** Km da oferta: busca + viagem (com o que foi estimado quando o OCR não leu). */
     private fun offerKm(r: OfferRecord): Double {
