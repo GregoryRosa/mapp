@@ -50,6 +50,28 @@ class ThresholdScaleTest {
         assertEquals(ThresholdRange(1.8, 2.0), r.withLow(1.8))
     }
 
+    @Test fun arrastar_um_botao_nao_mexe_no_outro() {
+        val r = ThresholdRange(1.6, 2.0)
+        // Cada lado se move sozinho, várias vezes seguidas, sem voltar o outro para valor nenhum.
+        val a = r.dragged(0, 1.2)
+        assertEquals(ThresholdRange(1.2, 2.0), a)
+        val b = a.dragged(1, 2.6)
+        assertEquals(ThresholdRange(1.2, 2.6), b)
+        val c = b.dragged(0, 1.4)
+        assertEquals(ThresholdRange(1.4, 2.6), c)
+        // Passando do outro, para em cima dele (o outro continua onde estava).
+        assertEquals(ThresholdRange(2.6, 2.6), c.dragged(0, 3.0))
+        assertEquals(ThresholdRange(1.4, 1.4), c.dragged(1, 1.0))
+    }
+
+    @Test fun digitar_vale_o_numero_e_empurra_o_outro_se_passar() {
+        val r = ThresholdRange(1.6, 2.0)
+        assertEquals(ThresholdRange(1.8, 2.0), r.typed(0, 1.8))
+        assertEquals(ThresholdRange(1.6, 2.4), r.typed(1, 2.4))
+        assertEquals(ThresholdRange(2.3, 2.3), r.typed(0, 2.3))
+        assertEquals(ThresholdRange(1.2, 1.2), r.typed(1, 1.2))
+    }
+
     @Test fun faixa_do_perfil_mantem_o_semaforo() {
         assertNull(ThresholdRange.of(null, null))
         assertEquals(ThresholdRange(1.5, 1.5), ThresholdRange.of(1.5, null))

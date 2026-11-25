@@ -61,12 +61,22 @@ data class ThresholdScale(val min: Double, val max: Double, val step: Double) {
  * Faixa amarelo/verde de um critério, sempre com [low] ≤ [high]. Mais é melhor (R$/km, nota...):
  * abaixo de [low] = vermelho, de [low] até [high] = amarelo, a partir de [high] = verde. Menos é
  * melhor (busca — [ofMax]): até [low] = verde, até [high] = amarelo, acima = vermelho. Uma marca
- * nunca passa da outra: mover uma empurra a outra.
+ * nunca passa da outra: arrastando, ela para em cima da outra ([dragged]); digitando, empurra ([typed]).
  */
 data class ThresholdRange(val low: Double, val high: Double) {
     fun withLow(value: Double) = ThresholdRange(value, maxOf(high, value))
 
     fun withHigh(value: Double) = ThresholdRange(minOf(low, value), value)
+
+    /**
+     * Arrastar o botão [index] (0 = esquerda/[low], 1 = direita/[high]) até [value]: **o outro não se
+     * mexe** — o arrastado para em cima dele em vez de empurrá-lo.
+     */
+    fun dragged(index: Int, value: Double): ThresholdRange =
+        if (index == 0) ThresholdRange(minOf(value, high), high) else ThresholdRange(low, maxOf(value, low))
+
+    /** Número digitado para o botão [index]: vale o digitado; se passar do outro, empurra o outro junto. */
+    fun typed(index: Int, value: Double): ThresholdRange = if (index == 0) withLow(value) else withHigh(value)
 
     companion object {
         /**
