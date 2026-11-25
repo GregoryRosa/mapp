@@ -13,6 +13,8 @@ import br.com.mapp.core.shift.TripCategories
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 
 /**
@@ -95,8 +97,8 @@ object ShiftTracker {
     }
 
     /**
-     * Custos do veículo salvos: jornadas de hoje já encerradas passam a usar o custo/km novo, os custos
-     * fixos por corrida novos e a divisão.
+     * Custos do veículo salvos: jornadas do dia de trabalho [day] (padrão: hoje) já encerradas passam a
+     * usar o custo/km novo, os custos fixos por corrida novos e a divisão.
      */
     @Synchronized
     fun applyCostToday(
@@ -105,13 +107,22 @@ object ShiftTracker {
         costParts: List<CostPart>? = null,
         fixedPerRide: Double = 0.0,
         now: Long = System.currentTimeMillis(),
+        day: LocalDate? = null,
     ) {
-        load(ctx)
         val zone = ZoneId.systemDefault()
-        val list = ShiftMath.withCostToday(_history.value, costPerKm, now, zone, costParts, fixedPerRide)
-        val last = _last.value?.let {
-            ShiftMath.withCostToday(listOf(it), costPerKm, now, zone, costParts, fixedPerRide).single()
-        }
+        val on = day ?: Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        updateHistory(ctx) { ShiftMath.withCostOn(it, on, costPerKm, zone, costParts, fixedPerRide) }
+    }
+
+    /**
+     * Troca as jornadas encerradas por [change] (ex.: fechamento do mês dos custos fixos) e grava. A
+     * "última jornada" acompanha a sua cópia no histórico.
+     */
+    @Synchronized
+    fun updateHistory(ctx: Context, change: (List<Shift>) -> List<Shift>) {
+        load(ctx)
+        val list = change(_history.value)
+        val last = _last.value?.let { l -> list.firstOrNull { it.startedAt == l.startedAt } ?: change(listOf(l)).single() }
         if (list == _history.value && last == _last.value) return
         _history.value = list
         _last.value = last

@@ -1,5 +1,8 @@
 package br.com.mapp.core.model
 
+import java.time.LocalDate
+import java.time.YearMonth
+
 /** Plataformas de corrida suportadas. [packageName] é o app lido pela Acessibilidade. */
 enum class Platform(val label: String, val packageName: String) {
     UBER("Uber", "com.ubercab.driver"),
@@ -143,6 +146,17 @@ data class KmBase(
     }
 }
 
+/**
+ * Estado do rateio dos custos fixos (`core/shift/FixedPlan`), guardado junto dos custos mas fora do
+ * formulário: [today] = R$ por corrida do dia de trabalho (o que falta pagar no mês ÷ corridas que
+ * faltam); [since] = dia em que o rateio começou; [settled] = último mês fechado (somando o total).
+ */
+data class FixedLedger(
+    val today: Double? = null,
+    val since: LocalDate? = null,
+    val settled: YearMonth? = null,
+)
+
 /** Custo criado pelo usuário (ex.: pneus, seguro, aluguel do carro): [amount] em [unit]. */
 data class ExtraKmCost(val name: String, val amount: Double, val unit: CostUnit = CostUnit.PER_KM)
 
@@ -150,7 +164,8 @@ data class ExtraKmCost(val name: String, val amount: Double, val unit: CostUnit 
  * Custos do veículo usados para o lucro líquido. Preço e consumo na unidade de [fuelType] (litro ou kWh).
  * **Desgaste** (combustível, manutenção, depreciação e custos extras por km/mês) vira R$/km — [costPerKm],
  * contado a cada km rodado. **Custos fixos** ([CostUnit.FIXED_MONTH]: seguro, financiamento...) viram
- * R$ por corrida — [fixedPerRide], descontado a cada corrida finalizada.
+ * R$ por corrida — [fixedPerRide], descontado a cada corrida finalizada. [ledger] = rateio do mês (não
+ * é editado na tela; gravado à parte).
  */
 data class VehicleCostConfig(
     val fuelType: FuelType = FuelType.GASOLINE,
@@ -162,6 +177,7 @@ data class VehicleCostConfig(
     val maintenanceUnit: CostUnit = CostUnit.PER_KM,
     val depreciationUnit: CostUnit = CostUnit.PER_KM,
     val kmBase: KmBase = KmBase(),
+    val ledger: FixedLedger = FixedLedger(),
 ) {
     val energyCostPerKm: Double
         get() = if (kmPerUnit > 0) fuelPricePerUnit / kmPerUnit else 0.0
@@ -200,8 +216,15 @@ data class VehicleCostConfig(
     val costPerKm: Double
         get() = energyCostPerKm + maintenancePerKm + depreciationPerKm + extraPerKm
 
-    /** Custos fixos: R$ descontados a cada corrida finalizada (total do mês ÷ corridas do mês). */
+    /**
+     * Custos fixos: R$ descontados a cada corrida finalizada — o do rateio do dia ([FixedLedger.today]:
+     * o que falta pagar no mês ÷ corridas que faltam) ou, antes do primeiro rateio, [evenFixedPerRide].
+     */
     val fixedPerRide: Double
+        get() = if (!hasFixed) 0.0 else ledger.today ?: evenFixedPerRide
+
+    /** Custos fixos divididos por igual: total do mês ÷ corridas do mês pela base. */
+    val evenFixedPerRide: Double
         get() = kmBase.perRide(fixedMonthTotal, CostUnit.FIXED_MONTH)
 
     /** Custo de uma corrida de [km]: desgaste dos km + a parte dela nos custos fixos. */

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import br.com.mapp.core.model.CostUnit
 import br.com.mapp.core.model.ExtraKmCostCodec
+import br.com.mapp.core.model.FixedLedger
 import br.com.mapp.core.model.FuelType
 import br.com.mapp.core.goal.WeekGoals
 import br.com.mapp.core.model.KmBase
@@ -17,6 +18,8 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
+import java.time.YearMonth
 
 /*
  * Configurações pequenas (custos do veículo e metas) em SharedPreferences.
@@ -67,6 +70,11 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
                 auto = getBoolean(BASE_AUTO, d.kmBase.auto),
                 ridesPerDay = getDouble(BASE_RIDES_PER_DAY) ?: d.kmBase.ridesPerDay,
             ),
+            ledger = FixedLedger(
+                today = getDouble(FIXED_TODAY),
+                since = getString(FIXED_SINCE, null)?.let { runCatching { LocalDate.parse(it) }.getOrNull() },
+                settled = getString(FIXED_SETTLED, null)?.let { runCatching { YearMonth.parse(it) }.getOrNull() },
+            ),
         )
     }
 
@@ -89,6 +97,16 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
         }
     }
 
+    override suspend fun saveLedger(ledger: FixedLedger) {
+        withContext(Dispatchers.IO) {
+            prefs.edit()
+                .putDouble(FIXED_TODAY, ledger.today)
+                .putString(FIXED_SINCE, ledger.since?.toString())
+                .putString(FIXED_SETTLED, ledger.settled?.toString())
+                .commit()
+        }
+    }
+
     private companion object {
         const val FILE = "vehicle_cost"
         const val FUEL_TYPE = "fuel_type"
@@ -106,6 +124,11 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
         const val BASE_DAYS = "base_days_per_month"
         const val BASE_AUTO = "base_auto"
         const val BASE_RIDES_PER_DAY = "base_rides_per_day"
+
+        // Rateio dos custos fixos (core/shift/FixedPlan): fora do formulário, gravado por saveLedger.
+        const val FIXED_TODAY = "fixed_per_ride_today"
+        const val FIXED_SINCE = "fixed_since"
+        const val FIXED_SETTLED = "fixed_settled_month"
     }
 }
 
