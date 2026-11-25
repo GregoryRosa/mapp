@@ -2,6 +2,7 @@ package br.com.mapp.core.bus
 
 import br.com.mapp.core.copilot.OnlineState
 import br.com.mapp.core.copilot.RideOnline
+import br.com.mapp.core.earnings.DayEarnings
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.RawOffer
@@ -65,6 +66,22 @@ object OfferBus {
     /** Chamado pelo leitor (qualquer thread) quando a tela diz se o motorista está online ou offline. */
     fun publishRideOnline(platform: Platform, state: OnlineState) {
         _rideOnline.tryEmit(RideOnline(platform, state))
+    }
+
+    private val _dayEarnings = MutableSharedFlow<DayEarnings>(
+        extraBufferCapacity = 2,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    /**
+     * Ganho de hoje mostrado na tela inicial do app de corrida ("R$ 147,25" + "HOJE" na Uber), a cada
+     * leitura do texto: o copiloto compara com as corridas contadas e lança o ganho extra
+     * (`overlay/UberExtraSync`, regras em `core/earnings/UberExtra`).
+     */
+    val dayEarnings: SharedFlow<DayEarnings> = _dayEarnings.asSharedFlow()
+
+    /** Chamado pelo leitor (qualquer thread) quando lê o ganho de hoje na tela inicial. */
+    fun publishDayEarnings(platform: Platform, amount: Double) {
+        _dayEarnings.tryEmit(DayEarnings(platform, amount))
     }
 
     /** Chamado pelo leitor quando a tela de oferta some. */

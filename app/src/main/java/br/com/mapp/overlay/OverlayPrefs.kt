@@ -53,12 +53,23 @@ object OverlayPrefs {
     const val KEY_NAV_APP = "nav_app"
     const val KEY_AUTO_START_ON = "auto_start_on"
     const val KEY_AUTO_START_SNOOZED_AT = "auto_start_snoozed_at"
+    const val KEY_UBER_EXTRA_ON = "uber_extra_on"
 
     fun of(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
     /** Ligar o copiloto sozinho com a Uber aberta e online (tela inicial; padrão: ligado). */
     fun isAutoStartOn(context: Context): Boolean = of(context).getBoolean(KEY_AUTO_START_ON, true)
+
+    /**
+     * Ganho extra da Uber automático (Financeiro → Ganhos e gastos): o copiloto lança a diferença entre o
+     * "Hoje" da tela inicial da Uber e as corridas contadas. Padrão ligado.
+     */
+    fun isUberExtraOn(context: Context): Boolean = of(context).getBoolean(KEY_UBER_EXTRA_ON, true)
+
+    fun setUberExtraOn(context: Context, on: Boolean) {
+        of(context).edit().putBoolean(KEY_UBER_EXTRA_ON, on).apply()
+    }
 
     fun setAutoStartOn(context: Context, on: Boolean) {
         of(context).edit().putBoolean(KEY_AUTO_START_ON, on).apply()

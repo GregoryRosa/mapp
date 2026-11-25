@@ -16,6 +16,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import br.com.mapp.core.bus.OfferBus
 import br.com.mapp.core.copilot.OnlineScreen
+import br.com.mapp.core.earnings.DayEarningsScreen
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.RawOffer
 import br.com.mapp.reader.parser.OcrLayout
@@ -229,6 +230,8 @@ class OfferAccessibilityService : AccessibilityService() {
         // Tela inicial "Você está online"/"offline": liga o copiloto sozinho (overlay/CopilotAutoStart).
         // Vale também com o copiloto parado — é só o texto, sem captura de imagem.
         OnlineScreen.detect(platform, texts)?.let { OfferBus.publishRideOnline(platform, it) }
+        // Ganho de hoje da Uber ("R$ 147,25" + "HOJE"): o copiloto lança a diferença como ganho extra.
+        DayEarningsScreen.read(platform, texts)?.let { OfferBus.publishDayEarnings(platform, it) }
 
         return if (platform == lastPlatform && texts == lastTexts) {
             lastParsed

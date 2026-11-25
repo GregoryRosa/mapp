@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -46,6 +47,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SelectableDates
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -68,11 +70,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import br.com.mapp.overlay.OverlayPrefs
 import br.com.mapp.overlay.ShiftTracker
 import br.com.mapp.MappApp
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.repo.EntryKind
 import br.com.mapp.core.repo.FinanceEntry
+import br.com.mapp.core.earnings.UberExtra
 import br.com.mapp.core.goal.GoalForecast
 import br.com.mapp.core.goal.GoalPace
 import br.com.mapp.core.goal.GoalPlan
@@ -265,6 +269,7 @@ private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
                     )
                 }
             }
+            item { UberExtraRow() }
             item { SectionTitle("Lançamentos do mês") }
             if (entries.isEmpty()) {
                 item { EmptyText("Nenhum lançamento neste mês. Toque em Lançar para registrar um ganho ou gasto.") }
@@ -322,6 +327,33 @@ private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
             onConfirm = { scope.launch { repos.finance.delete(e.id) } },
             onDismiss = { toDelete = null },
         )
+    }
+}
+
+/**
+ * Chave do **ganho extra da Uber** automático: com o copiloto ligado, na tela inicial da Uber o MApp
+ * compara o "Hoje" dela com as corridas contadas e lança a diferença (`overlay/UberExtraSync`).
+ */
+@Composable
+private fun UberExtraRow() {
+    val ctx = LocalContext.current
+    var on by remember { mutableStateOf(OverlayPrefs.isUberExtraOn(ctx)) }
+    Card(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Ganho extra da Uber sozinho", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    if (on) "Na tela inicial da Uber, o MApp compara o \"Hoje\" dela com as corridas contadas. " +
+                        "O que a Uber pagou a mais (percurso maior, destino mudado, gorjeta, taxa de cancelamento) " +
+                        "fica em \"Ganho extra\", um lançamento por dia atualizado sozinho."
+                    else "Desligado: a diferença para o \"Hoje\" da Uber não é lançada.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MappColors.TextDim,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Switch(checked = on, onCheckedChange = { on = it; OverlayPrefs.setUberExtraOn(ctx, it) })
+        }
     }
 }
 
@@ -548,7 +580,16 @@ private fun EntryRow(entry: FinanceEntry, onClick: () -> Unit, onDelete: () -> U
     }.joinToString(" · ")
     ListItem(
         modifier = Modifier.clickable(onClick = onClick),
-        headlineContent = { Text(if (income) "Ganho · ${entry.category}" else "Gasto · ${entry.category}") },
+        headlineContent = {
+            Text(
+                when {
+                    // Lançado sozinho pela diferença para o "Hoje" da Uber (core/earnings/UberExtra).
+                    UberExtra.isExtra(entry) -> "Ganho extra · ${entry.platform?.label.orEmpty()} (automático)"
+                    income -> "Ganho · ${entry.category}"
+                    else -> "Gasto · ${entry.category}"
+                },
+            )
+        },
         supportingContent = { Text(details) },
         trailingContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
