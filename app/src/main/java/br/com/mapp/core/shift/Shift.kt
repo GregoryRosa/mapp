@@ -9,6 +9,7 @@ import br.com.mapp.core.repo.EntryKind
 import br.com.mapp.core.repo.FinanceEntry
 import br.com.mapp.core.repo.OfferRecord
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.util.Locale
 import kotlin.math.abs
@@ -343,8 +344,22 @@ object ShiftMath {
         zone: ZoneId = ZoneId.systemDefault(),
         parts: List<CostPart>? = null,
         fixedPerRide: Double = 0.0,
+    ): List<Shift> =
+        withCostOn(list, Instant.ofEpochMilli(now).atZone(zone).toLocalDate(), costPerKm, zone, parts, fixedPerRide)
+
+    /**
+     * Igual a [withCostToday] para as jornadas que começaram em [day] — o dia de trabalho, que com a
+     * jornada aberta desde ontem ainda é ontem. Todas as corridas do dia usam o mesmo fixo por corrida.
+     */
+    fun withCostOn(
+        list: List<Shift>,
+        day: LocalDate,
+        costPerKm: Double,
+        zone: ZoneId = ZoneId.systemDefault(),
+        parts: List<CostPart>? = null,
+        fixedPerRide: Double = 0.0,
     ): List<Shift> = list.map {
-        if (it.costPerKm != null && sameDay(it.startedAt, now, zone)) {
+        if (it.costPerKm != null && Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate() == day) {
             it.copy(costPerKm = costPerKm, fixedPerRide = fixedPerRide, costParts = parts ?: it.costParts)
         } else {
             it
@@ -451,13 +466,15 @@ object PeriodMath {
      *   ([ShiftMath.summary]). Dentro do horário de uma jornada, ela manda: corrida cancelada lá não
      *   conta, mesmo que tenha ficado marcada como aceita no histórico de ofertas;
      * - corridas marcadas como aceitas no histórico FORA de qualquer jornada: valor, km (busca + viagem)
-     *   e tempo da oferta, custo = km × [costPerKm] + [fixedPerRide];
+     *   e tempo da oferta, custo = km × [costPerKm] (os custos fixos são rateados só pelas corridas das
+     *   jornadas — [FixedPlan] —, para a soma do mês bater com o total);
      * - lançamentos manuais: ganho soma no bruto (km informado soma nos km e no custo do carro), gasto
      *   soma nos custos.
      * [current] = jornada aberta (vale até [now]); [history] = encerradas.
      * [parts] = itens do custo de agora ([CostSplit.parts]): dividem o custo do carro item a item
      * ([PeriodTotals.carCostItems]). Jornada encerrada usa a divisão que gravou; sem ela, a de agora.
-     * [fixedPerRide] = custos fixos de agora por corrida finalizada (jornada encerrada usa o seu).
+     * [fixedPerRide] = custos fixos por corrida finalizada do dia de trabalho, para a jornada aberta
+     * (a encerrada usa o seu).
      */
     fun totals(
         from: Long,
@@ -486,7 +503,6 @@ object PeriodMath {
         }
         val looseKm = loose.sumOf { offerKm(it) }
         val looseHours = loose.sumOf { it.evaluated.metrics.totalMin ?: 0 } / 60.0
-        val looseFixed = loose.size * fixedPerRide
 
         val inRange = entries.filter { it.atMillis in from..to }
         val income = inRange.filter { it.kind == EntryKind.INCOME }
@@ -509,7 +525,7 @@ object PeriodMath {
                 }
                 CostSplit.split(sum.cost - sum.fixedCost, stored ?: parts) +
                     CostSplit.splitFixed(sum.fixedCost, stored ?: parts)
-            } + CostSplit.split((looseKm + manualKm) * costPerKm, parts) + CostSplit.splitFixed(looseFixed, parts)
+            } + CostSplit.split((looseKm + manualKm) * costPerKm, parts)
             CostSplit.merge(items)
         }
         return PeriodTotals(
@@ -520,7 +536,7 @@ object PeriodMath {
             km = summaries.sumOf { it.totalKm } + looseKm + manualKm,
             kmWithTrip = tripKms.sum(),
             hours = summaries.sumOf { it.hours } + looseHours,
-            carCost = summaries.sumOf { it.cost } + (looseKm + manualKm) * costPerKm + looseFixed,
+            carCost = summaries.sumOf { it.cost } + (looseKm + manualKm) * costPerKm,
             expenses = expenseList.sumOf { it.amount },
             avgTripKm = if (tripKms.isNotEmpty()) tripKms.average() else null,
             categories = ShiftMath.categories(rides),
@@ -529,7 +545,7 @@ object PeriodMath {
             expenseItems = expenseList.groupBy { it.category.trim().ifEmpty { "Outros" } }
                 .map { (category, list) -> CostAmount(category, list.sumOf { it.amount }) },
             splitEstimated = estimated,
-            fixedCost = summaries.sumOf { it.fixedCost } + looseFixed,
+            fixedCost = summaries.sumOf { it.fixedCost },
         )
     }
 

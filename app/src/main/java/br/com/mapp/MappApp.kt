@@ -4,6 +4,7 @@ import android.app.Application
 import br.com.mapp.billing.PlayBilling
 import br.com.mapp.core.repo.Repositories
 import br.com.mapp.data.DataModule
+import br.com.mapp.finance.FixedCostsSync
 import br.com.mapp.overlay.CopilotAutoStart
 import org.osmdroid.config.Configuration
 
@@ -17,6 +18,8 @@ class MappApp : Application() {
         PlayBilling.start(this)
         // Uber aberta e online → liga o copiloto sozinho (escuta o leitor desde a abertura do processo).
         CopilotAutoStart.watch(this)
+        // Custos fixos: fecha o mês que acabou e acerta o R$ por corrida do dia (o que falta ÷ corridas que faltam).
+        FixedCostsSync.refresh(this)
         Configuration.getInstance().apply {
             userAgentValue = packageName
             osmdroidBasePath = filesDir.resolve("osmdroid")

@@ -118,6 +118,8 @@ class OverlayService : LifecycleService() {
     private var costPerKm: Double = 0.0
     /** Custos fixos (seguro, financiamento...): R$ descontados a cada corrida finalizada. */
     private var fixedPerRide: Double = 0.0
+    /** Jornada, corridas finalizadas e dia da última conta do rateio dos fixos (refaz quando mudam). */
+    private var fixedKey: Triple<Long?, Int, Long>? = null
     /** Divisão do custo por item de Custos fixos (gravada na jornada ao encerrar). */
     private var costParts: List<CostPart> = emptyList()
     /** Última oferta avaliada (para o +1 do Card e o aceite automático). */
@@ -413,6 +415,17 @@ class OverlayService : LifecycleService() {
         }
     }
 
+    /**
+     * Rateio dos custos fixos ([FixedCostsSync]): refeito ao ligar o copiloto, quando a jornada abre ou
+     * encerra, quando uma corrida termina (ou sai) e quando o dia vira — não a cada km do GPS.
+     */
+    private fun refreshFixedCosts(shift: Shift?) {
+        val key = Triple(shift?.startedAt, shift?.trips?.count { it.finished } ?: 0, java.time.LocalDate.now().toEpochDay())
+        if (key == fixedKey) return
+        fixedKey = key
+        FixedCostsSync.refresh(this)
+    }
+
     private fun startShiftMonitor(loc: LocationProvider) {
         lifecycleScope.launch {
             MappApp.repos.vehicle.config().collect {
@@ -426,6 +439,7 @@ class OverlayService : LifecycleService() {
             ShiftTracker.current(this@OverlayService).collect {
                 pushShift()
                 refreshCountButton()
+                refreshFixedCosts(it)
             }
         }
         // Jornada encerrada de hoje corrigida no histórico de ofertas: atualiza o resumo junto ao "M".

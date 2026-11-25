@@ -60,10 +60,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.com.mapp.MappApp
 import br.com.mapp.core.model.CostUnit
 import br.com.mapp.core.model.ExtraKmCost
+import br.com.mapp.core.model.FixedLedger
 import br.com.mapp.core.model.FuelType
 import br.com.mapp.core.model.KmBase
 import br.com.mapp.core.model.VehicleCostConfig
 import br.com.mapp.core.shift.CostSplit
+import br.com.mapp.core.shift.FixedPlan
+import br.com.mapp.core.shift.FixedToday
 import br.com.mapp.core.shift.KmAverage
 import br.com.mapp.core.shift.KmAverages
 import br.com.mapp.core.shift.ShiftMath
@@ -74,7 +77,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.time.YearMonth
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlin.math.roundToLong
 
 /** Linha em edição de um custo extra. [key] só identifica a linha na tela. */
@@ -114,8 +121,8 @@ internal fun FixedCostsTab() {
             onSave = { cfg ->
                 saveScope.launch {
                     repos.vehicle.save(cfg)
-                    // Jornadas de hoje já encerradas também passam a usar os custos novos.
-                    ShiftTracker.applyCostToday(ctx, cfg.costPerKm, CostSplit.parts(cfg), cfg.fixedPerRide)
+                    // Refaz o rateio dos fixos; jornadas de hoje já encerradas passam a usar os custos novos.
+                    FixedCostsSync.sync(ctx)
                 }
             },
         )
@@ -123,28 +130,69 @@ internal fun FixedCostsTab() {
 }
 
 /**
- * Base do mês automática (média de km e de corridas das jornadas) atualizada fora da tela: chamada
- * quando uma jornada é encerrada. Com custo digitado pelo mês, o R$/km e o R$ por corrida mudam junto
- * e as jornadas de hoje passam a usá-los.
+ * Mantém em dia o que depende das jornadas em *Custos fixos*, fora da tela:
+ * - base do mês automática (média de km e de corridas) — ao encerrar uma jornada;
+ * - **rateio dos custos fixos** ([FixedPlan]): fecha o mês que acabou (o último dia rodado completa o
+ *   total), calcula o R$ por corrida do dia (o que falta pagar ÷ corridas que faltam), grava em
+ *   [VehicleCostConfig.ledger] — de onde Card, jornada, ícone "M" e Financeiro leem — e as jornadas
+ *   encerradas do dia passam a usá-lo.
+ * Chamado ao abrir o app, ao ligar o copiloto, quando uma corrida termina ou a jornada abre/encerra, e
+ * ao salvar os custos.
  */
 object FixedCostsSync {
-    fun afterShiftEnded(ctx: android.content.Context) {
+    private val lock = Mutex()
+
+    /** Jornada encerrada: os km e as corridas dela entram na média e o rateio é refeito. */
+    fun afterShiftEnded(ctx: android.content.Context) = refresh(ctx, updateBase = true)
+
+    fun refresh(ctx: android.content.Context, updateBase: Boolean = false) {
         val app = ctx.applicationContext
-        saveScope.launch {
-            runCatching {
-                val repos = MappApp.repos
-                val cfg = repos.vehicle.config().first()
-                if (!cfg.kmBase.auto) return@launch
-                val avg = KmAverages.of(ShiftTracker.history(app).value, System.currentTimeMillis(), ZoneId.systemDefault())
-                val base = KmAverages.applied(cfg.kmBase, avg)
-                if (base == cfg.kmBase) return@launch
-                val next = cfg.copy(kmBase = base)
-                repos.vehicle.save(next)
-                if (next.costPerKm != cfg.costPerKm || next.fixedPerRide != cfg.fixedPerRide) {
-                    ShiftTracker.applyCostToday(app, next.costPerKm, CostSplit.parts(next), next.fixedPerRide)
-                }
+        saveScope.launch { sync(app, updateBase) }
+    }
+
+    suspend fun sync(ctx: android.content.Context, updateBase: Boolean = false) {
+        val app = ctx.applicationContext
+        lock.withLock {
+            runCatching { syncNow(app, updateBase) }
+        }
+    }
+
+    private suspend fun syncNow(app: android.content.Context, updateBase: Boolean) {
+        val repos = MappApp.repos
+        val zone = ZoneId.systemDefault()
+        var cfg = repos.vehicle.config().first()
+        if (updateBase && cfg.kmBase.auto) {
+            val avg = KmAverages.of(ShiftTracker.history(app).value, System.currentTimeMillis(), zone)
+            val base = KmAverages.applied(cfg.kmBase, avg)
+            if (base != cfg.kmBase) {
+                cfg = cfg.copy(kmBase = base)
+                repos.vehicle.save(cfg)
             }
         }
+        val now = System.currentTimeMillis()
+        val current = ShiftTracker.current(app).value
+        val day = FixedPlan.workDate(current, now, zone)
+        if (!cfg.hasFixed) {
+            if (cfg.ledger != FixedLedger()) repos.vehicle.saveLedger(FixedLedger())
+            ShiftTracker.applyCostToday(app, cfg.costPerKm, CostSplit.parts(cfg), 0.0, now, day)
+            return
+        }
+        val since = cfg.ledger.since ?: FixedPlan.startDate(ShiftTracker.history(app).value, current, now, zone)
+        // Fecha os meses que acabaram (normalmente só o anterior): a soma de cada um bate com o total.
+        val month = YearMonth.from(day)
+        var settled = cfg.ledger.settled
+        var m = maxOf(YearMonth.from(since), settled?.plusMonths(1) ?: YearMonth.from(since))
+        var guard = 0
+        while (m < month && guard++ < 24) {
+            val closing = m
+            ShiftTracker.updateHistory(app) { FixedPlan.settle(it, cfg.fixedMonthTotal, closing, zone, since) }
+            settled = closing
+            m = m.plusMonths(1)
+        }
+        val plan = FixedPlan.today(cfg.fixedMonthTotal, cfg.kmBase, ShiftTracker.history(app).value, current, now, zone, since)
+        val ledger = FixedLedger(today = plan.perRide, since = since, settled = settled)
+        if (ledger != cfg.ledger) repos.vehicle.saveLedger(ledger)
+        ShiftTracker.applyCostToday(app, cfg.costPerKm, CostSplit.parts(cfg), plan.perRide, now, plan.day)
     }
 }
 
@@ -213,6 +261,7 @@ private fun VehicleForm(
     var daysPerMonth by remember(initial) { mutableStateOf(Format.input(initial.kmBase.daysPerMonth)) }
     var ridesPerDay by remember(initial) { mutableStateOf(Format.input(initial.kmBase.ridesPerDay)) }
     val history by remember { ShiftTracker.history(ctx) }.collectAsStateWithLifecycle()
+    val openShift by remember { ShiftTracker.current(ctx) }.collectAsStateWithLifecycle()
     val average = remember(history) { KmAverages.of(history, System.currentTimeMillis(), ZoneId.systemDefault()) }
     // Corridas por dia só importam com custo fixo (é por elas que ele vira R$ por corrida).
     val hasFixedRows = extras.any { it.unit.isFixed }
@@ -279,9 +328,20 @@ private fun VehicleForm(
             maintenanceUnit = maintenanceUnit,
             depreciationUnit = depreciationUnit,
             kmBase = base,
+            // O rateio não é editado aqui: sem ele a tela acharia que sempre há o que salvar.
+            ledger = saved.ledger,
         )
     } else {
         null
+    }
+    // Rateio dos custos fixos com os valores da tela (o mesmo que o FixedCostsSync grava ao salvar).
+    val fixedPlan: FixedToday? = config?.takeIf { it.hasFixed }?.let { c ->
+        val now = System.currentTimeMillis()
+        val zone = ZoneId.systemDefault()
+        FixedPlan.today(
+            c.fixedMonthTotal, c.kmBase, history, openShift, now, zone,
+            saved.ledger.since ?: FixedPlan.startDate(history, openShift, now, zone),
+        )
     }
 
     // Salva sozinho a cada mudança válida: vale na hora para as ofertas, a jornada e os totais do dia.
@@ -449,27 +509,28 @@ private fun VehicleForm(
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
+                    val fixedNow = fixedPlan?.perRide ?: config.fixedPerRide
                     if (config.hasFixed) {
                         Text(
-                            "Custo fixo por corrida",
+                            "Custo fixo por corrida hoje",
                             style = MaterialTheme.typography.labelLarge,
                             modifier = Modifier.padding(top = 8.dp),
                         )
                         Text(
-                            Format.brl(config.fixedPerRide),
+                            Format.brl(fixedNow),
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            "Custos fixos: ${Format.brl(config.fixedMonthTotal)} ÷ ${rides(config.kmBase.monthRides)} = " +
-                                "${Format.brl(config.fixedPerRide)}, descontado a cada corrida finalizada.",
+                            fixedPlan?.let { fixedPlanText(it, config.fixedMonthTotal) }
+                                ?: "Custos fixos: ${Format.brl(config.fixedMonthTotal)} por mês, descontados a cada corrida finalizada.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
                     Text(
-                        "Ex.: corrida de 10 km custa ${Format.brl(config.rideCost(10.0))}" +
+                        "Ex.: corrida de 10 km custa ${Format.brl(config.costPerKm * 10 + fixedNow)}" +
                             (if (config.hasFixed) " (${Format.brl(config.costPerKm * 10)} de desgaste + " +
-                                "${Format.brl(config.fixedPerRide)} fixos)" else "") +
+                                "${Format.brl(fixedNow)} fixos)" else "") +
                             " · 100 km rodados gastam ${Format.brl(config.costPerKm * 100)} de desgaste.",
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -573,6 +634,28 @@ private fun FixedCostInput(
 
 /** "520 corridas" */
 private fun rides(v: Double): String = "${ShiftMath.num(v, 0)} corrida${if (v.toLong() == 1L) "" else "s"}"
+
+/**
+ * "Falta pagar R$ 1.137,00 de R$ 1.500,00 do mês ÷ ~396 corridas até 30/11 = R$ 2,87 por corrida…" —
+ * a conta do [FixedPlan] em palavras. [total] = custos fixos do mês inteiro.
+ */
+internal fun fixedPlanText(p: FixedToday, total: Double): String {
+    val ddMm = DateTimeFormatter.ofPattern("dd/MM")
+    if (p.ridesLeft <= 0) return "Informe as corridas por dia para dividir os custos fixos."
+    val start = p.startedOn?.let {
+        "Este mês o rateio começou em ${it.format(ddMm)}: ele paga a parte de ${it.format(ddMm)} a " +
+            "${p.monthEnd.format(ddMm)} dos ${Format.brl(total)} (${Format.brl(p.monthTotal)}). "
+    } ?: ""
+    val left = if (p.remaining <= 0.005) {
+        "Os custos fixos do mês (${Format.brl(p.monthTotal)}) já foram pagos: as próximas corridas não descontam nada até o mês virar."
+    } else {
+        "Falta pagar ${Format.brl(p.remaining)} de ${Format.brl(p.monthTotal)} ÷ ~${rides(p.ridesLeft)} até " +
+            "${p.monthEnd.format(ddMm)} (contando as de hoje) = ${Format.brl(p.perRide)} por corrida finalizada. " +
+            "Rodando menos que o previsto o valor sobe, rodando mais ele desce; no fim do mês a soma dá " +
+            "${Format.brl(p.monthTotal)}."
+    }
+    return start + left
+}
 
 /** Marcas do diálogo de nome para custo novo (as linhas usam key ≥ 0). */
 private const val NEW_WEAR = -1

@@ -2,6 +2,7 @@ package br.com.mapp.core.repo
 
 import br.com.mapp.core.model.EvaluatedOffer
 import br.com.mapp.core.model.FilterProfile
+import br.com.mapp.core.model.FixedLedger
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.VehicleCostConfig
 import br.com.mapp.core.model.Zone
@@ -29,7 +30,10 @@ interface ZoneRepository {
 
 interface VehicleRepository {
     fun config(): Flow<VehicleCostConfig>
+    /** Grava os custos (não mexe no [VehicleCostConfig.ledger]). */
     suspend fun save(config: VehicleCostConfig)
+    /** Grava o estado do rateio dos custos fixos (R$ por corrida do dia, início, último mês fechado). */
+    suspend fun saveLedger(ledger: FixedLedger)
 }
 
 /** Registro de oferta vista (histórico). */

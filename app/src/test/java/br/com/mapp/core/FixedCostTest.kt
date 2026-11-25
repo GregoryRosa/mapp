@@ -137,7 +137,7 @@ class FixedCostTest {
         assertEquals(90.0 + 3.0, ShiftMath.summary(out[0], 0.0, now).cost, eps)
     }
 
-    @Test fun periodo_soma_fixo_das_corridas_da_jornada_e_das_de_fora_e_divide_por_item() {
+    @Test fun periodo_soma_fixo_das_corridas_da_jornada_e_divide_por_item() {
         val parts = CostSplit.parts(cfg)
         val shift = Shift(
             startedAt = 8 * h, activeMs = 4 * h, resumedAt = null, gpsKm = 100.0, endedAt = 12 * h,
@@ -147,7 +147,7 @@ class FixedCostTest {
                 ShiftTrip(10 * h, Platform.UBER, "UberX", 30.0, 1.0, 8.0),
             ),
         )
-        // Corrida aceita fora da jornada (à noite): 10 km da oferta + o fixo dela.
+        // Corrida aceita fora da jornada (à noite): 10 km da oferta; fixo não (o rateio do mês é só das jornadas).
         val loose = OfferRecord(
             id = 0,
             evaluated = EvaluatedOffer(
@@ -160,16 +160,16 @@ class FixedCostTest {
         )
         val t = PeriodMath.totals(0, 24 * h, null, listOf(shift), listOf(loose), emptyList(), cfg.costPerKm, 23 * h, parts, cfg.fixedPerRide)
         assertEquals(3, t.rides)
-        assertEquals(9.0, t.fixedCost, eps)                   // 3 corridas × 3,00
+        assertEquals(6.0, t.fixedCost, eps)                   // 2 corridas da jornada × 3,00
         assertEquals(110.0 * 0.9, t.kmCost, eps)             // desgaste de 110 km
-        assertEquals(99.0 + 9.0, t.carCost, eps)
-        assertEquals(3.0, t.fixedPerRide!!, eps)
+        assertEquals(99.0 + 6.0, t.carCost, eps)
+        assertEquals(2.0, t.fixedPerRide!!, eps)             // média por corrida do período
         assertEquals(0.9, t.kmCostPerKm!!, eps)
         assertEquals(t.carCost, t.carCostItems.sumOf { it.amount }, eps)
-        assertEquals(1.8, t.carCostItems.first { it.name == "Seguro" }.amount, eps)
-        assertEquals(7.2, t.carCostItems.first { it.name == "Financiamento" }.amount, eps)
+        assertEquals(1.2, t.carCostItems.first { it.name == "Seguro" }.amount, eps)
+        assertEquals(4.8, t.carCostItems.first { it.name == "Financiamento" }.amount, eps)
         assertEquals(110.0 * 0.05, t.carCostItems.first { it.name == "Pneus" }.amount, eps)
-        assertEquals(95.0 - 108.0, t.net, eps)
+        assertEquals(95.0 - 105.0, t.net, eps)
     }
 
     @Test fun media_das_jornadas_traz_corridas_por_dia() {
