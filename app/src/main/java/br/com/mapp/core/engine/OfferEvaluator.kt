@@ -21,7 +21,7 @@ import br.com.mapp.core.model.ZoneType
  * - VERDE se TODOS os critérios atingirem a marca verde: R$/km, R$/h, valor, nota e lucro líquido
  *   ≥ "bom"; busca km e minutos ≤ "bom". Valor não lido (lucro sem km conhecido) ou marca verde
  *   desligada (null) não impedem o verde.
- * Lucro líquido da corrida = valor − desgaste dos km − custo fixo por corrida ([metrics]).
+ * Lucro líquido da corrida = valor − desgaste dos km − % dos custos fixos sobre o valor ([metrics]).
  * - AMARELO nos demais casos.
  * Km/min totais = deslocamento até o passageiro + viagem. Trecho com km mas sem tempo (ou o
  * contrário) — o leitor não conseguiu ler um dos números — tem a parte que falta estimada pela
@@ -90,8 +90,8 @@ object OfferEvaluator {
         val totalMin = legs.minutes?.let { Math.round(it).toInt() }
         val perKm = totalKm?.takeIf { it > 0 }?.let { raw.price / it }
         val perHour = legs.minutes?.takeIf { it > 0 }?.let { raw.price / it * 60.0 }
-        // Lucro da corrida: valor − desgaste dos km − a parte dela nos custos fixos (seguro, financiamento...).
-        val net = totalKm?.let { raw.price - cost.rideCost(it) }
+        // Lucro da corrida: valor − desgaste dos km − a % do valor nos custos fixos (seguro, financiamento...).
+        val net = totalKm?.let { raw.price - cost.rideCost(it, raw.price) }
         val netPerKm = if (net != null && totalKm > 0) net / totalKm else null
         return OfferMetrics(totalKm, totalMin, perKm, perHour, net, netPerKm)
     }

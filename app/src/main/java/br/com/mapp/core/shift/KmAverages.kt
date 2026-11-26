@@ -9,8 +9,9 @@ import kotlin.math.roundToInt
 
 /**
  * Média de km das jornadas encerradas nos últimos [KmAverages.WINDOW_DAYS] dias.
- * [kmPerDay] = média por dia rodado (dia com jornada), [ridesPerDay] = corridas finalizadas por dia
- * rodado (null = nenhuma corrida contada na janela), [workedDays] = dias rodados na janela,
+ * [kmPerDay] = média por dia rodado (dia com jornada), [grossPerDay] = R$ bruto das corridas
+ * finalizadas por dia rodado, arredondado para R$ inteiro (null = nenhuma corrida contada na janela),
+ * [workedDays] = dias rodados na janela,
  * [windowDays] = do 1º dia rodado da janela até hoje (1..30), [daysPerMonth] = dias rodados por mês
  * pelo ritmo da janela (null com menos de [KmAverages.MIN_WINDOW_FOR_DAYS] dias de histórico:
  * pouco para saber as folgas).
@@ -20,7 +21,7 @@ data class KmAverage(
     val workedDays: Int,
     val windowDays: Int,
     val daysPerMonth: Double?,
-    val ridesPerDay: Double? = null,
+    val grossPerDay: Double? = null,
 )
 
 /** Base dos custos do mês (Financeiro → Custos fixos) pela média das jornadas. */
@@ -42,27 +43,28 @@ object KmAverages {
         if (byDay.isEmpty()) return null
         val worked = byDay.size
         val kmPerDay = (byDay.values.sum() / worked).roundToInt().coerceAtLeast(1).toDouble()
-        val rides = days.values.sumOf { list -> list.sumOf { s -> s.trips.count { it.finished } } }
-        val ridesPerDay = if (rides > 0) (rides.toDouble() / worked).roundToInt().coerceAtLeast(1).toDouble() else null
+        val gross = days.values.sumOf { list -> list.sumOf { it.finishedGross } }
+        val grossPerDay = if (gross > 0) (gross / worked).roundToInt().coerceAtLeast(1).toDouble() else null
         val window = (ChronoUnit.DAYS.between(byDay.keys.min(), today) + 1).toInt().coerceIn(1, WINDOW_DAYS)
         val perMonth = if (window >= MIN_WINDOW_FOR_DAYS) {
             (worked * WINDOW_DAYS.toDouble() / window).roundToInt().coerceIn(1, WINDOW_DAYS).toDouble()
         } else {
             null
         }
-        return KmAverage(kmPerDay, worked, window, perMonth, ridesPerDay)
+        return KmAverage(kmPerDay, worked, window, perMonth, grossPerDay)
     }
 
     /**
      * Base com a média aplicada: só com [KmBase.auto]. Sem média, com pouco histórico para os dias
-     * do mês ou sem corridas contadas, fica o valor que já estava (o padrão ou o último digitado).
+     * do mês ou sem corridas contadas (faturamento), fica o valor que já estava (o padrão ou o último
+     * digitado).
      */
     fun applied(base: KmBase, avg: KmAverage?): KmBase {
         if (!base.auto || avg == null) return base
         return base.copy(
             kmPerDay = avg.kmPerDay,
             daysPerMonth = avg.daysPerMonth ?: base.daysPerMonth,
-            ridesPerDay = avg.ridesPerDay ?: base.ridesPerDay,
+            grossPerDay = avg.grossPerDay ?: base.grossPerDay,
         )
     }
 

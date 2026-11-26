@@ -44,7 +44,7 @@ data class RawOffer(
  * Perfil de filtro (ex.: "Dia", "Noite", "Aeroporto"). Valores null = critério desligado.
  * Cada critério tem duas marcas do semáforo (ver `core/filter/FilterCriterion`):
  * - mais é melhor (R$/km, R$/h, valor, nota, lucro líquido da corrida — valor − desgaste dos km −
- *   custo fixo por corrida): `min*` = amarelo a partir de (abaixo = vermelho), `good*` = verde a partir de;
+ *   % dos custos fixos sobre o valor): `min*` = amarelo a partir de (abaixo = vermelho), `good*` = verde a partir de;
  * - menos é melhor (busca km/min): `maxPickup*` = amarelo até (acima = vermelho),
  *   `goodPickup*` = verde até.
  * `good*` null = o critério não impede o verde (perfis antigos continuam com o mesmo semáforo).
@@ -69,7 +69,7 @@ data class FilterProfile(
     /** Nota do passageiro verde a partir de ([minRating] = amarelo a partir de). */
     val goodRating: Double? = null,
     /**
-     * Lucro líquido da corrida (valor − desgaste dos km − custo fixo por corrida,
+     * Lucro líquido da corrida (valor − desgaste dos km − % dos custos fixos sobre o valor,
      * `OfferMetrics.netProfit`) amarelo a partir de; abaixo = vermelho.
      */
     val minProfit: Double? = null,
@@ -103,7 +103,8 @@ enum class FuelType(
  * - [PER_KM] e [PER_MONTH] = **desgaste** (combustível, pneus, manutenção...): conta a cada km rodado.
  *   [PER_MONTH] é o total do mês dividido pelos km do mês da [KmBase].
  * - [FIXED_MONTH] = **custo fixo** (seguro, financiamento, IPVA...): não depende dos km; o total do
- *   mês é dividido pelas corridas do mês da [KmBase] e descontado a cada corrida finalizada.
+ *   mês vira **porcentagem do valor das corridas** (total ÷ faturamento do mês da [KmBase]) e é
+ *   descontado de cada corrida finalizada — corrida maior paga mais, a curta paga menos.
  */
 enum class CostUnit(val suffix: String, val label: String) {
     PER_KM("R$/km", "por km"),
@@ -111,38 +112,43 @@ enum class CostUnit(val suffix: String, val label: String) {
     FIXED_MONTH("R$/mês", "fixo do mês"),
     ;
 
-    /** true = custo fixo, descontado por corrida (não por km). */
+    /** true = custo fixo, descontado como % do valor de cada corrida (não por km). */
     val isFixed: Boolean get() = this == FIXED_MONTH
 }
 
 /**
  * Base do mês que reparte os custos digitados pelo total do mês: [kmPerDay] (média por dia rodado) ×
- * [daysPerMonth] (dias rodados no mês) = km do mês, para o desgaste em R$/km; [ridesPerDay] ×
- * [daysPerMonth] = corridas do mês, para os custos fixos em R$ por corrida. [auto] = vem das jornadas
- * (`core/shift/KmAverages`, atualizada sozinha); false = digitado pelo motorista.
+ * [daysPerMonth] (dias rodados no mês) = km do mês, para o desgaste em R$/km; [grossPerDay] (R$ bruto
+ * das corridas por dia rodado) × [daysPerMonth] = faturamento do mês, para os custos fixos em % do
+ * valor das corridas. [auto] = vem das jornadas (`core/shift/KmAverages`, atualizada sozinha);
+ * false = digitado pelo motorista.
  */
 data class KmBase(
     val kmPerDay: Double = 150.0,
     val daysPerMonth: Double = 26.0,
     val auto: Boolean = true,
-    val ridesPerDay: Double = 20.0,
+    val grossPerDay: Double = 300.0,
 ) {
     val monthKm: Double
         get() = if (kmPerDay > 0 && daysPerMonth > 0) kmPerDay * daysPerMonth else 0.0
 
-    val monthRides: Double
-        get() = if (ridesPerDay > 0 && daysPerMonth > 0) ridesPerDay * daysPerMonth else 0.0
+    /** Faturamento do mês (R$ bruto das corridas) pela base; 0 sem faturamento ou sem dias. */
+    val monthGross: Double
+        get() = if (grossPerDay > 0 && daysPerMonth > 0) grossPerDay * daysPerMonth else 0.0
 
-    /** R$/km de [amount] digitado em [unit]. Custo do mês sem km na base = 0; custo fixo = 0 (é por corrida). */
+    /** R$/km de [amount] digitado em [unit]. Custo do mês sem km na base = 0; custo fixo = 0 (é % do valor). */
     fun perKm(amount: Double, unit: CostUnit): Double = when (unit) {
         CostUnit.PER_KM -> amount
         CostUnit.PER_MONTH -> if (monthKm > 0) amount / monthKm else 0.0
         CostUnit.FIXED_MONTH -> 0.0
     }
 
-    /** R$ por corrida de [amount]: só o custo fixo (total do mês ÷ corridas do mês); desgaste = 0. */
-    fun perRide(amount: Double, unit: CostUnit): Double = when (unit) {
-        CostUnit.FIXED_MONTH -> if (monthRides > 0) amount / monthRides else 0.0
+    /**
+     * Fração do valor das corridas (0,25 = 25%) de [amount]: só o custo fixo (total do mês ÷
+     * faturamento do mês, 0 sem [monthGross]); desgaste = 0.
+     */
+    fun share(amount: Double, unit: CostUnit): Double = when (unit) {
+        CostUnit.FIXED_MONTH -> if (monthGross > 0) amount / monthGross else 0.0
         CostUnit.PER_KM, CostUnit.PER_MONTH -> 0.0
     }
 
@@ -155,11 +161,12 @@ data class KmBase(
 
 /**
  * Estado do rateio dos custos fixos (`core/shift/FixedPlan`), guardado junto dos custos mas fora do
- * formulário: [today] = R$ por corrida do dia de trabalho (o que falta pagar no mês ÷ corridas que
- * faltam); [since] = dia em que o rateio começou; [settled] = último mês fechado (somando o total).
+ * formulário: [share] = fração do valor das corridas do dia de trabalho (0,25 = 25%: o que falta pagar
+ * no mês ÷ faturamento que ainda deve entrar no mês); [since] = dia em que o rateio começou;
+ * [settled] = último mês fechado (somando o total).
  */
 data class FixedLedger(
-    val today: Double? = null,
+    val share: Double? = null,
     val since: LocalDate? = null,
     val settled: YearMonth? = null,
 )
@@ -171,8 +178,8 @@ data class ExtraKmCost(val name: String, val amount: Double, val unit: CostUnit 
  * Custos do veículo usados para o lucro líquido. Preço e consumo na unidade de [fuelType] (litro ou kWh).
  * **Desgaste** (combustível, manutenção, depreciação e custos extras por km/mês) vira R$/km — [costPerKm],
  * contado a cada km rodado. **Custos fixos** ([CostUnit.FIXED_MONTH]: seguro, financiamento...) viram
- * R$ por corrida — [fixedPerRide], descontado a cada corrida finalizada. [ledger] = rateio do mês (não
- * é editado na tela; gravado à parte).
+ * porcentagem do valor da corrida — [fixedShare], descontada de cada corrida finalizada (corrida de
+ * R$ 12 paga menos que a de R$ 50). [ledger] = rateio do mês (não é editado na tela; gravado à parte).
  */
 data class VehicleCostConfig(
     val fuelType: FuelType = FuelType.GASOLINE,
@@ -201,8 +208,8 @@ data class VehicleCostConfig(
     val extraPerKm: Double
         get() = extraCosts.sumOf { perKmOf(it) }
 
-    /** R$ por corrida de um custo adicionado pelo usuário (só os fixos; desgaste = 0). */
-    fun perRideOf(cost: ExtraKmCost): Double = kmBase.perRide(cost.amount, cost.unit)
+    /** Fração do valor das corridas de um custo adicionado pelo usuário (só os fixos; desgaste = 0). */
+    fun shareOf(cost: ExtraKmCost): Double = kmBase.share(cost.amount, cost.unit)
 
     /** true = algum custo de desgaste foi digitado pelo total do mês (depende dos km da [kmBase]). */
     val usesMonthly: Boolean
@@ -224,23 +231,27 @@ data class VehicleCostConfig(
         get() = energyCostPerKm + maintenancePerKm + depreciationPerKm + extraPerKm
 
     /**
-     * Custos fixos: R$ descontados a cada corrida finalizada — o do rateio do dia ([FixedLedger.today]:
-     * o que falta pagar no mês ÷ corridas que faltam) ou, antes do primeiro rateio, [evenFixedPerRide].
+     * Custos fixos: fração do valor de cada corrida finalizada (0,25 = 25%) — a do rateio do dia
+     * ([FixedLedger.share]: o que falta pagar no mês ÷ faturamento que ainda deve entrar no mês) ou,
+     * antes do primeiro rateio, [evenFixedShare]. 0 sem custo fixo.
      */
-    val fixedPerRide: Double
-        get() = if (!hasFixed) 0.0 else ledger.today ?: evenFixedPerRide
+    val fixedShare: Double
+        get() = if (!hasFixed) 0.0 else ledger.share ?: evenFixedShare
 
-    /** Custos fixos divididos por igual: total do mês ÷ corridas do mês pela base. */
-    val evenFixedPerRide: Double
-        get() = kmBase.perRide(fixedMonthTotal, CostUnit.FIXED_MONTH)
+    /** Custos fixos divididos por igual: total do mês ÷ faturamento do mês pela base. */
+    val evenFixedShare: Double
+        get() = kmBase.share(fixedMonthTotal, CostUnit.FIXED_MONTH)
 
-    /** Custo de uma corrida de [km]: desgaste dos km + a parte dela nos custos fixos. */
-    fun rideCost(km: Double): Double = km * costPerKm + fixedPerRide
+    /** Parte dos custos fixos que uma corrida de [price] paga (valor × [fixedShare]). */
+    fun fixedCostOf(price: Double): Double = price * fixedShare
+
+    /** Custo de uma corrida de [km] e valor [price]: desgaste dos km + a % do valor nos custos fixos. */
+    fun rideCost(km: Double, price: Double): Double = km * costPerKm + price * fixedShare
 }
 
 /**
  * Grava/lê [ExtraKmCost] em texto (uma linha por custo). "v1" = versão antiga, sempre por km;
- * "v2" leva a unidade (de antes dos custos fixos por corrida); "v3" = atual.
+ * "v2" leva a unidade (de antes dos custos fixos separados do desgaste); "v3" = atual.
  */
 object ExtraKmCostCodec {
     private const val SEP = "\t"

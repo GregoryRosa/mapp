@@ -73,13 +73,22 @@ data class Shift(
     /** Quando foi encerrada (null = aberta, ou gravada por versão antiga). */
     val endedAt: Long? = null,
     /**
-     * Custos fixos por corrida finalizada gravados ao encerrar (null = usar o atual). Jornada encerrada
-     * antes dos custos fixos por corrida ([costPerKm] gravado, isto null) = 0: o custo/km dela já
-     * incluía tudo.
+     * **Legado:** R$ de custo fixo por corrida finalizada, gravado pelas versões que rateavam o fixo por
+     * corrida. Nunca mais é gravado (vale [fixedShare]); jornada antiga com ele continua somando
+     * corridas finalizadas × este valor. Encerrada antes dos custos fixos ([costPerKm] gravado, este e
+     * [fixedShare] null) = 0: o custo/km dela já incluía tudo.
      */
     val fixedPerRide: Double? = null,
+    /**
+     * Custos fixos como fração do valor das corridas finalizadas (0,25 = 25%), gravada ao encerrar
+     * (null = jornada aberta, que usa a do dia, ou gravada antes — ver [fixedPerRide]).
+     */
+    val fixedShare: Double? = null,
 ) {
     val paused: Boolean get() = resumedAt == null
+
+    /** Valor bruto das corridas finalizadas (a base dos custos fixos da jornada). */
+    val finishedGross: Double get() = trips.filter { it.finished }.sumOf { it.price }
 
     fun elapsedMs(now: Long): Long = activeMs + (resumedAt?.let { max(0, now - it) } ?: 0)
 
@@ -229,28 +238,28 @@ data class ShiftSummary(
     val categories: List<CategoryShare>,
     /** Corridas aceitas ainda em andamento (fora do ganho/lucro até finalizar). */
     val pendingTrips: Int = 0,
-    /** Parte do [cost] que é custo fixo (corridas finalizadas × R$ por corrida). */
+    /** Parte do [cost] que é custo fixo (% do valor das corridas finalizadas). */
     val fixedCost: Double = 0.0,
 )
 
 object ShiftMath {
 
     /**
-     * [costPerKm] (desgaste) e [fixedPerRide] (custos fixos) valem só se a jornada não guardou os seus
-     * (gravados ao encerrar). Ganho/lucro: só corridas finalizadas. Custo = **desgaste**: km do GPS ×
-     * custo/km (sobe a cada trecho rodado; sem GPS, os km das corridas finalizadas) + **fixos**: R$ por
-     * corrida a cada corrida finalizada (aceita ou em andamento não desconta; cancelada nunca).
+     * [costPerKm] (desgaste) e [fixedShare] (custos fixos, fração do valor) valem só se a jornada não
+     * guardou os seus (gravados ao encerrar). Ganho/lucro: só corridas finalizadas. Custo =
+     * **desgaste**: km do GPS × custo/km (sobe a cada trecho rodado; sem GPS, os km das corridas
+     * finalizadas) + **fixos**: % do valor de cada corrida finalizada (aceita ou em andamento não
+     * desconta; cancelada nunca) — regra em [fixedCostOf].
      */
-    fun summary(shift: Shift, costPerKm: Double, now: Long, fixedPerRide: Double = 0.0): ShiftSummary {
+    fun summary(shift: Shift, costPerKm: Double, now: Long, fixedShare: Double = 0.0): ShiftSummary {
         val costPerKm = shift.costPerKm ?: costPerKm
-        val fixed = shift.fixedPerRide ?: if (shift.costPerKm != null) 0.0 else fixedPerRide
         val trips = shift.trips.filter { it.finished }
         val revenue = trips.sumOf { it.price }
         val withTrip = trips.sumOf { it.tripKm ?: 0.0 }
         val offersKm = trips.sumOf { (it.pickupKm ?: 0.0) + (it.tripKm ?: 0.0) }
         val total = if (shift.gpsKm > 0) shift.gpsKm else offersKm
         val hours = shift.elapsedMs(now) / 3_600_000.0
-        val fixedCost = trips.size * fixed
+        val fixedCost = fixedCostOf(shift, fixedShare)
         val cost = total * costPerKm + fixedCost
         val withKm = trips.mapNotNull { it.tripKm }
         return ShiftSummary(
@@ -269,6 +278,19 @@ object ShiftMath {
             pendingTrips = shift.trips.size - trips.size,
             fixedCost = fixedCost,
         )
+    }
+
+    /**
+     * Custos fixos que a jornada desconta (a regra do [summary], usada também pelo rateio do mês em
+     * [FixedPlan]): [Shift.fixedShare] gravada × bruto das finalizadas; senão o legado
+     * [Shift.fixedPerRide] × finalizadas; senão, encerrada antes dos fixos ([Shift.costPerKm] gravado)
+     * = 0; aberta = bruto × [fixedShare] (a % do dia).
+     */
+    fun fixedCostOf(shift: Shift, fixedShare: Double = 0.0): Double = when {
+        shift.fixedShare != null -> shift.finishedGross * shift.fixedShare
+        shift.fixedPerRide != null -> shift.trips.count { it.finished } * shift.fixedPerRide
+        shift.costPerKm != null -> 0.0
+        else -> shift.finishedGross * fixedShare
     }
 
     /**
@@ -334,8 +356,8 @@ object ShiftMath {
 
     /**
      * Custos do veículo mudaram: as jornadas que começaram hoje (já encerradas, com o custo/km
-     * guardado) passam a usar [costPerKm], [fixedPerRide] e a divisão [parts]. Dias anteriores ficam
-     * com os custos daquele dia.
+     * guardado) passam a usar [costPerKm], [fixedShare] (% do valor) e a divisão [parts]. Dias
+     * anteriores ficam com os custos daquele dia.
      */
     fun withCostToday(
         list: List<Shift>,
@@ -343,13 +365,14 @@ object ShiftMath {
         now: Long,
         zone: ZoneId = ZoneId.systemDefault(),
         parts: List<CostPart>? = null,
-        fixedPerRide: Double = 0.0,
+        fixedShare: Double = 0.0,
     ): List<Shift> =
-        withCostOn(list, Instant.ofEpochMilli(now).atZone(zone).toLocalDate(), costPerKm, zone, parts, fixedPerRide)
+        withCostOn(list, Instant.ofEpochMilli(now).atZone(zone).toLocalDate(), costPerKm, zone, parts, fixedShare)
 
     /**
      * Igual a [withCostToday] para as jornadas que começaram em [day] — o dia de trabalho, que com a
-     * jornada aberta desde ontem ainda é ontem. Todas as corridas do dia usam o mesmo fixo por corrida.
+     * jornada aberta desde ontem ainda é ontem. Todas as corridas do dia usam a mesma % do valor (o
+     * legado [Shift.fixedPerRide] dessas jornadas sai).
      */
     fun withCostOn(
         list: List<Shift>,
@@ -357,10 +380,10 @@ object ShiftMath {
         costPerKm: Double,
         zone: ZoneId = ZoneId.systemDefault(),
         parts: List<CostPart>? = null,
-        fixedPerRide: Double = 0.0,
+        fixedShare: Double = 0.0,
     ): List<Shift> = list.map {
         if (it.costPerKm != null && Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate() == day) {
-            it.copy(costPerKm = costPerKm, fixedPerRide = fixedPerRide, costParts = parts ?: it.costParts)
+            it.copy(costPerKm = costPerKm, fixedShare = fixedShare, fixedPerRide = null, costParts = parts ?: it.costParts)
         } else {
             it
         }
@@ -414,8 +437,8 @@ data class PeriodTotals(
     /** Tempo trabalhado: jornadas (sem as pausas) + tempo das corridas fora de jornada. */
     val hours: Double = 0.0,
     /**
-     * Custo do carro: desgaste (km rodados × custo/km) + custos fixos ([fixedCost]: corridas
-     * finalizadas × R$ por corrida).
+     * Custo do carro: desgaste (km rodados × custo/km) + custos fixos ([fixedCost]: % do valor das
+     * corridas finalizadas das jornadas).
      */
     val carCost: Double = 0.0,
     /** Gastos lançados à mão. */
@@ -432,8 +455,13 @@ data class PeriodTotals(
     val expenseItems: List<CostAmount> = emptyList(),
     /** Alguma jornada antiga (sem a divisão gravada) foi dividida pelos Custos fixos de hoje. */
     val splitEstimated: Boolean = false,
-    /** Parte do [carCost] que é custo fixo (seguro, financiamento...): descontada por corrida finalizada. */
+    /** Parte do [carCost] que é custo fixo (seguro, financiamento...): % do valor de cada corrida finalizada. */
     val fixedCost: Double = 0.0,
+    /**
+     * % efetiva dos custos fixos no período (0,25 = 25%): [fixedCost] ÷ bruto das corridas finalizadas
+     * das jornadas (as de fora de jornada não pagam fixo). null sem custo fixo.
+     */
+    val fixedShare: Double? = null,
 ) {
     /** Parte do [carCost] que é desgaste (km × custo/km). */
     val kmCost: Double get() = carCost - fixedCost
@@ -453,8 +481,6 @@ data class PeriodTotals(
     val carCostPerKm: Double? get() = if (km > 0) carCost / km else null
     /** Custo/km do desgaste no período (sem os custos fixos). */
     val kmCostPerKm: Double? get() = if (km > 0) kmCost / km else null
-    /** Custo fixo médio por corrida no período. */
-    val fixedPerRide: Double? get() = if (rides > 0 && fixedCost > 0) fixedCost / rides else null
     val isEmpty: Boolean
         get() = rides == 0 && pendingRides == 0 && shifts == 0 && manualIncome <= 0.0 && expenses <= 0.0
 }
@@ -466,15 +492,15 @@ object PeriodMath {
      *   ([ShiftMath.summary]). Dentro do horário de uma jornada, ela manda: corrida cancelada lá não
      *   conta, mesmo que tenha ficado marcada como aceita no histórico de ofertas;
      * - corridas marcadas como aceitas no histórico FORA de qualquer jornada: valor, km (busca + viagem)
-     *   e tempo da oferta, custo = km × [costPerKm] (os custos fixos são rateados só pelas corridas das
-     *   jornadas — [FixedPlan] —, para a soma do mês bater com o total);
+     *   e tempo da oferta, custo = km × [costPerKm] (os custos fixos são rateados só pelo valor das
+     *   corridas das jornadas — [FixedPlan] —, para a soma do mês bater com o total);
      * - lançamentos manuais: ganho soma no bruto (km informado soma nos km e no custo do carro), gasto
      *   soma nos custos.
      * [current] = jornada aberta (vale até [now]); [history] = encerradas.
      * [parts] = itens do custo de agora ([CostSplit.parts]): dividem o custo do carro item a item
      * ([PeriodTotals.carCostItems]). Jornada encerrada usa a divisão que gravou; sem ela, a de agora.
-     * [fixedPerRide] = custos fixos por corrida finalizada do dia de trabalho, para a jornada aberta
-     * (a encerrada usa o seu).
+     * [fixedShare] = custos fixos do dia de trabalho em fração do valor das corridas finalizadas, para
+     * a jornada aberta (a encerrada usa a sua).
      */
     fun totals(
         from: Long,
@@ -486,11 +512,11 @@ object PeriodMath {
         costPerKm: Double,
         now: Long,
         parts: List<CostPart> = emptyList(),
-        fixedPerRide: Double = 0.0,
+        fixedShare: Double = 0.0,
     ): PeriodTotals {
         val spans = shiftSpans(current, history, now)
         val inPeriod = spans.map { it.first }.filter { it.startedAt in from..to }
-        val pairs = inPeriod.map { it to ShiftMath.summary(it, costPerKm, now, fixedPerRide) }
+        val pairs = inPeriod.map { it to ShiftMath.summary(it, costPerKm, now, fixedShare) }
         val summaries = pairs.map { it.second }
 
         val loose = looseOffers(from, to, spans, offers)
@@ -504,6 +530,8 @@ object PeriodMath {
         val rides = inPeriod.flatMap { s -> s.trips.filter { it.finished } } +
             loose.map { ShiftTrip.from(it.evaluated.raw, it.evaluated.raw.capturedAt) }
         val tripKms = rides.mapNotNull { it.tripKm }
+        val fixedCost = summaries.sumOf { it.fixedCost }
+        val shiftsGross = summaries.sumOf { it.revenue } // base dos fixos: só as corridas das jornadas
         val expenseList = inRange.filter { it.kind == EntryKind.EXPENSE }
 
         // Custo do carro item a item: cada jornada pela divisão que gravou ao encerrar; jornada antiga
@@ -538,7 +566,8 @@ object PeriodMath {
             expenseItems = expenseList.groupBy { it.category.trim().ifEmpty { "Outros" } }
                 .map { (category, list) -> CostAmount(category, list.sumOf { it.amount }) },
             splitEstimated = estimated,
-            fixedCost = summaries.sumOf { it.fixedCost },
+            fixedCost = fixedCost,
+            fixedShare = if (fixedCost > 0 && shiftsGross > 0) fixedCost / shiftsGross else null,
         )
     }
 
@@ -616,7 +645,7 @@ object ShiftCodec {
         append(
             listOf(
                 "v1", s.startedAt, s.activeMs, s.resumedAt ?: "", s.gpsKm, s.costPerKm ?: "", s.endedAt ?: "",
-                CostSplit.encode(s.costParts), s.fixedPerRide ?: "",
+                CostSplit.encode(s.costParts), s.fixedPerRide ?: "", s.fixedShare ?: "",
             ).joinToString(SEP),
         )
         s.trips.forEach { t ->
@@ -645,6 +674,7 @@ object ShiftCodec {
                 endedAt = h.getOrNull(6)?.toLongOrNull(),
                 costParts = CostSplit.decode(h.getOrNull(7)),
                 fixedPerRide = h.getOrNull(8)?.toDoubleOrNull(),
+                fixedShare = h.getOrNull(9)?.toDoubleOrNull(), // gravação antiga: sem o campo
                 trips = rows.drop(1).filter { it.isNotBlank() }.map { row ->
                     val c = row.split(SEP)
                     ShiftTrip(

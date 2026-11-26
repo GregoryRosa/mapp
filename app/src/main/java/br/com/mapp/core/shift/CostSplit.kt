@@ -6,10 +6,12 @@ import java.text.Normalizer
 /**
  * Um item do custo do carro (Financeiro → Custos fixos): combustível (ou energia), manutenção,
  * depreciação ou um custo adicionado pelo motorista (pneus, seguro, IPVA...). Desgaste em [perKm]
- * (R$/km; custo do mês já convertido pelos km da base); custo fixo em [perRide] (R$ por corrida
- * finalizada; total do mês ÷ corridas da base).
+ * (R$/km; custo do mês já convertido pelos km da base); custo fixo em [fixedShare] (fração do valor
+ * das corridas finalizadas; total do mês ÷ faturamento da base) — é o **peso** do item na divisão do
+ * fixo. Jornada gravada quando o fixo era por corrida guarda R$ por corrida aqui: dentro da mesma
+ * jornada a proporção entre os itens é a mesma.
  */
-data class CostPart(val name: String, val perKm: Double, val perRide: Double = 0.0)
+data class CostPart(val name: String, val perKm: Double, val fixedShare: Double = 0.0)
 
 /** Quanto um custo somou no período, em R$. */
 data class CostAmount(val name: String, val amount: Double)
@@ -18,8 +20,8 @@ data class CostAmount(val name: String, val amount: Double)
 data class CostShare(val name: String, val amount: Double, val percent: Double?)
 
 /**
- * Para onde foi o bruto do período (100%): cada custo do carro (desgaste: km × R$/km; fixos: corridas ×
- * R$ por corrida — de cada item de Custos fixos), cada categoria de gasto lançado e a sobra (líquido),
+ * Para onde foi o bruto do período (100%): cada custo do carro (desgaste: km × R$/km; fixos: % do valor
+ * das corridas — de cada item de Custos fixos), cada categoria de gasto lançado e a sobra (líquido),
  * tudo em R$ e em % do bruto.
  */
 data class CostBreakdown(
@@ -61,9 +63,9 @@ object CostSplit {
     fun parts(cfg: VehicleCostConfig): List<CostPart> = buildList {
         val base = cfg.kmBase
         add(CostPart(if (cfg.fuelType.isElectric) ENERGY else FUEL, cfg.energyCostPerKm))
-        add(CostPart(MAINTENANCE, cfg.maintenancePerKm, base.perRide(cfg.maintenance, cfg.maintenanceUnit)))
-        add(CostPart(DEPRECIATION, cfg.depreciationPerKm, base.perRide(cfg.depreciation, cfg.depreciationUnit)))
-        cfg.extraCosts.forEach { add(CostPart(it.name.trim().ifEmpty { EXTRA }, cfg.perKmOf(it), cfg.perRideOf(it))) }
+        add(CostPart(MAINTENANCE, cfg.maintenancePerKm, base.share(cfg.maintenance, cfg.maintenanceUnit)))
+        add(CostPart(DEPRECIATION, cfg.depreciationPerKm, base.share(cfg.depreciation, cfg.depreciationUnit)))
+        cfg.extraCosts.forEach { add(CostPart(it.name.trim().ifEmpty { EXTRA }, cfg.perKmOf(it), cfg.shareOf(it))) }
     }
 
     /**
@@ -73,10 +75,10 @@ object CostSplit {
     fun split(cost: Double, parts: List<CostPart>): List<CostAmount> = splitBy(cost, parts) { it.perKm }
 
     /**
-     * Divide [cost] (R$ dos custos fixos: corridas × R$ por corrida) pelos itens [parts], na proporção
-     * do R$ por corrida de cada um. Sem item fixo com valor, tudo fica em [CAR].
+     * Divide [cost] (R$ dos custos fixos: % do valor das corridas finalizadas) pelos itens [parts], na
+     * proporção do [CostPart.fixedShare] de cada um. Sem item fixo com valor, tudo fica em [CAR].
      */
-    fun splitFixed(cost: Double, parts: List<CostPart>): List<CostAmount> = splitBy(cost, parts) { it.perRide }
+    fun splitFixed(cost: Double, parts: List<CostPart>): List<CostAmount> = splitBy(cost, parts) { it.fixedShare }
 
     private fun splitBy(cost: Double, parts: List<CostPart>, weight: (CostPart) -> Double): List<CostAmount> {
         if (cost == 0.0) return emptyList()
@@ -131,12 +133,13 @@ object CostSplit {
     /** Texto de uma linha só (sem tab/quebra) para a [ShiftCodec]. Vazio = sem divisão. */
     fun encode(parts: List<CostPart>?): String =
         parts.orEmpty().joinToString(ITEM_SEP.toString()) { p ->
-            clean(p.name) + VALUE_SEP + p.perKm + if (p.perRide > 0) "$VALUE_SEP${p.perRide}" else ""
+            clean(p.name) + VALUE_SEP + p.perKm + if (p.fixedShare > 0) "$VALUE_SEP${p.fixedShare}" else ""
         }
 
     /**
      * null = sem divisão gravada (jornada de versão antiga). Itens ilegíveis são pulados. Item sem o
-     * 3º valor (gravado antes dos custos fixos por corrida) = só desgaste.
+     * 3º valor (gravado antes dos custos fixos) = só desgaste. O 3º valor é o peso do fixo: fração do
+     * valor (atual) ou R$ por corrida (versões anteriores) — os dois servem para dividir.
      */
     fun decode(text: String?): List<CostPart>? {
         if (text.isNullOrBlank()) return null
@@ -144,12 +147,12 @@ object CostSplit {
             val c = row.split(VALUE_SEP)
             if (c.size != 2 && c.size != 3) return@mapNotNull null
             val perKm = c[1].toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return@mapNotNull null
-            val perRide = if (c.size == 3) {
+            val fixedShare = if (c.size == 3) {
                 c[2].toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return@mapNotNull null
             } else {
                 0.0
             }
-            CostPart(c[0], perKm, perRide)
+            CostPart(c[0], perKm, fixedShare)
         }
         return parts.ifEmpty { null }
     }

@@ -69,7 +69,6 @@ import br.com.mapp.core.shift.FixedPlan
 import br.com.mapp.core.shift.FixedToday
 import br.com.mapp.core.shift.KmAverage
 import br.com.mapp.core.shift.KmAverages
-import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.overlay.ShiftTracker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -98,7 +97,7 @@ private const val AUTOSAVE_MS = 600L
 
 /**
  * Aba Custos fixos da tela Financeiro: **desgaste** (combustível, manutenção, pneus... — conta a cada km)
- * e **custos fixos do mês** (seguro, financiamento... — descontados a cada corrida finalizada).
+ * e **custos fixos do mês** (seguro, financiamento... — uma % do valor de cada corrida finalizada).
  */
 @Composable
 internal fun FixedCostsTab() {
@@ -131,9 +130,9 @@ internal fun FixedCostsTab() {
 
 /**
  * Mantém em dia o que depende das jornadas em *Custos fixos*, fora da tela:
- * - base do mês automática (média de km e de corridas) — ao encerrar uma jornada;
+ * - base do mês automática (média de km e de faturamento) — ao encerrar uma jornada;
  * - **rateio dos custos fixos** ([FixedPlan]): fecha o mês que acabou (o último dia rodado completa o
- *   total), calcula o R$ por corrida do dia (o que falta pagar ÷ corridas que faltam), grava em
+ *   total), calcula a % do dia (o que falta pagar ÷ faturamento que ainda deve entrar no mês), grava em
  *   [VehicleCostConfig.ledger] — de onde Card, jornada, ícone "M" e Financeiro leem — e as jornadas
  *   encerradas do dia passam a usá-lo.
  * Chamado ao abrir o app, ao ligar o copiloto, quando uma corrida termina ou a jornada abre/encerra, e
@@ -142,7 +141,7 @@ internal fun FixedCostsTab() {
 object FixedCostsSync {
     private val lock = Mutex()
 
-    /** Jornada encerrada: os km e as corridas dela entram na média e o rateio é refeito. */
+    /** Jornada encerrada: os km e o faturamento dela entram na média e o rateio é refeito. */
     fun afterShiftEnded(ctx: android.content.Context) = refresh(ctx, updateBase = true)
 
     fun refresh(ctx: android.content.Context, updateBase: Boolean = false) {
@@ -190,9 +189,9 @@ object FixedCostsSync {
             m = m.plusMonths(1)
         }
         val plan = FixedPlan.today(cfg.fixedMonthTotal, cfg.kmBase, ShiftTracker.history(app).value, current, now, zone, since)
-        val ledger = FixedLedger(today = plan.perRide, since = since, settled = settled)
+        val ledger = FixedLedger(share = plan.share, since = since, settled = settled)
         if (ledger != cfg.ledger) repos.vehicle.saveLedger(ledger)
-        ShiftTracker.applyCostToday(app, cfg.costPerKm, CostSplit.parts(cfg), plan.perRide, now, plan.day)
+        ShiftTracker.applyCostToday(app, cfg.costPerKm, CostSplit.parts(cfg), plan.share, now, plan.day)
     }
 }
 
@@ -243,7 +242,7 @@ private fun VehicleForm(
             placeholder = if (target == NEW_WEAR) "Ex.: pneus, troca de óleo" else "Ex.: seguro, IPVA, financiamento",
             onConfirm = { name ->
                 if (isNew) {
-                    // Novo custo já vem pelo total do mês (desgaste: dividido pelos km; fixo: pelas corridas).
+                    // Novo custo já vem pelo total do mês (desgaste: dividido pelos km; fixo: pelo faturamento).
                     val unit = if (target == NEW_FIXED) CostUnit.FIXED_MONTH else CostUnit.PER_MONTH
                     extras.add(ExtraRow(nextKey++, name, "", unit))
                 } else if (index >= 0) {
@@ -259,20 +258,20 @@ private fun VehicleForm(
     var baseAuto by remember(initial) { mutableStateOf(initial.kmBase.auto) }
     var kmPerDay by remember(initial) { mutableStateOf(Format.input(initial.kmBase.kmPerDay)) }
     var daysPerMonth by remember(initial) { mutableStateOf(Format.input(initial.kmBase.daysPerMonth)) }
-    var ridesPerDay by remember(initial) { mutableStateOf(Format.input(initial.kmBase.ridesPerDay)) }
+    var grossPerDay by remember(initial) { mutableStateOf(Format.input(initial.kmBase.grossPerDay)) }
     val history by remember { ShiftTracker.history(ctx) }.collectAsStateWithLifecycle()
     val openShift by remember { ShiftTracker.current(ctx) }.collectAsStateWithLifecycle()
     val average = remember(history) { KmAverages.of(history, System.currentTimeMillis(), ZoneId.systemDefault()) }
-    // Corridas por dia só importam com custo fixo (é por elas que ele vira R$ por corrida).
+    // Faturamento por dia só importa com custo fixo (é por ele que o fixo vira % do valor das corridas).
     val hasFixedRows = extras.any { it.unit.isFixed }
     val needKm = !(baseAuto && average != null)
     val needDays = !(baseAuto && average?.daysPerMonth != null)
-    val needRides = hasFixedRows && !(baseAuto && average?.ridesPerDay != null)
+    val needGross = hasFixedRows && !(baseAuto && average?.grossPerDay != null)
     val typedKm = Format.parse(kmPerDay)?.takeIf { it > 0 }
     val typedDays = Format.parse(daysPerMonth)?.takeIf { it >= 1 && it <= 31 }
-    val typedRides = Format.parse(ridesPerDay)?.takeIf { it > 0 }
+    val typedGross = Format.parse(grossPerDay)?.takeIf { it > 0 }
     val base: KmBase? = if ((needKm && typedKm == null) || (needDays && typedDays == null) ||
-        (needRides && typedRides == null)
+        (needGross && typedGross == null)
     ) {
         null
     } else {
@@ -281,7 +280,7 @@ private fun VehicleForm(
                 kmPerDay = typedKm ?: initial.kmBase.kmPerDay,
                 daysPerMonth = typedDays ?: initial.kmBase.daysPerMonth,
                 auto = baseAuto,
-                ridesPerDay = typedRides ?: initial.kmBase.ridesPerDay,
+                grossPerDay = typedGross ?: initial.kmBase.grossPerDay,
             ),
             average,
         )
@@ -423,8 +422,9 @@ private fun VehicleForm(
 
         Text("Custos fixos do mês", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
         Text(
-            "Seguro, financiamento, IPVA, aluguel do carro — não dependem de quanto você roda. O total do mês é " +
-                "dividido pelas corridas do mês e descontado a cada corrida finalizada.",
+            "Seguro, financiamento, IPVA, aluguel do carro — não dependem de quanto você roda. O total do mês vira " +
+                "uma % do valor das corridas (o que falta pagar ÷ o faturamento que ainda deve entrar no mês), " +
+                "descontada de cada corrida finalizada. O MApp calcula a % sozinho.",
             style = MaterialTheme.typography.bodySmall,
         )
         extras.forEachIndexed { i, row ->
@@ -456,7 +456,7 @@ private fun VehicleForm(
                     // Passa a digitar a partir do que estava valendo.
                     kmPerDay = Format.input(shownBase.kmPerDay)
                     daysPerMonth = Format.input(shownBase.daysPerMonth)
-                    ridesPerDay = Format.input(shownBase.ridesPerDay)
+                    grossPerDay = Format.input(shownBase.grossPerDay)
                 }
                 baseAuto = auto
             },
@@ -464,14 +464,14 @@ private fun VehicleForm(
             onKmPerDay = { kmPerDay = it },
             daysPerMonth = daysPerMonth,
             onDaysPerMonth = { daysPerMonth = it },
-            ridesPerDay = ridesPerDay,
-            onRidesPerDay = { ridesPerDay = it },
+            grossPerDay = grossPerDay,
+            onGrossPerDay = { grossPerDay = it },
             average = average,
             base = base,
             needKm = needKm,
             needDays = needDays,
-            needRides = needRides,
-            showRides = hasFixedRows,
+            needGross = needGross,
+            showGross = hasFixedRows,
         )
 
         Card(Modifier.fillMaxWidth()) {
@@ -479,7 +479,7 @@ private fun VehicleForm(
                 Text("Custo por km (desgaste)", style = MaterialTheme.typography.labelLarge)
                 if (config == null) {
                     Text(
-                        "Preencha todos os campos (consumo, km e corridas por dia e dias no mês maiores que zero).",
+                        "Preencha todos os campos (consumo, km e faturamento por dia e dias no mês maiores que zero).",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 } else {
@@ -509,29 +509,36 @@ private fun VehicleForm(
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
-                    val fixedNow = fixedPlan?.perRide ?: config.fixedPerRide
+                    // Fração do valor de cada corrida (0,25 = 25%): a da tela, senão a salva.
+                    val fixedNow = fixedPlan?.share ?: config.fixedShare
                     if (config.hasFixed) {
                         Text(
-                            "Custo fixo por corrida hoje",
+                            "Custo fixo hoje",
                             style = MaterialTheme.typography.labelLarge,
                             modifier = Modifier.padding(top = 8.dp),
                         )
                         Text(
-                            Format.brl(fixedNow),
+                            "${Format.share(fixedNow)} do valor de cada corrida",
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
                             fixedPlan?.let { fixedPlanText(it, config.fixedMonthTotal) }
-                                ?: "Custos fixos: ${Format.brl(config.fixedMonthTotal)} por mês, descontados a cada corrida finalizada.",
+                                ?: "Custos fixos: ${Format.brl(config.fixedMonthTotal)} por mês, descontados em % do valor " +
+                                    "de cada corrida finalizada.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
+                    val wear = config.costPerKm * EXAMPLE_KM
+                    val example = if (config.hasFixed) {
+                        val fixed = EXAMPLE_PRICE * fixedNow
+                        "Ex.: corrida de ${Format.brl(EXAMPLE_PRICE)} com ${EXAMPLE_KM.toInt()} km custa " +
+                            "${Format.brl(wear + fixed)} (${Format.brl(wear)} de desgaste + ${Format.brl(fixed)} de fixos)"
+                    } else {
+                        "Ex.: corrida de ${EXAMPLE_KM.toInt()} km custa ${Format.brl(wear)}"
+                    }
                     Text(
-                        "Ex.: corrida de 10 km custa ${Format.brl(config.costPerKm * 10 + fixedNow)}" +
-                            (if (config.hasFixed) " (${Format.brl(config.costPerKm * 10)} de desgaste + " +
-                                "${Format.brl(fixedNow)} fixos)" else "") +
-                            " · 100 km rodados gastam ${Format.brl(config.costPerKm * 100)} de desgaste.",
+                        "$example · 100 km rodados gastam ${Format.brl(config.costPerKm * 100)} de desgaste.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -548,9 +555,9 @@ private fun VehicleForm(
             color = if (config == null) RedSignal else GreenSignal,
         )
         Text(
-            "O desgaste conta a cada km rodado e os custos fixos a cada corrida finalizada — no lucro de cada " +
-                "oferta, no custo da jornada e no valor líquido de Ganhos e gastos. Jornadas de dias anteriores " +
-                "ficam com os custos daquele dia.",
+            "O desgaste conta a cada km rodado e os custos fixos em % do valor de cada corrida finalizada — no " +
+                "lucro de cada oferta, no custo da jornada e no valor líquido de Ganhos e gastos. Jornadas de dias " +
+                "anteriores ficam com os custos daquele dia.",
             style = MaterialTheme.typography.bodySmall,
         )
     }
@@ -604,7 +611,7 @@ private fun CostInput(
     }
 }
 
-/** Campo de um custo fixo (R$ do mês) e, embaixo, quanto ele desconta por corrida. */
+/** Campo de um custo fixo (R$ do mês) e, embaixo, quanto ele pesa no valor das corridas (% do faturamento do mês). */
 @Composable
 private fun FixedCostInput(
     label: String,
@@ -618,8 +625,8 @@ private fun FixedCostInput(
         val amount = Format.parse(value)?.takeIf { it >= 0 }
         val equivalent = when {
             amount == null -> null
-            base.monthRides <= 0 -> "Informe as corridas por dia abaixo para calcular o valor por corrida."
-            else -> "= ${Format.brl(base.perRide(amount, CostUnit.FIXED_MONTH))} por corrida"
+            base.monthGross <= 0 -> "Informe o faturamento por dia abaixo para calcular a %."
+            else -> "= ${Format.share(base.share(amount, CostUnit.FIXED_MONTH))} do valor das corridas"
         }
         if (equivalent != null) {
             Text(
@@ -632,16 +639,18 @@ private fun FixedCostInput(
     }
 }
 
-/** "520 corridas" */
-private fun rides(v: Double): String = "${ShiftMath.num(v, 0)} corrida${if (v.toLong() == 1L) "" else "s"}"
+/** Corrida do exemplo do cartão de custos: R$ 15 com 10 km. */
+private const val EXAMPLE_PRICE = 15.0
+private const val EXAMPLE_KM = 10.0
 
 /**
- * "Falta pagar R$ 1.137,00 de R$ 1.500,00 do mês ÷ ~396 corridas até 30/11 = R$ 2,87 por corrida…" —
+ * "Falta pagar R$ 1.137,00 de R$ 1.500,00 ÷ ~R$ 4.860,00 de corridas até 30/11 (contando as de hoje) =
+ * 23,4% do valor de cada corrida finalizada. Corrida de R$ 12 paga R$ 2,81, de R$ 50 paga R$ 11,70…" —
  * a conta do [FixedPlan] em palavras. [total] = custos fixos do mês inteiro.
  */
 internal fun fixedPlanText(p: FixedToday, total: Double): String {
     val ddMm = DateTimeFormatter.ofPattern("dd/MM")
-    if (p.ridesLeft <= 0) return "Informe as corridas por dia para dividir os custos fixos."
+    if (p.grossLeft <= 0) return "Informe o faturamento por dia para dividir os custos fixos."
     val start = p.startedOn?.let {
         "Este mês o rateio começou em ${it.format(ddMm)}: ele paga a parte de ${it.format(ddMm)} a " +
             "${p.monthEnd.format(ddMm)} dos ${Format.brl(total)} (${Format.brl(p.monthTotal)}). "
@@ -649,10 +658,11 @@ internal fun fixedPlanText(p: FixedToday, total: Double): String {
     val left = if (p.remaining <= 0.005) {
         "Os custos fixos do mês (${Format.brl(p.monthTotal)}) já foram pagos: as próximas corridas não descontam nada até o mês virar."
     } else {
-        "Falta pagar ${Format.brl(p.remaining)} de ${Format.brl(p.monthTotal)} ÷ ~${rides(p.ridesLeft)} até " +
-            "${p.monthEnd.format(ddMm)} (contando as de hoje) = ${Format.brl(p.perRide)} por corrida finalizada. " +
-            "Rodando menos que o previsto o valor sobe, rodando mais ele desce; no fim do mês a soma dá " +
-            "${Format.brl(p.monthTotal)}."
+        "Falta pagar ${Format.brl(p.remaining)} de ${Format.brl(p.monthTotal)} ÷ ~${Format.brl(p.grossLeft)} de corridas " +
+            "até ${p.monthEnd.format(ddMm)} (contando as de hoje) = ${Format.share(p.share)} do valor de cada corrida " +
+            "finalizada. Corrida de ${Format.brl(12.0)} paga ${Format.brl(12.0 * p.share)}, de ${Format.brl(50.0)} paga " +
+            "${Format.brl(50.0 * p.share)}. Faturando menos que o previsto a % sobe, faturando mais ela desce; no fim do " +
+            "mês a soma dá ${Format.brl(p.monthTotal)}."
     }
     return start + left
 }
@@ -726,8 +736,8 @@ private fun CostNameDialog(
 }
 
 /**
- * Base do mês: km rodados (desgaste digitado pelo mês → R$/km) e, com custo fixo, corridas (fixos →
- * R$ por corrida). Média das jornadas (padrão, atualizada sozinha) ou digitada.
+ * Base do mês: km rodados (desgaste digitado pelo mês → R$/km) e, com custo fixo, faturamento das
+ * corridas (fixos → % do valor de cada corrida). Média das jornadas (padrão, atualizada sozinha) ou digitada.
  */
 @Composable
 private fun KmBaseCard(
@@ -737,21 +747,22 @@ private fun KmBaseCard(
     onKmPerDay: (String) -> Unit,
     daysPerMonth: String,
     onDaysPerMonth: (String) -> Unit,
-    ridesPerDay: String,
-    onRidesPerDay: (String) -> Unit,
+    grossPerDay: String,
+    onGrossPerDay: (String) -> Unit,
     average: KmAverage?,
     base: KmBase?,
     needKm: Boolean,
     needDays: Boolean,
-    needRides: Boolean,
-    showRides: Boolean,
+    needGross: Boolean,
+    showGross: Boolean,
 ) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(if (showRides) "Km e corridas no mês" else "Km rodados no mês", style = MaterialTheme.typography.labelLarge)
+            Text(if (showGross) "Km e faturamento no mês" else "Km rodados no mês", style = MaterialTheme.typography.labelLarge)
             Text(
-                if (showRides) {
-                    "Os custos do mês são divididos por eles: desgaste pelos km (R$/km), fixos pelas corridas (R$ por corrida)."
+                if (showGross) {
+                    "Os custos do mês são divididos por eles: desgaste pelos km (R$/km), fixos pelo faturamento das " +
+                        "corridas (% do valor de cada corrida)."
                 } else {
                     "É por eles que o MApp divide os custos do mês para achar o R$/km."
                 },
@@ -763,8 +774,8 @@ private fun KmBaseCard(
             }
             if (auto && average != null) {
                 Text(
-                    "${Format.kmWhole(average.kmPerDay)}" +
-                        (if (showRides && average.ridesPerDay != null) " e ${rides(average.ridesPerDay)}" else "") +
+                    "Média de ${Format.kmWhole(average.kmPerDay)}" +
+                        (if (showGross && average.grossPerDay != null) " e ${Format.brl(average.grossPerDay)}" else "") +
                         " por dia rodado — ${average.workedDays} " +
                         "${if (average.workedDays == 1) "dia" else "dias"} com jornada nos últimos ${average.windowDays} " +
                         "${if (average.windowDays == 1) "dia" else "dias"}.",
@@ -799,19 +810,22 @@ private fun KmBaseCard(
                     )
                 }
             }
-            if (needRides) {
-                NumberField("Corridas por dia", ridesPerDay, onRidesPerDay, Modifier.fillMaxWidth(), suffix = "corridas")
-                if (auto) {
-                    Text(
-                        "Ainda sem corridas contadas nas jornadas: informe uma estimativa. A média entra sozinha depois.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
+            if (needGross) {
+                NumberField("Faturamento por dia", grossPerDay, onGrossPerDay, Modifier.fillMaxWidth(), suffix = "R$")
+                Text(
+                    if (auto) {
+                        "Ainda sem corridas finalizadas nas jornadas: informe uma estimativa do bruto das corridas " +
+                            "por dia rodado. A média entra sozinha depois."
+                    } else {
+                        "Quanto as corridas somam num dia rodado (valor bruto, antes dos custos)."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             Text(
                 when {
-                    base == null -> "Informe km${if (showRides) " e corridas" else ""} por dia e dias no mês (1 a 31)."
-                    showRides -> "= ${Format.kmWhole(base.monthKm)} e ${rides(base.monthRides)} por mês"
+                    base == null -> "Informe km${if (showGross) " e faturamento" else ""} por dia e dias no mês (1 a 31)."
+                    showGross -> "= ${Format.kmWhole(base.monthKm)} e ${Format.brl(base.monthGross)} por mês"
                     else -> "= ${Format.kmWhole(base.monthKm)} por mês"
                 },
                 style = MaterialTheme.typography.titleMedium,

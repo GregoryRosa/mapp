@@ -193,13 +193,13 @@ class OfferEvaluatorTest {
         assertEquals(Signal.GREEN, OfferEvaluator.evaluate(boa, completo.copy(minProfit = 5.0, goodProfit = 10.0), cost).signal)
         assertEquals(Signal.YELLOW, OfferEvaluator.evaluate(boa, completo.copy(minProfit = 5.0, goodProfit = 20.0), cost).signal)
         assertEquals(Signal.RED, OfferEvaluator.evaluate(boa, completo.copy(minProfit = 19.0, goodProfit = 20.0), cost).signal)
-        // Custo fixo por corrida também sai do lucro: R$ 18 − R$ 11 = R$ 7 → amarelo; − R$ 14 = R$ 4 → vermelho.
+        // A % dos custos fixos também sai do lucro: 44% de R$ 25 = R$ 11 → R$ 7, amarelo; 56% = R$ 14 → R$ 4, vermelho.
         val seguro = listOf(ExtraKmCost("Seguro", 300.0, CostUnit.FIXED_MONTH))
-        val comFixo = cost.copy(extraCosts = seguro, ledger = FixedLedger(today = 11.0))
+        val comFixo = cost.copy(extraCosts = seguro, ledger = FixedLedger(share = 0.44))
         val p = completo.copy(minProfit = 5.0, goodProfit = 10.0)
         assertEquals(7.0, OfferEvaluator.evaluate(boa, p, comFixo).metrics.netProfit!!, 1e-9)
         assertEquals(Signal.YELLOW, OfferEvaluator.evaluate(boa, p, comFixo).signal)
-        assertEquals(Signal.RED, OfferEvaluator.evaluate(boa, p, comFixo.copy(ledger = FixedLedger(today = 14.0))).signal)
+        assertEquals(Signal.RED, OfferEvaluator.evaluate(boa, p, comFixo.copy(ledger = FixedLedger(share = 0.56))).signal)
     }
 
     @Test fun lucro_nao_calculado_nao_bloqueia_nem_o_verde() {

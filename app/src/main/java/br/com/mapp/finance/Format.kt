@@ -59,6 +59,15 @@ object Format {
         return "$text%"
     }
 
+    /**
+     * Fração como porcentagem com 1 casa: 0.234 → "23,4%", 0.25 → "25,0%" (o % dos custos fixos sobre o
+     * valor das corridas). null ou não finito = "—".
+     */
+    fun share(fraction: Double?): String {
+        if (fraction == null || !fraction.isFinite()) return NONE
+        return "${oneDecimal.get()!!.format(fraction * 100)}%"
+    }
+
     /** "Combustível (23%)" — descrição com a fatia do bruto entre parênteses. */
     fun withPercent(label: String, percent: Double?): String =
         if (percent == null) label else "$label (${percent(percent)})"

@@ -68,10 +68,10 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
                 kmPerDay = getDouble(BASE_KM_PER_DAY) ?: d.kmBase.kmPerDay,
                 daysPerMonth = getDouble(BASE_DAYS) ?: d.kmBase.daysPerMonth,
                 auto = getBoolean(BASE_AUTO, d.kmBase.auto),
-                ridesPerDay = getDouble(BASE_RIDES_PER_DAY) ?: d.kmBase.ridesPerDay,
+                grossPerDay = getDouble(BASE_GROSS_PER_DAY) ?: d.kmBase.grossPerDay,
             ),
             ledger = FixedLedger(
-                today = getDouble(FIXED_TODAY),
+                share = getDouble(FIXED_SHARE_TODAY),
                 since = getString(FIXED_SINCE, null)?.let { runCatching { LocalDate.parse(it) }.getOrNull() },
                 settled = getString(FIXED_SETTLED, null)?.let { runCatching { YearMonth.parse(it) }.getOrNull() },
             ),
@@ -92,7 +92,8 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
                 .putDouble(BASE_KM_PER_DAY, config.kmBase.kmPerDay)
                 .putDouble(BASE_DAYS, config.kmBase.daysPerMonth)
                 .putBoolean(BASE_AUTO, config.kmBase.auto)
-                .putDouble(BASE_RIDES_PER_DAY, config.kmBase.ridesPerDay)
+                .putDouble(BASE_GROSS_PER_DAY, config.kmBase.grossPerDay)
+                .remove(OLD_BASE_RIDES_PER_DAY)
                 .commit()
         }
     }
@@ -100,7 +101,8 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
     override suspend fun saveLedger(ledger: FixedLedger) {
         withContext(Dispatchers.IO) {
             prefs.edit()
-                .putDouble(FIXED_TODAY, ledger.today)
+                .putDouble(FIXED_SHARE_TODAY, ledger.share)
+                .remove(OLD_FIXED_PER_RIDE_TODAY)
                 .putString(FIXED_SINCE, ledger.since?.toString())
                 .putString(FIXED_SETTLED, ledger.settled?.toString())
                 .commit()
@@ -123,10 +125,20 @@ class PrefsVehicleRepository(context: Context) : VehicleRepository {
         const val BASE_KM_PER_DAY = "base_km_per_day"
         const val BASE_DAYS = "base_days_per_month"
         const val BASE_AUTO = "base_auto"
-        const val BASE_RIDES_PER_DAY = "base_rides_per_day"
+
+        /** R$ bruto das corridas por dia rodado (base do % dos custos fixos). */
+        const val BASE_GROSS_PER_DAY = "base_gross_per_day"
+
+        /** Corridas por dia (fixo era R$ por corrida): não é mais lido, só apagado ao salvar. */
+        const val OLD_BASE_RIDES_PER_DAY = "base_rides_per_day"
 
         // Rateio dos custos fixos (core/shift/FixedPlan): fora do formulário, gravado por saveLedger.
-        const val FIXED_TODAY = "fixed_per_ride_today"
+        /** Fração do valor de cada corrida que paga os fixos hoje (0,25 = 25%). */
+        const val FIXED_SHARE_TODAY = "fixed_share_today"
+
+        /** Guardava R$ por corrida: não pode ser lido como fração; só apagado ao gravar o rateio. */
+        const val OLD_FIXED_PER_RIDE_TODAY = "fixed_per_ride_today"
+
         const val FIXED_SINCE = "fixed_since"
         const val FIXED_SETTLED = "fixed_settled_month"
     }
