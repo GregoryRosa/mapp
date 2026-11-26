@@ -83,6 +83,11 @@ class TripMatcher<K : Any>(
          * a corrida da fila): não finalizar nada.
          */
         val lateFinish: Boolean = false,
+        /**
+         * Nome que não bate com a corrida aberta e nenhuma oferta nova para ele, com a corrida aberta
+         * ainda longe de acabar: é o nome do passageiro atual mal lido pelo OCR — nada fecha.
+         */
+        val misreadName: Boolean = false,
     )
 
     /** Oferta na memória. */
@@ -346,6 +351,19 @@ class TripMatcher<K : Any>(
             return Result(null, newRide = false, started = started, cancelledPickup = closed.second, finishedUnseen = closed.first)
         }
         val o = pick(event, now, named = true, boarding = boarding)
+        // Nome desconhecido, nenhuma oferta nova para ele e a corrida aberta deste app ainda longe do fim:
+        // é o passageiro atual com o nome mal lido ("Destino de sim" no meio da viagem de outro nome).
+        // Antes ele virava passageiro novo e a corrida aberta era finalizada na hora, antes do previsto.
+        // Passageiro novo de verdade sem oferta lida só vale depois de a aberta ter tido tempo de acabar.
+        if (o == null) {
+            val open = riders.filter { samePlatform(event.platform, it.platform) }
+            if (open.any { !likelyOver(it, now) }) {
+                val only = open.singleOrNull()
+                val started = boarding && only != null && !only.started
+                if (started) only!!.started = true
+                return Result(null, newRide = false, started = started, misreadName = true)
+            }
+        }
         if (boarding) markQueued(event, now, except = o)
         val fresh = Rider(name, boarding, now, o?.expectedMs, counted = o != null, platform = event.platform)
         riders.addLast(fresh)

@@ -613,4 +613,53 @@ class TripScreensTest {
         m.offerSeen("outra", 20_000, pickupKm = 0.5, tripKm = 1.0)   // cartão relido errado / recusada
         assertEquals("certa", m.onStage(onTrip("caio", km = 3.1), 9 * min).count)
     }
+
+    @Test fun nome_mal_lido_no_meio_da_viagem_nao_finaliza_a_corrida() {
+        // Diagnóstico de 26/11/2026 (0.3.225): Comfort R$ 30,44, busca 5,0 km/11 min, viagem 15,7 km/30 min
+        // (06:11:54). Às 06:28:39 o OCR leu "Destino de sim" com 12,8 km até o destino — o mesmo passageiro,
+        // nome mal lido. Antes isso virava passageiro novo e a corrida era finalizada 25 min antes do previsto.
+        val m = TripMatcher<String>()
+        m.offerSeen("r30", 0, pickupKm = 5.0, tripKm = 15.7, expectedMs = 41 * min, platform = Platform.UBER, pickupMin = 11)
+        val uber = { e: TripEvent -> e.copy(platform = Platform.UBER) }
+        assertEquals("r30", m.onStage(uber(accepted("gabriel", km = 5.0)), 30_000).count)
+        m.markCounted("r30")
+        assertTrue(m.onStage(uber(onTrip("gabriel", km = 15.7)), 12 * min).started)
+        val r = m.onStage(uber(onTrip("sim", km = 12.8)), 16 * min + 45_000)
+        assertTrue(r.misreadName)
+        assertEquals(0, r.finishedUnseen)
+        assertNull(r.count)
+        assertEquals(false, r.newRide)
+        assertEquals(1, m.openRides)
+        // O nome certo volta: continua a mesma corrida, nada muda.
+        val again = m.onStage(uber(onTrip("gabriel", km = 9.0)), 20 * min)
+        assertEquals(0, again.finishedUnseen)
+        assertEquals(false, again.newRide)
+        assertEquals(1, m.openRides)
+    }
+
+    @Test fun nome_mal_lido_no_embarque_conta_como_embarque_da_corrida_aberta() {
+        // O embarque só foi lido com o nome errado: é o passageiro da busca que embarcou.
+        val m = TripMatcher<String>()
+        m.offerSeen("o1", 0, pickupKm = 2.0, tripKm = 8.0, expectedMs = 25 * min, pickupMin = 6)
+        m.onStage(accepted("gabriel"), 20_000); m.markCounted("o1")
+        val r = m.onStage(onTrip("sim", km = 8.0), 7 * min)
+        assertTrue(r.misreadName)
+        assertTrue(r.started)
+        assertEquals(0, r.finishedUnseen)
+        assertEquals(false, r.cancelledPickup)
+        assertEquals(1, m.openRides)
+    }
+
+    @Test fun passageiro_novo_sem_oferta_depois_do_tempo_da_corrida_ainda_fecha_a_anterior() {
+        // A corrida aberta já teve tempo de acabar (¾ do previsto): nome novo sem oferta lida é corrida nova
+        // (fila com a oferta não lida) e a anterior é finalizada, como antes.
+        val m = TripMatcher<String>()
+        m.offerSeen("ana", 0, expectedMs = 14 * min)
+        m.onStage(accepted("ana"), 10_000); m.markCounted("ana")
+        m.onStage(onTrip("ana"), 5 * min)
+        val r = m.onStage(accepted("bruno"), 20 * min)
+        assertEquals(false, r.misreadName)
+        assertTrue(r.newRide)
+        assertEquals(1, r.finishedUnseen)
+    }
 }
