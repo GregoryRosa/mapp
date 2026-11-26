@@ -1,5 +1,6 @@
 package br.com.mapp.core
 
+import br.com.mapp.core.copilot.OnlineState
 import br.com.mapp.core.earnings.DayEarningsScreen
 import br.com.mapp.core.earnings.StableExtra
 import br.com.mapp.core.earnings.UberExtra
@@ -216,6 +217,40 @@ class UberExtraTest {
         // Queda que se mantém por 2 min vale.
         assertNull(s.offer(5.0, 7.25, day, t0 + 80_000))
         assertEquals(5.0, s.offer(5.0, 7.25, day, t0 + 200_000)!!, eps)
+    }
+
+    @Test fun ficou_offline_grava_o_dia_completo_na_hora() {
+        val s = StableExtra(upMs = 30_000, downMs = 120_000)
+        val day = ms(25, 4)
+        val t0 = ms(25, 22)
+        // Online: subida espera 30 s.
+        assertNull(s.offer(4.0, 0.0, day, t0))
+        // Ficou offline: avisa uma vez só e a subida vale já na 1ª leitura, com o valor completo.
+        assertTrue(s.online(OnlineState.OFFLINE))
+        assertTrue(s.offline)
+        assertEquals(false, s.online(OnlineState.OFFLINE))
+        assertEquals(11.5, s.offer(11.5, 4.0, day, t0 + 1_000)!!, eps)
+        // Já lançado completo e igual: devolve o mesmo valor (quem chama vê que não mudou).
+        assertEquals(11.5, s.offer(11.5, 11.5, day, t0 + 6_000)!!, eps)
+        // Descer continua esperando: a Uber pode ainda não ter somado a última corrida.
+        assertNull(s.offer(2.0, 11.5, day, t0 + 11_000))
+        assertNull(s.offer(2.0, 11.5, day, t0 + 60_000))
+        assertEquals(2.0, s.offer(2.0, 11.5, day, t0 + 131_000)!!, eps)
+    }
+
+    @Test fun voltou_online_volta_a_esperar() {
+        val s = StableExtra(upMs = 30_000, downMs = 120_000)
+        val day = ms(25, 4)
+        val t0 = ms(25, 22)
+        s.online(OnlineState.OFFLINE)
+        assertEquals(3.0, s.offer(3.0, 0.0, day, t0)!!, eps)
+        assertEquals(false, s.online(OnlineState.ONLINE))
+        assertEquals(false, s.offline)
+        assertNull(s.offer(6.0, 3.0, day, t0 + 5_000))
+        assertNull(s.offer(6.0, 3.0, day, t0 + 20_000))
+        assertEquals(6.0, s.offer(6.0, 3.0, day, t0 + 35_000)!!, eps)
+        // Offline de novo: é outra vez que ficou offline.
+        assertTrue(s.online(OnlineState.OFFLINE))
     }
 
     @Test fun corrida_aberta_ou_dia_novo_recomeca() {
