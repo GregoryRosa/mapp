@@ -1,5 +1,6 @@
 package br.com.mapp.core.earnings
 
+import br.com.mapp.core.copilot.OnlineState
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.repo.EntryKind
 import br.com.mapp.core.repo.FinanceEntry
@@ -187,6 +188,11 @@ object UberExtra {
  * Só muda o lançamento quando o valor fica igual por um tempo ([UberExtra.STABLE_UP_MS] para subir,
  * [UberExtra.STABLE_DOWN_MS] para descer): leituras no meio de uma corrida que termina (MApp e Uber
  * atualizando em momentos diferentes) não mexem no extra.
+ *
+ * **Offline na Uber** ([online] com [OnlineState.OFFLINE]): o dia parou — nenhuma corrida terminando —,
+ * então o extra que **sobe** (ou fica igual) vale **na hora**, já na 1ª leitura do "Hoje", com o valor
+ * completo do dia. Descer continua esperando [UberExtra.STABLE_DOWN_MS] (a Uber pode ainda não ter somado
+ * a última corrida que o MApp já contou).
  */
 class StableExtra(
     private val upMs: Long = UberExtra.STABLE_UP_MS,
@@ -196,12 +202,32 @@ class StableExtra(
     private var since = 0L
     private var day = -1L
 
+    /** A tela inicial da Uber está dizendo "Você está offline". */
+    var offline: Boolean = false
+        private set
+
+    /**
+     * Estado online/offline lido na tela inicial da Uber. Troca de estado recomeça a espera. Devolve
+     * true só quando o motorista **acabou de ficar offline** (para conferir o dia e avisar uma vez).
+     */
+    fun online(state: OnlineState): Boolean {
+        val was = offline
+        offline = state == OnlineState.OFFLINE
+        if (offline != was) candidate = null
+        return offline && !was
+    }
+
     /**
      * Leitura com o extra calculado [target] (o lançado agora é [saved]), no dia da Uber [dayFrom].
      * Devolve o valor a gravar quando ele está firme; null = esperar.
      */
     fun offer(target: Double, saved: Double, dayFrom: Long, now: Long): Double? {
         if (dayFrom != day) { day = dayFrom; candidate = null }
+        if (offline && target >= saved - 0.005) {
+            candidate = target
+            since = now
+            return target
+        }
         if (candidate == null || abs(candidate!! - target) >= 0.005 || now < since) {
             candidate = target
             since = now
