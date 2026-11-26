@@ -76,6 +76,7 @@ import java.util.Locale
 private val PT_BR: Locale = Locale.forLanguageTag("pt-BR")
 private val DAY = DateTimeFormatter.ofPattern("EEE, dd/MM/yyyy", PT_BR)
 private val HOUR = DateTimeFormatter.ofPattern("HH:mm", PT_BR)
+private val SHORT_DAY = DateTimeFormatter.ofPattern("dd/MM", PT_BR)
 
 /**
  * Jornadas: a do dia no topo (aberta ou encerrada hoje), totais de 7 dias e do mês e uma linha por
@@ -228,11 +229,15 @@ private fun TotalCard(title: String, list: List<ShiftSummary>, status: String? =
 private fun ShiftRow(shift: Shift, s: ShiftSummary, zone: ZoneId, onDelete: () -> Unit) {
     var expanded by rememberSaveable(shift.startedAt) { mutableStateOf(false) }
     val start = Instant.ofEpochMilli(shift.startedAt).atZone(zone)
+    // Jornada antiga sem hora de fim gravada: início + tempo rodado.
+    val end = Instant.ofEpochMilli(shift.endedAt ?: (shift.startedAt + shift.activeMs)).atZone(zone)
+    // Fim em outro dia (passou da meia-noite) leva a data junto.
+    val endText = HOUR.format(end) + if (end.toLocalDate() != start.toLocalDate()) " (${SHORT_DAY.format(end)})" else ""
     Card(Modifier.fillMaxWidth().clickable { expanded = !expanded }) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    DAY.format(start).replaceFirstChar { it.uppercase(PT_BR) } + " · " + HOUR.format(start),
+                    DAY.format(start).replaceFirstChar { it.uppercase(PT_BR) } + " · " + ShiftMath.duration(s.hours),
                     Modifier.weight(1f),
                     fontWeight = FontWeight.Bold,
                 )
@@ -240,11 +245,15 @@ private fun ShiftRow(shift: Shift, s: ShiftSummary, zone: ZoneId, onDelete: () -
             }
             if (expanded) {
                 HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                Row(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                    Stat("Início", HOUR.format(start), Modifier.weight(1f))
+                    Stat("Fim", endText, Modifier.weight(2f))
+                }
                 SummaryBlock(s)
                 TextButton(onClick = onDelete) { Text("Apagar jornada") }
             } else {
                 Text(
-                    "${ShiftMath.duration(s.hours)} · ${s.trips} corrida${if (s.trips == 1) "" else "s"} · " +
+                    "${HOUR.format(start)} → $endText · ${s.trips} corrida${if (s.trips == 1) "" else "s"} · " +
                         "${ShiftMath.km(s.totalKm)} · lucro ${ShiftMath.money(s.profit)}",
                     style = MaterialTheme.typography.bodySmall,
                 )
