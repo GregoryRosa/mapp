@@ -654,6 +654,7 @@ class OverlayService : LifecycleService() {
             "fecha ${match.finishedUnseen} anterior(es)".takeIf { match.finishedUnseen > 0 },
             "busca anterior cancelada".takeIf { match.cancelledPickup },
             "avaliação da anterior (não fecha)".takeIf { match.lateFinish },
+            "nome não bate com a corrida aberta e não há oferta nova: nome mal lido, nada fecha".takeIf { match.misreadName },
         ).joinToString(", ")
         // "Procurando viagens" se repete a cada 30 s parado: só entra quando fecha alguma corrida.
         stageLogged = !(event.stage == TripStage.IDLE && decided.isEmpty())
