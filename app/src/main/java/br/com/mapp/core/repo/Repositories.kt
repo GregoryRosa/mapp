@@ -32,7 +32,7 @@ interface VehicleRepository {
     fun config(): Flow<VehicleCostConfig>
     /** Grava os custos (não mexe no [VehicleCostConfig.ledger]). */
     suspend fun save(config: VehicleCostConfig)
-    /** Grava o estado do rateio dos custos fixos (R$ por corrida do dia, início, último mês fechado). */
+    /** Grava o estado do rateio dos custos fixos (% do valor das corridas do dia, início, último mês fechado). */
     suspend fun saveLedger(ledger: FixedLedger)
 }
 

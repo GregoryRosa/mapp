@@ -9,7 +9,7 @@ import kotlin.math.roundToInt
  * em dois campos do [FilterProfile]:
  * - [PER_KM] ↔ minPerKm/goodPerKm; [PER_HOUR] ↔ minPerHour/goodPerHour; [RATING] ↔ minRating/goodRating;
  *   [PRICE] ↔ minPrice/goodPrice; [PROFIT] ↔ minProfit/goodProfit — lucro líquido da corrida (valor −
- *   desgaste dos km − custo fixo por corrida, `OfferMetrics.netProfit`) (mais é melhor: low = mínimo,
+ *   desgaste dos km − % dos custos fixos sobre o valor, `OfferMetrics.netProfit`) (mais é melhor: low = mínimo,
  *   high = bom);
  * - [PICKUP_KM] ↔ goodPickupKm/maxPickupKm; [PICKUP_MIN] ↔ goodPickupMin/maxPickupMin (menos é
  *   melhor: low = bom, high = máximo).

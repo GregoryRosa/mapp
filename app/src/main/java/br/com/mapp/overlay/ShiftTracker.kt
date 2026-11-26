@@ -63,23 +63,25 @@ object ShiftTracker {
     fun pause(ctx: Context, now: Long = System.currentTimeMillis()) = update(ctx) { it?.pause(now) }
 
     /**
-     * Encerra, guarda como "última jornada" e no histórico (com o custo/km de agora, os custos fixos
-     * por corrida [fixedPerRide] e a divisão por item de Custos fixos, [costParts] — vai para o
-     * detalhamento de custos do mês).
+     * Encerra, guarda como "última jornada" e no histórico (com o custo/km de agora, a fração dos
+     * custos fixos [fixedShare] — % do valor das corridas, 0,25 = 25% — e a divisão por item de Custos
+     * fixos, [costParts] — vai para o detalhamento de custos do mês). `Shift.fixedPerRide` é legado e
+     * não é mais gravado.
      */
     @Synchronized
     fun end(
         ctx: Context,
         costPerKm: Double? = null,
         costParts: List<CostPart>? = null,
-        fixedPerRide: Double = 0.0,
+        fixedShare: Double = 0.0,
         now: Long = System.currentTimeMillis(),
     ): Shift? {
         load(ctx)
         val ended = _current.value?.pause(now)
             ?.copy(
                 costPerKm = costPerKm,
-                fixedPerRide = fixedPerRide.takeIf { costPerKm != null },
+                fixedShare = fixedShare.takeIf { costPerKm != null },
+                fixedPerRide = null,
                 costParts = costParts?.takeIf { costPerKm != null },
                 endedAt = now,
             )
@@ -98,20 +100,20 @@ object ShiftTracker {
 
     /**
      * Custos do veículo salvos: jornadas do dia de trabalho [day] (padrão: hoje) já encerradas passam a
-     * usar o custo/km novo, os custos fixos por corrida novos e a divisão.
+     * usar o custo/km novo, a fração nova dos custos fixos (% do valor das corridas) e a divisão.
      */
     @Synchronized
     fun applyCostToday(
         ctx: Context,
         costPerKm: Double,
         costParts: List<CostPart>? = null,
-        fixedPerRide: Double = 0.0,
+        fixedShare: Double = 0.0,
         now: Long = System.currentTimeMillis(),
         day: LocalDate? = null,
     ) {
         val zone = ZoneId.systemDefault()
         val on = day ?: Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
-        updateHistory(ctx) { ShiftMath.withCostOn(it, on, costPerKm, zone, costParts, fixedPerRide) }
+        updateHistory(ctx) { ShiftMath.withCostOn(it, on, costPerKm, zone, costParts, fixedShare) }
     }
 
     /**

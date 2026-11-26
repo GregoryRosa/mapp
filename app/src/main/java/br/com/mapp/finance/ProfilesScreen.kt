@@ -295,7 +295,7 @@ private fun FilterCriterion.icon(): ImageVector = when (this) {
 
 /** Explicação curta embaixo do título, só onde o nome não basta. */
 private fun FilterCriterion.hint(): String? =
-    if (this == FilterCriterion.PROFIT) "Lucro líquido = valor − desgaste dos km − custo fixo por corrida" else null
+    if (this == FilterCriterion.PROFIT) "Lucro líquido = valor − desgaste dos km − custo fixo (% do valor)" else null
 
 /** Cor de cada botão/número: mais é melhor = amarelo, verde; menos é melhor = verde, amarelo. */
 private fun FilterCriterion.thumbColors(): List<Color> =

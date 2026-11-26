@@ -94,8 +94,8 @@ fun ShiftHistoryScreen(onBack: () -> Unit) {
     val zone = ZoneId.systemDefault()
     val now = rememberNow()
     val today = LocalDate.now(zone)
-    val rows = shifts.map { it to ShiftMath.summary(it, cost.costPerKm, now, cost.fixedPerRide) }
-    val openRow = openShift?.let { it to ShiftMath.summary(it, cost.costPerKm, now, cost.fixedPerRide) }
+    val rows = shifts.map { it to ShiftMath.summary(it, cost.costPerKm, now, cost.fixedShare) }
+    val openRow = openShift?.let { it to ShiftMath.summary(it, cost.costPerKm, now, cost.fixedShare) }
     val all = listOfNotNull(openRow) + rows
     fun dateOf(s: Shift): LocalDate = Instant.ofEpochMilli(s.startedAt).atZone(zone).toLocalDate()
     // "Hoje" = dia de trabalho: jornada aberta que passou da meia-noite continua no dia em que começou.

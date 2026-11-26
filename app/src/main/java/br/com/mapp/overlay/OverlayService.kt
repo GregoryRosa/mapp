@@ -116,8 +116,8 @@ class OverlayService : LifecycleService() {
     // ---- Jornada ----
     /** Desgaste: R$ por km rodado. */
     private var costPerKm: Double = 0.0
-    /** Custos fixos (seguro, financiamento...): R$ descontados a cada corrida finalizada. */
-    private var fixedPerRide: Double = 0.0
+    /** Custos fixos (seguro, financiamento...): fração do valor de cada corrida finalizada (0,25 = 25%). */
+    private var fixedShare: Double = 0.0
     /** Jornada, corridas finalizadas e dia da última conta do rateio dos fixos (refaz quando mudam). */
     private var fixedKey: Triple<Long?, Int, Long>? = null
     /** Divisão do custo por item de Custos fixos (gravada na jornada ao encerrar). */
@@ -273,13 +273,13 @@ class OverlayService : LifecycleService() {
         }
 
         override fun endShift() {
-            val ended = ShiftTracker.end(this@OverlayService, costPerKm, costParts, fixedPerRide) ?: return
+            val ended = ShiftTracker.end(this@OverlayService, costPerKm, costParts, fixedShare) ?: return
             // Km da jornada entram na média que divide os custos do mês (Custos fixos).
             FixedCostsSync.afterShiftEnded(this@OverlayService)
             countedKey = null
             matcher.reset()
             saveTripMemory(force = true)
-            val s = ShiftMath.summary(ended, costPerKm, System.currentTimeMillis(), fixedPerRide)
+            val s = ShiftMath.summary(ended, costPerKm, System.currentTimeMillis(), fixedShare)
             tripToast("Jornada encerrada: ${s.trips} corridas · lucro ${ShiftMath.money(s.profit)}")
         }
 
@@ -433,7 +433,7 @@ class OverlayService : LifecycleService() {
         lifecycleScope.launch {
             MappApp.repos.vehicle.config().collect {
                 costPerKm = it.costPerKm
-                fixedPerRide = it.fixedPerRide
+                fixedShare = it.fixedShare
                 costParts = CostSplit.parts(it)
                 pushShift()
             }
@@ -514,7 +514,7 @@ class OverlayService : LifecycleService() {
                 combine(day, repos.vehicle.config()) { d, cost ->
                     val t = PeriodMath.totals(
                         p.from, p.to, d.current, d.history, d.offers, d.entries, cost.costPerKm,
-                        System.currentTimeMillis(), fixedPerRide = cost.fixedPerRide,
+                        System.currentTimeMillis(), fixedShare = cost.fixedShare,
                     )
                     Triple(p, t, d.goal)
                 }

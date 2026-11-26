@@ -721,7 +721,7 @@ private fun GoalsDialog(
             ) {
                 Text(
                     "As metas são do lucro líquido: o que sobra depois de descontar o custo do carro " +
-                        "(desgaste por km e custos fixos por corrida, de Custos fixos) e os gastos lançados.",
+                        "(desgaste por km e custos fixos em % do valor das corridas, de Custos fixos) e os gastos lançados.",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -840,8 +840,8 @@ private fun GoalsDialog(
     )
 }
 
-/** " + fixos R$ 9,00 (3 corridas × R$ 3,00)" — vazio sem custos fixos no período. */
+/** " + fixos R$ 45,00 (25,0% do valor das corridas)" — vazio sem custos fixos no período. */
 internal fun fixedCostText(t: PeriodTotals): String {
-    val perRide = t.fixedPerRide ?: return ""
-    return " + fixos ${Format.brl(t.fixedCost)} (${t.rides} corrida${if (t.rides == 1) "" else "s"} × ${Format.brl(perRide)})"
+    val share = t.fixedShare ?: return ""
+    return " + fixos ${Format.brl(t.fixedCost)} (${Format.share(share)} do valor das corridas)"
 }
