@@ -74,6 +74,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import br.com.mapp.core.shift.OfflinePause
 import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.core.goal.GoalAdvance
 import br.com.mapp.finance.Format
@@ -201,6 +202,8 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                 }
                 Spacer(Modifier.height(12.dp))
                 AutoStartRow()
+                Spacer(Modifier.height(12.dp))
+                OfflinePauseRow()
             }
 
             ShiftCard(running)
@@ -344,6 +347,38 @@ private fun AutoStartRow() {
             },
         )
     }
+}
+
+/** Pausa a jornada depois de X minutos offline na Uber (`overlay/OfflineShiftPause`, regras em `core/shift/OfflinePause`). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OfflinePauseRow() {
+    val ctx = LocalContext.current
+    var minutes by remember { mutableIntStateOf(OverlayPrefs.offlinePauseMinutes(ctx)) }
+    Text("Pausar a jornada offline", style = MaterialTheme.typography.titleSmall, color = MappColors.Text)
+    Spacer(Modifier.height(6.dp))
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        OfflinePause.CHOICES.forEach { m ->
+            FilterChip(
+                selected = m == minutes,
+                onClick = {
+                    minutes = m
+                    OverlayPrefs.setOfflinePauseMinutes(ctx, m)
+                },
+                label = { Text(OfflinePause.label(m)) },
+            )
+        }
+    }
+    Text(
+        if (minutes > OfflinePause.OFF) {
+            "Ficou offline na Uber por mais de $minutes min: a jornada pausa sozinha, contando tempo e km só até " +
+                "a hora em que você ficou offline. Volta sozinha quando você ficar online ou começar uma corrida."
+        } else {
+            "Desligado: a jornada só pausa pelo ⏸ do ícone \"M\"."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MappColors.TextDim,
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

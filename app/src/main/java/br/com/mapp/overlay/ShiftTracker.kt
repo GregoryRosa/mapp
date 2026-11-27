@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.RawOffer
 import br.com.mapp.core.shift.CostPart
+import br.com.mapp.core.shift.OfflineMark
+import br.com.mapp.core.shift.OfflinePause
 import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftCodec
 import br.com.mapp.core.shift.ShiftMath
@@ -61,6 +63,21 @@ object ShiftTracker {
         update(ctx) { it?.resume(now) ?: Shift(startedAt = now) }
 
     fun pause(ctx: Context, now: Long = System.currentTimeMillis()) = update(ctx) { it?.pause(now) }
+
+    /**
+     * Pausa por offline (`core/shift/OfflinePause`): a jornada da [mark], ainda rodando, pausa no
+     * momento em que ficou offline (tempo e km do GPS voltam para aquele ponto). false = nada mudou.
+     */
+    fun pauseAt(ctx: Context, mark: OfflineMark): Boolean {
+        var done = false
+        update(ctx) { s ->
+            if (s != null && !s.paused && s.startedAt == mark.shiftStartedAt) {
+                done = true
+                OfflinePause.pausedAt(s, mark)
+            } else s
+        }
+        return done
+    }
 
     /**
      * Encerra, guarda como "última jornada" e no histórico (com o custo/km de agora, a fração dos

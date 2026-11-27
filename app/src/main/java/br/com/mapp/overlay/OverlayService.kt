@@ -228,6 +228,19 @@ class OverlayService : LifecycleService() {
         lifecycleScope.launch { OfferBus.dayEarnings.collect { preload.await(); uberExtra.onReading(it) } }
         // Ficou offline na Uber: o ganho do dia é conferido na hora (extra completo, sem esperar firmar).
         lifecycleScope.launch { OfferBus.rideOnline.collect { uberExtra.onOnline(it) } }
+        // X minutos offline na Uber: a jornada pausa sozinha desde que ficou offline (e volta ao ficar online).
+        val offlinePause = OfflineShiftPause(this, ridesOpen = { matcher.openRides }, notify = { tripToast(it) })
+        lifecycleScope.launch { OfferBus.rideOnline.collect { preload.await(); offlinePause.onOnline(it) } }
+        lifecycleScope.launch { OfferBus.evaluated.collect { if (it != null) offlinePause.onActivity() } }
+        lifecycleScope.launch {
+            ShiftTracker.current(this@OverlayService).collect { offlinePause.onShiftChanged(it?.paused == false, it != null) }
+        }
+        lifecycleScope.launch {
+            while (true) {
+                delay(OFFLINE_TICK_MS)
+                offlinePause.tick()
+            }
+        }
 
         // Ícone flutuante "M" com o menu circular (e cartão): recriados quando o leitor liga/desliga.
         lifecycleScope.launch { OfferAccessibilityService.windowContext.collect { useHost(it) } }
@@ -1275,6 +1288,8 @@ class OverlayService : LifecycleService() {
         /** Ligado pelo copiloto automático ([CopilotAutoStart]): nome do app de corrida que ficou online. */
         private const val EXTRA_AUTO = "br.com.mapp.overlay.AUTO"
         private const val SHIFT_TICK_MS = 30_000L
+        /** Conferência da pausa por offline (o motorista pode fechar a Uber depois de ficar offline). */
+        private const val OFFLINE_TICK_MS = 15_000L
         /** Folga depois da meia-noite para o dia novo começar. */
         private const val DAY_ROLL_MS = 2_000L
         private const val PIN_FIX_MS = 4_000L

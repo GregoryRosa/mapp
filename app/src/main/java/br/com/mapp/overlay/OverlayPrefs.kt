@@ -18,6 +18,7 @@ import br.com.mapp.core.nav.NavHold
 import br.com.mapp.core.notify.NoticeLayout
 import br.com.mapp.core.sound.GreatSound
 import br.com.mapp.core.sound.OfferSounds
+import br.com.mapp.core.shift.OfflinePause
 
 /** Preferências do overlay (posição do Card, minimizado, voz, estilo do Card, som de corrida ótima, aparência do botão "M"). */
 object OverlayPrefs {
@@ -54,6 +55,8 @@ object OverlayPrefs {
     const val KEY_AUTO_START_ON = "auto_start_on"
     const val KEY_AUTO_START_SNOOZED_AT = "auto_start_snoozed_at"
     const val KEY_UBER_EXTRA_ON = "uber_extra_on"
+    const val KEY_OFFLINE_PAUSE_MIN = "offline_pause_min"
+    const val KEY_OFFLINE_PAUSED_SHIFT = "offline_paused_shift"
 
     fun of(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -69,6 +72,24 @@ object OverlayPrefs {
 
     fun setUberExtraOn(context: Context, on: Boolean) {
         of(context).edit().putBoolean(KEY_UBER_EXTRA_ON, on).apply()
+    }
+
+    /**
+     * Pausar a jornada depois de tantos minutos offline na Uber (tela inicial; `core/shift/OfflinePause`).
+     * 0 = desligado; padrão 10 min.
+     */
+    fun offlinePauseMinutes(context: Context): Int =
+        OfflinePause.sanitize(of(context).getInt(KEY_OFFLINE_PAUSE_MIN, OfflinePause.DEFAULT_MINUTES))
+
+    fun setOfflinePauseMinutes(context: Context, minutes: Int) {
+        of(context).edit().putInt(KEY_OFFLINE_PAUSE_MIN, OfflinePause.sanitize(minutes)).apply()
+    }
+
+    /** `startedAt` da jornada que a pausa por offline pausou (0 = nenhuma): ela volta sozinha ao ficar online. */
+    fun offlinePausedShift(context: Context): Long = of(context).getLong(KEY_OFFLINE_PAUSED_SHIFT, 0L)
+
+    fun setOfflinePausedShift(context: Context, startedAt: Long) {
+        of(context).edit().putLong(KEY_OFFLINE_PAUSED_SHIFT, startedAt).apply()
     }
 
     fun setAutoStartOn(context: Context, on: Boolean) {
