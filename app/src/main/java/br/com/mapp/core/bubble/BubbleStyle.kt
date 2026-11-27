@@ -24,6 +24,8 @@ import kotlin.math.roundToInt
  *   [arrowColor] null = acompanha o gradiente do "M" (padrão);
  * - [showNet]: número embaixo do "M" — false = valor **bruto** do dia (padrão), true = **lucro líquido**
  *   (bruto − desgaste dos km − custos fixos das corridas finalizadas − gastos lançados).
+ * - [showTexts]: números em volta do botão (km e custo em cima, valor e meta embaixo); false = só o
+ *   botão, sem os textos (o anel da meta continua).
  * O padrão é o visual original do MApp (com o botão um pouco maior: 60 dp).
  */
 data class BubbleStyle(
@@ -44,6 +46,7 @@ data class BubbleStyle(
     val arrowSize: Int = BubbleSize.DEFAULT,
     val arrowColor: Int? = null,
     val showNet: Boolean = false,
+    val showTexts: Boolean = true,
 ) {
     /**
      * Cores do gradiente do anel da meta, em volta do círculo (a partir do topo). Com as cores
@@ -71,6 +74,7 @@ data class BubbleStyle(
         "pin=$pinSize",
         "arrow=$arrowSize",
         "value=" + if (showNet) "net" else "gross",
+        "texts=" + if (showTexts) "on" else "off",
     ).plus(listOfNotNull(arrowColor?.let { "ac=" + hex(it) })).joinToString(";")
 
     companion object {
@@ -112,6 +116,7 @@ data class BubbleStyle(
                 arrowSize = map["arrow"]?.toIntOrNull()?.takeIf { it in BubbleSize.ARROW_STEPS } ?: d.arrowSize,
                 arrowColor = map["ac"]?.let(::parseHex),
                 showNet = map["value"] == "net",
+                showTexts = map["texts"] != "off",
             )
         }
 

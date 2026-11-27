@@ -345,7 +345,26 @@ class QuickBubbleView(
             .apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
     }
 
-    private val valueBox = section("NÚMERO EMBAIXO DO M").apply {
+    /** Números em volta do "M": mostrar (true) ou esconder (false). */
+    private val textChips = listOf(true to "Mostrar", false to "Esconder").associate { (on, label) ->
+        on to button(label) { commitStyle(style.copy(showTexts = on)) }
+            .apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
+    }
+
+    private val valueBox = section("NÚMEROS EM VOLTA DO M").apply {
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            listOf(true, false).forEachIndexed { i, on ->
+                addView(
+                    textChips.getValue(on),
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = dp(4) },
+                )
+            }
+        }, fullWidth(6))
+        addView(text(11f, color = SECONDARY).apply {
+            text = "Esconder tira os textos (km, custo, valor e meta); o anel da meta continua no botão."
+        }, fullWidth(4))
+        addView(text(12f, color = SECONDARY).apply { text = "Número embaixo do M" }, fullWidth(8))
         addView(LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             listOf(false, true).forEachIndexed { i, net ->
@@ -988,6 +1007,7 @@ class QuickBubbleView(
         sparkChips.forEach { (level, chip) -> paintChip(chip, level == s.sparkLevel) }
         rideChips.forEach { (sound, chip) -> paintChip(chip, sound == s.rideSound) }
         valueChips.forEach { (net, chip) -> paintChip(chip, net == s.showNet) }
+        textChips.forEach { (on, chip) -> paintChip(chip, on == s.showTexts) }
         bindDay()
     }
 
@@ -1283,7 +1303,8 @@ class QuickBubbleView(
         bubble.setGoal(fraction?.toFloat(), reached)
         bubble.contentDescription = "MApp – toque abre o menu, segure 3 segundos para desligar" +
             (fraction?.let { " · meta do dia ${(it * 100).toInt()}%" } ?: "")
-        val show = d != null && d.hasData
+        // Textos em volta do botão: escondidos nos ajustes = só o botão (o anel da meta continua).
+        val show = d != null && d.hasData && shown.showTexts
         labelsRoot.visibility = if (show) View.VISIBLE else View.GONE
         if (!show || d == null) return
         kmLabel.text = ShiftMath.num(d.km, 1)
