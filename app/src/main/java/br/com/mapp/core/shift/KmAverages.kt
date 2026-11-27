@@ -55,6 +55,15 @@ object KmAverages {
     }
 
     /**
+     * Média só com os dias **antes** de [day] (o dia de trabalho). É a que vai para a base do mês: a
+     * jornada de hoje não mexe no rateio dos custos fixos do próprio dia — antes, encerrar a jornada
+     * punha o faturamento de hoje na média, a % dos fixos mudava e o lucro do dia saltava (R$ 84 no
+     * "M" → R$ 100 depois de encerrar, 26/11/2026). O dia entra na média a partir do dia seguinte.
+     */
+    fun before(shifts: List<Shift>, day: LocalDate, zone: ZoneId): KmAverage? =
+        of(shifts, day.atStartOfDay(zone).toInstant().toEpochMilli() - 1, zone)
+
+    /**
      * Base com a média aplicada: só com [KmBase.auto]. Sem média, com pouco histórico para os dias
      * do mês ou sem corridas contadas (faturamento), fica o valor que já estava (o padrão ou o último
      * digitado).

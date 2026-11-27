@@ -326,6 +326,55 @@ class TripScreensTest {
         assertEquals(0, m.openRides)
     }
 
+    @Test fun busca_cancelada_logo_depois_da_avaliacao_anterior_nao_vira_corrida() {
+        // Registro de 26/11 (Uber: 15 corridas, MApp: 17). A avaliação da corrida anterior aparece
+        // 1 s depois do "Encontro com" da nova; a busca nova é cancelada e não pode entrar como corrida.
+        val s = 1_000L
+        val m = TripMatcher<String>()
+        m.offerSeen("cristiano", 0, expectedMs = 20 * min)
+        m.onStage(accepted("cristiano"), s); m.markCounted("cristiano")
+        m.onStage(onTrip("cristiano"), 5 * min)
+        // Willian (Comfort R$ 25,35) aceito na fila.
+        m.offerSeen("willian", 10 * min, pickupKm = 1.2, tripKm = 7.1, expectedMs = 28 * min, pickupMin = 7)
+        assertFalse(m.onStage(finished, 10 * min + 54 * s).lateFinish)      // fim do Cristiano
+        assertEquals("willian", m.onStage(accepted("willian", km = 1.1), 10 * min + 55 * s).count)
+        m.markCounted("willian")
+        assertTrue(m.onStage(finished, 10 * min + 56 * s).lateFinish)       // mesma tela, repetida
+        assertFalse(m.describe().contains("fim visto"))
+        // Willian cancelou; 59 s depois do aceite chega o Otavio: a busca do Willian sai como cancelada.
+        m.offerSeen("otavio", 11 * min + 45 * s, pickupKm = 0.1, tripKm = 3.5, expectedMs = 14 * min, pickupMin = 2)
+        val troca = m.onStage(accepted("otavio"), 11 * min + 54 * s)
+        assertEquals("otavio", troca.count); m.markCounted("otavio")
+        assertEquals(0, troca.finishedUnseen)
+        assertTrue(troca.cancelledPickup)
+        m.onStage(onTrip("otavio", km = 3.8), 13 * min + 9 * s)
+        // Geison (Electric R$ 23,86) aceito na fila; fim do Otavio, "Encontro com Geison" e a avaliação de
+        // novo no mesmo segundo.
+        m.offerSeen("geison", 19 * min + 22 * s, pickupKm = 2.7, tripKm = 10.8, expectedMs = 31 * min, pickupMin = 6)
+        assertFalse(m.onStage(finished, 29 * min + 58 * s).lateFinish)      // fim do Otavio
+        assertEquals("geison", m.onStage(accepted("geison", km = 2.7), 29 * min + 59 * s).count)
+        m.markCounted("geison")
+        assertTrue(m.onStage(finished, 29 * min + 59 * s + 500).lateFinish)
+        assertNull(m.onStage(accepted("geison", km = 2.2), 31 * min).count)
+        // Geison cancelou: a Uber volta a procurar ~2 min depois do aceite → cancelada, não finalizada.
+        val volta = m.onStage(idle, 31 * min + 50 * s)
+        assertEquals(0, volta.finishedUnseen)
+        assertTrue(volta.cancelledPickup)
+        assertEquals(0, m.openRides)
+
+        // Com avaliação devida (anterior fechada pela troca de passageiro), a tela é dela: também não marca.
+        val d = TripMatcher<String>()
+        d.offerSeen("ana", 0, expectedMs = 20 * min)
+        d.onStage(accepted("ana"), s); d.markCounted("ana")
+        d.onStage(onTrip("ana"), 5 * min)
+        d.offerSeen("bruno", 15 * min, expectedMs = 30 * min, pickupMin = 6)
+        assertEquals(1, d.onStage(accepted("bruno"), 25 * min).finishedUnseen); d.markCounted("bruno")
+        assertTrue(d.onStage(finished, 25 * min + 3 * min).lateFinish)
+        val cancelada = d.onStage(idle, 30 * min)
+        assertEquals(0, cancelada.finishedUnseen)
+        assertTrue(cancelada.cancelledPickup)
+    }
+
     @Test fun tela_de_fim_repetida_nao_fecha_a_corrida_seguinte() {
         // A avaliação da Ana continua aparecendo (cartão na tela / texto de fundo) durante a busca e
         // até depois do embarque do Bruno.

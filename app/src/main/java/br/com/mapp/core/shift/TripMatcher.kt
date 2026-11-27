@@ -48,7 +48,9 @@ import br.com.mapp.core.model.TripStage
  *   fechava a corrida recém-aceita: ela saía da jornada (ícone laranja) e o fim real virava
  *   "não vi o aceite". **Mesmo sem a anterior na memória** (perdida antes, copiloto reiniciado no meio
  *   dela): corrida que nem embarcou e é nova demais nunca termina por essa tela — fica marcada
- *   ([Rider.finishSeen]) e, se sair da tela sem embarque lido, conta como finalizada.
+ *   ([Rider.finishSeen]) e, se sair da tela sem embarque lido, conta como finalizada — só quando nada
+ *   explica a tela (sem avaliação devida, não é a mesma tela repetida logo depois do fim da anterior e
+ *   já passou [OWN_FINISH_MIN_MS] do aceite); senão, busca cancelada depois continua cancelada.
  *   **Na dúvida, a tela de fim não fecha** (errar para "atrasada" só adia o fechamento até a próxima
  *   tela; fechar errado perde a corrida): com avaliação devida, corrida sem embarque nunca fecha por
  *   ela; o relógio da corrida conta a partir da última tela de fim vista ([finishAt]) — telas de fim
@@ -292,7 +294,14 @@ class TripMatcher<K : Any>(
         }
         if (isLate) {
             if (late != null) owed.remove(late)
-            if (!done.started) done.finishSeen = true
+            // Marca "fim visto" (sair sem embarque = finalizada) só quando nada explica a tela: sem
+            // avaliação devida, sem ser a mesma tela de fim repetida logo depois da anterior e com tempo
+            // para ser desta corrida. 26/11: a avaliação da anterior, lida 1 s depois do "Encontro com",
+            // marcava a busca nova, e duas buscas canceladas entraram na jornada como corridas.
+            val repeat = prev != null && prev >= done.since - SWAP_MS
+            if (!done.started && late == null && !repeat && now - done.since >= OWN_FINISH_MIN_MS) {
+                done.finishSeen = true
+            }
             return Result(null, newRide = false, lateFinish = true)
         }
         close(done, now)
@@ -629,6 +638,8 @@ class TripMatcher<K : Any>(
         private const val OWED_MS = 60 * 60_000L
         /** Tela de fim vista até isto antes de a corrida abrir conta como "na troca de corrida". */
         private const val SWAP_MS = 2 * 60_000L
+        /** Tela de fim antes disso, contado do aceite, não pode ser desta corrida (busca + viagem). */
+        private const val OWN_FINISH_MIN_MS = 2 * 60_000L
         /** Velocidade máxima plausível (90 km/h) e folga para conferir os km da tela a bordo. */
         private const val MAX_KM_PER_MIN = 1.5
         private const val REACH_SLACK_KM = 1.0

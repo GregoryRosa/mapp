@@ -130,7 +130,9 @@ internal fun FixedCostsTab() {
 
 /**
  * Mantém em dia o que depende das jornadas em *Custos fixos*, fora da tela:
- * - base do mês automática (média de km e de faturamento) — ao encerrar uma jornada;
+ * - base do mês automática (média de km e de faturamento) — só com os dias **antes** do dia de
+ *   trabalho ([KmAverages.before]): a jornada de hoje entra na média a partir de amanhã, para a % dos
+ *   fixos (e o lucro do dia) não mudar ao encerrar a jornada;
  * - **rateio dos custos fixos** ([FixedPlan]): fecha o mês que acabou (o último dia rodado completa o
  *   total), calcula a % do dia (o que falta pagar ÷ faturamento que ainda deve entrar no mês), grava em
  *   [VehicleCostConfig.ledger] — de onde Card, jornada, ícone "M" e Financeiro leem — e as jornadas
@@ -141,36 +143,37 @@ internal fun FixedCostsTab() {
 object FixedCostsSync {
     private val lock = Mutex()
 
-    /** Jornada encerrada: os km e o faturamento dela entram na média e o rateio é refeito. */
-    fun afterShiftEnded(ctx: android.content.Context) = refresh(ctx, updateBase = true)
+    /** Jornada encerrada: o rateio é refeito (os km e o faturamento dela entram na média amanhã). */
+    fun afterShiftEnded(ctx: android.content.Context) = refresh(ctx)
 
-    fun refresh(ctx: android.content.Context, updateBase: Boolean = false) {
+    fun refresh(ctx: android.content.Context) {
         val app = ctx.applicationContext
-        saveScope.launch { sync(app, updateBase) }
+        saveScope.launch { sync(app) }
     }
 
-    suspend fun sync(ctx: android.content.Context, updateBase: Boolean = false) {
+    suspend fun sync(ctx: android.content.Context) {
         val app = ctx.applicationContext
         lock.withLock {
-            runCatching { syncNow(app, updateBase) }
+            runCatching { syncNow(app) }
         }
     }
 
-    private suspend fun syncNow(app: android.content.Context, updateBase: Boolean) {
+    private suspend fun syncNow(app: android.content.Context) {
         val repos = MappApp.repos
         val zone = ZoneId.systemDefault()
         var cfg = repos.vehicle.config().first()
-        if (updateBase && cfg.kmBase.auto) {
-            val avg = KmAverages.of(ShiftTracker.history(app).value, System.currentTimeMillis(), zone)
+        val now = System.currentTimeMillis()
+        val current = ShiftTracker.current(app).value
+        val day = FixedPlan.workDate(current, now, zone)
+        if (cfg.kmBase.auto) {
+            // Média sem o dia de trabalho: a base (e a % dos fixos) fica a mesma o dia inteiro.
+            val avg = KmAverages.before(ShiftTracker.history(app).value, day, zone)
             val base = KmAverages.applied(cfg.kmBase, avg)
             if (base != cfg.kmBase) {
                 cfg = cfg.copy(kmBase = base)
                 repos.vehicle.save(cfg)
             }
         }
-        val now = System.currentTimeMillis()
-        val current = ShiftTracker.current(app).value
-        val day = FixedPlan.workDate(current, now, zone)
         if (!cfg.hasFixed) {
             if (cfg.ledger != FixedLedger()) repos.vehicle.saveLedger(FixedLedger())
             ShiftTracker.applyCostToday(app, cfg.costPerKm, CostSplit.parts(cfg), 0.0, now, day)
@@ -261,7 +264,11 @@ private fun VehicleForm(
     var grossPerDay by remember(initial) { mutableStateOf(Format.input(initial.kmBase.grossPerDay)) }
     val history by remember { ShiftTracker.history(ctx) }.collectAsStateWithLifecycle()
     val openShift by remember { ShiftTracker.current(ctx) }.collectAsStateWithLifecycle()
-    val average = remember(history) { KmAverages.of(history, System.currentTimeMillis(), ZoneId.systemDefault()) }
+    // A mesma média que vai para a base: sem o dia de trabalho (ele entra amanhã).
+    val average = remember(history, openShift) {
+        val zone = ZoneId.systemDefault()
+        KmAverages.before(history, FixedPlan.workDate(openShift, System.currentTimeMillis(), zone), zone)
+    }
     // Faturamento por dia só importa com custo fixo (é por ele que o fixo vira % do valor das corridas).
     val hasFixedRows = extras.any { it.unit.isFixed }
     val needKm = !(baseAuto && average != null)

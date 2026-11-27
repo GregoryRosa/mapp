@@ -235,6 +235,33 @@ class FixedCostTest {
         assertEquals(150.0, KmAverages.applied(KmBase(grossPerDay = 150.0, auto = false), avg).grossPerDay, eps)
     }
 
+    @Test fun jornada_de_hoje_so_entra_na_media_amanha() {
+        // 26/11: o "M" mostrava lucro de R$ 84 e, ao encerrar a jornada, o faturamento do dia entrava
+        // na média, a % dos fixos caía e o lucro do mesmo dia virava R$ 100.
+        val zone = ZoneId.of("America/Sao_Paulo")
+        val today = LocalDate.of(2026, 11, 26)
+        fun at(daysAgo: Long, hour: Int) = today.minusDays(daysAgo).atTime(hour, 0).atZone(zone).toInstant().toEpochMilli()
+        fun trips(n: Int, daysAgo: Long, price: Double) =
+            (0 until n).map { ShiftTrip(at(daysAgo, 9) + it * 60_000L, Platform.UBER, null, price, 1.0, 3.0, true) }
+        val past = listOf(
+            Shift(startedAt = at(1, 8), gpsKm = 100.0, trips = trips(10, 1, 20.0)),
+            Shift(startedAt = at(2, 8), gpsKm = 140.0, trips = trips(10, 2, 20.0)),
+        )
+        val hoje = Shift(startedAt = at(0, 14), gpsKm = 180.0, trips = trips(15, 0, 20.0))
+        val antes = KmAverages.before(past, today, zone)!!
+        val depois = KmAverages.before(past + hoje, today, zone)!!
+        // Encerrar a jornada de hoje não muda a média do dia (nem a % dos fixos que sai dela).
+        assertEquals(antes, depois)
+        assertEquals(120.0, depois.kmPerDay, eps)
+        assertEquals(200.0, depois.grossPerDay!!, eps)
+        // No dia seguinte ela entra.
+        val amanha = KmAverages.before(past + hoje, today.plusDays(1), zone)!!
+        assertEquals(140.0, amanha.kmPerDay, eps)           // (100 + 140 + 180) / 3
+        assertEquals(233.0, amanha.grossPerDay!!, eps)      // (200 + 200 + 300) / 3
+        // Sem dia anterior com jornada: nada a aplicar (fica a base que estava).
+        assertNull(KmAverages.before(listOf(hoje), today, zone))
+    }
+
     @Test fun custo_do_mes_com_nome_de_fixo_vira_fixo_uma_vez_so() {
         val old = listOf(
             "v2\tSeguro do carro\t250\tPER_MONTH",
