@@ -77,6 +77,8 @@ import br.com.mapp.core.model.Platform
 import br.com.mapp.core.repo.EntryKind
 import br.com.mapp.core.repo.FinanceEntry
 import br.com.mapp.core.earnings.UberExtra
+import br.com.mapp.core.goal.AdvanceDay
+import br.com.mapp.core.goal.GoalAdvance
 import br.com.mapp.core.goal.GoalForecast
 import br.com.mapp.core.goal.GoalPace
 import br.com.mapp.core.goal.GoalPlan
@@ -174,6 +176,8 @@ private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
 
     // Mesma conta da tela inicial e do histórico: jornadas + corridas aceitas fora de jornada + lançamentos.
     val dayTotals = rememberPeriodTotals(day, now)
+    // Meta batida: o lucro das corridas seguintes vai para as despesas dos próximos dias (GoalAdvance).
+    val dayAdvance = rememberAdvanceDay(date, dayTotals)
     val weekTotals = rememberPeriodTotals(week, now)
     val monthTotals = rememberPeriodTotals(month, now)
     // Lucro do dia de trabalho de hoje (mesmo com outro dia escolhido no calendário): base do ritmo.
@@ -217,7 +221,8 @@ private fun EarningsTab(showGoals: Boolean, onGoalsDone: () -> Unit) {
                     subtitle = null,
                     totals = dayTotals,
                     // Com meta mensal, a parte dela no dia (igual à semana); sem ela, a meta do dia.
-                    goal = ReportMath.goalProgress(dayTotals.net, GoalPlan.dayGoal(goals, date)),
+                    goal = ReportMath.goalProgress(GoalAdvance.net(dayTotals.net, dayAdvance), GoalPlan.dayGoal(goals, date)),
+                    advance = dayAdvance,
                     goalHint = true,
                     titleActions = {
                         IconButton(onClick = { showPicker = true }) {
@@ -455,9 +460,12 @@ private fun PeriodCard(
     noGoalText: String = "Sem meta definida (toque na bandeira).",
     titleActions: @Composable RowScope.() -> Unit = {},
     footer: @Composable () -> Unit = {},
+    advance: AdvanceDay? = null,
 ) {
     var net by rememberSaveable { mutableStateOf(false) }
     val t = totals
+    // Lucro do dia com o adiantamento (meta batida): o adiantado sai, o que pagou custos entra.
+    val netValue = GoalAdvance.net(t.net, advance)
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -473,9 +481,9 @@ private fun PeriodCard(
                 LabeledValue("Custos", Format.brl(t.cost), Modifier.weight(1f), color = RedSignal)
                 LabeledValue(
                     "Líquido",
-                    Format.brl(t.net),
+                    Format.brl(netValue),
                     Modifier.weight(1f),
-                    color = if (t.net < 0) RedSignal else GreenSignal,
+                    color = if (netValue < 0) RedSignal else GreenSignal,
                 )
             }
             Row(Modifier.fillMaxWidth()) {
@@ -512,6 +520,7 @@ private fun PeriodCard(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+            if (advance != null && !advance.isEmpty) AdvanceLines(advance)
             if (goal != null) {
                 LinearProgressIndicator(progress = { goal.fraction.toFloat() }, modifier = Modifier.fillMaxWidth())
                 Text(
@@ -529,6 +538,26 @@ private fun PeriodCard(
             footer()
         }
     }
+}
+
+/**
+ * Adiantamento para as despesas no dia (meta batida): quanto das corridas foi adiantado, quanto dos
+ * custos do dia ele pagou e o saldo que fica para os próximos dias.
+ */
+@Composable
+private fun AdvanceLines(a: AdvanceDay) {
+    val style = MaterialTheme.typography.bodySmall
+    if (a.diverted >= 0.01) {
+        Text("🛡️ Meta batida: ${Format.brl(a.diverted)} das corridas adiantados para as despesas dos próximos dias", style = style)
+    }
+    if (a.available >= 0.01) {
+        Text("💳 Custos do dia pagos pelo adiantamento: ${Format.brl(a.used)} de ${Format.brl(a.available)}", style = style)
+    }
+    Text(
+        "Líquido = bruto − custos − adiantado + pago pelo adiantamento · saldo para os próximos dias ${Format.brl(a.left)}",
+        style = style,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 /** Calendário para escolher o dia da seção "Hoje" (até hoje). */

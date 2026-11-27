@@ -75,10 +75,12 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.com.mapp.core.shift.ShiftMath
+import br.com.mapp.core.goal.GoalAdvance
 import br.com.mapp.finance.Format
 import br.com.mapp.finance.NetToggle
 import br.com.mapp.finance.ReportMath
 import br.com.mapp.finance.rememberNow
+import br.com.mapp.finance.rememberAdvanceDay
 import br.com.mapp.finance.rememberPeriodTotals
 import br.com.mapp.core.nav.NavApp
 import br.com.mapp.core.nav.NavHold
@@ -567,6 +569,9 @@ private fun ShiftCard(copilotRunning: Boolean) {
     val cur = current
     val period = ReportMath.workDay(cur?.startedAt, now)
     val t = rememberPeriodTotals(period, now)
+    // Meta batida: o lucro das corridas seguintes vai para as despesas dos próximos dias.
+    val advance = rememberAdvanceDay(ReportMath.dateOf(period.from), t)
+    val dayNet = GoalAdvance.net(t.net, advance)
     val today = ReportMath.dayOf(now)
     var net by rememberSaveable { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -600,8 +605,8 @@ private fun ShiftCard(copilotRunning: Boolean) {
                 StatTile("Corridas", t.rides.toString(), Modifier.weight(1f))
                 if (net) {
                     StatTile(
-                        "Líquido", ShiftMath.money(t.net), Modifier.weight(1f),
-                        valueColor = if (t.net >= 0) MappColors.Profit else MappColors.Loss,
+                        "Líquido", ShiftMath.money(dayNet), Modifier.weight(1f),
+                        valueColor = if (dayNet >= 0) MappColors.Profit else MappColors.Loss,
                     )
                 } else {
                     StatTile("Ganho", ShiftMath.money(t.gross), Modifier.weight(1f))
@@ -630,6 +635,13 @@ private fun ShiftCard(copilotRunning: Boolean) {
                 }
                 if (t.pendingRides > 0) {
                     Text("🚕 ${t.pendingRides} em andamento · soma no ganho ao finalizar", style = dim, color = MappColors.Teal)
+                }
+                if (!advance.isEmpty) {
+                    Text(
+                        "🛡️ Adiantado para as despesas ${ShiftMath.money(advance.diverted)} · " +
+                            "custos pagos pelo adiantamento ${ShiftMath.money(advance.used)} · saldo ${ShiftMath.money(advance.left)}",
+                        style = dim, color = MappColors.Teal,
+                    )
                 }
                 Text(
                     "Com passageiro ${ShiftMath.km(t.kmWithTrip)} · sem ${ShiftMath.km(t.kmWithoutTrip)}",

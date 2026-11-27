@@ -27,7 +27,12 @@ import br.com.mapp.core.card.CardValues
 import br.com.mapp.core.route.RideRoute
 import br.com.mapp.core.sound.OfferSound
 import br.com.mapp.core.sound.OfferSounds
+import br.com.mapp.core.goal.AdvanceBook
+import br.com.mapp.core.goal.AdvanceDay
 import br.com.mapp.core.goal.DayGoal
+import br.com.mapp.core.goal.DayRange
+import br.com.mapp.core.goal.Diversion
+import br.com.mapp.core.goal.GoalAdvance
 import br.com.mapp.core.goal.GoalPlan
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.EvaluatedOffer
@@ -35,6 +40,7 @@ import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.RawOffer
 import br.com.mapp.core.model.TripEvent
 import br.com.mapp.core.model.TripStage
+import br.com.mapp.core.model.VehicleCostConfig
 import br.com.mapp.core.shift.AutoShift
 import br.com.mapp.core.shift.AutoShiftAction
 import br.com.mapp.core.shift.RideStartCue
@@ -55,6 +61,7 @@ import br.com.mapp.core.shift.Shift
 import br.com.mapp.core.shift.ShiftMath
 import br.com.mapp.core.shift.ShiftTrip
 import br.com.mapp.finance.FixedCostsSync
+import br.com.mapp.finance.Period
 import br.com.mapp.finance.ReportMath
 import br.com.mapp.maps.LocationProvider
 import br.com.mapp.maps.PinStore
@@ -64,6 +71,7 @@ import br.com.mapp.reader.ReaderStatus
 import br.com.mapp.ui.MainActivity
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.delay
@@ -74,6 +82,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
@@ -95,6 +104,10 @@ class OverlayService : LifecycleService() {
     /** Números do dia (mesma conta de Ganhos e gastos → Hoje) e meta diária, para o ícone "M". */
     private var dayTotals: PeriodTotals? = null
     private var dailyGoal: Double? = null
+    /** Adiantamento para as despesas visto do dia de trabalho (meta batida, `GoalAdvance`). */
+    private var dayAdvance: AdvanceDay? = null
+    /** Dados do dia de trabalho, para refazer o lucro na hora em que uma corrida termina. */
+    private var dayContext: DayContext? = null
     /** Oferta que já tocou o som de corrida ótima (toca uma vez por oferta). */
     private var greatKey: OfferKey? = null
     /** Oferta que já tocou o aviso de parada (uma vez por oferta). */
@@ -503,6 +516,7 @@ class OverlayService : LifecycleService() {
         ) { openStartedAt, _ -> ReportMath.workDay(openStartedAt) }.distinctUntilChanged()
         lifecycleScope.launch {
             workDays.flatMapLatest { p ->
+                val workDay = ReportMath.dateOf(p.from).toEpochDay()
                 val day = combine(
                     ShiftTracker.current(ctx),
                     ShiftTracker.history(ctx),
@@ -513,21 +527,101 @@ class OverlayService : LifecycleService() {
                     // Meta do dia de trabalho: parte da mensal (ou a do dia da semana, sem mensal).
                     DayInputs(current, history, offers, entries, GoalPlan.dayGoal(goals, ReportMath.dateOf(p.from)))
                 }
-                combine(day, repos.vehicle.config()) { d, cost ->
+                combine(day, repos.vehicle.config(), GoalAdvanceStore.book(ctx), pastCosts(workDay)) { d, cost, book, past ->
                     val t = PeriodMath.totals(
                         p.from, p.to, d.current, d.history, d.offers, d.entries, cost.costPerKm,
                         System.currentTimeMillis(), fixedShare = cost.fixedShare,
                     )
-                    Triple(p, t, d.goal)
+                    val c = DayContext(p, workDay, d.offers, d.entries, cost, past, d.goal)
+                    Triple(c, t, advanceOf(c, t, d.current, d.history, book))
                 }
-            }.collect { (p, totals, goal) ->
+            }.collect { (c, totals, advance) ->
+                dayContext = c
                 dayTotals = totals
-                dailyGoal = goal
+                dayAdvance = advance
+                dailyGoal = c.goal
                 pushDay()
-                celebrateGoal(ReportMath.dateOf(p.from), totals.net, goal)
+                celebrateGoal(java.time.LocalDate.ofEpochDay(c.workDay), GoalAdvance.net(totals.net, advance), c.goal)
             }
         }
     }
+
+    /**
+     * Custos de cada dia antes do dia de trabalho, desde a 1ª corrida adiantada (meta batida): é deles
+     * que o adiantamento vai saindo. Sem corrida adiantada, nada a carregar.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun pastCosts(workDay: Long): Flow<Map<Long, Double>> {
+        val ctx = this
+        val repos = MappApp.repos
+        return GoalAdvanceStore.book(ctx).map { GoalAdvance.daysBefore(it, workDay) }.distinctUntilChanged()
+            .flatMapLatest { days ->
+                if (days.isEmpty()) return@flatMapLatest flowOf(emptyMap<Long, Double>())
+                val ranges = days.map { d -> ReportMath.day(java.time.LocalDate.ofEpochDay(d)).let { DayRange(d, it.from, it.to) } }
+                val from = ranges.first().from
+                val to = ranges.last().to
+                combine(
+                    ShiftTracker.history(ctx),
+                    repos.offers.acceptedBetween(from, to),
+                    repos.finance.entries(from, to),
+                    repos.vehicle.config(),
+                ) { history, offers, entries, cost ->
+                    GoalAdvance.pastCosts(ranges, history, offers, entries, cost.costPerKm, System.currentTimeMillis())
+                }
+            }
+    }
+
+    /** Adiantamento visto do dia de trabalho: só corridas ainda finalizadas numa jornada contam. */
+    private fun advanceOf(c: DayContext, t: PeriodTotals, current: Shift?, history: List<Shift>, book: AdvanceBook): AdvanceDay {
+        val alive = GoalAdvance.alive(book.diversions, listOfNotNull(current) + history)
+        return GoalAdvance.day(alive, c.workDay, c.pastCosts + (c.workDay to t.cost))
+    }
+
+    /** Lucro líquido do dia de trabalho agora (com o adiantamento), lido na hora: null = ainda sem dados. */
+    private fun dayNetNow(): Double? {
+        val c = dayContext ?: return null
+        val current = ShiftTracker.current(this).value
+        val history = ShiftTracker.history(this).value
+        val t = PeriodMath.totals(
+            c.period.from, c.period.to, current, history, c.offers, c.entries, c.cost.costPerKm,
+            System.currentTimeMillis(), fixedShare = c.cost.fixedShare,
+        )
+        return GoalAdvance.net(t.net, advanceOf(c, t, current, history, GoalAdvanceStore.book(this).value))
+    }
+
+    /**
+     * Corrida [trip] acabou de terminar com o lucro do dia em [netBefore] (sem ela): soma no dia ou,
+     * com a meta batida, o que ela deixa fica adiantado para as despesas dos próximos dias
+     * (`GoalAdvance.decide`). Devolve o valor adiantado (null = somou no dia).
+     */
+    private fun adviseGoal(trip: ShiftTrip, netBefore: Double): Double? {
+        val c = dayContext ?: return null
+        val rideNet = GoalAdvance.share(trip.price, c.cost.fixedShare)
+        val before = GoalAdvanceStore.book(this).value.stateOf(c.workDay)
+        val decision = GoalAdvance.decide(netBefore, rideNet, c.goal, before)
+        GoalAdvanceStore.update(this) { b ->
+            val withState = b.copy(state = decision.state)
+            if (!decision.divert) withState
+            else GoalAdvance.add(withState, Diversion(trip.atMillis, trip.platform.name, c.workDay, rideNet), c.workDay)
+        }
+        if (decision.state.refill && !before.refill) {
+            TripLog.add(this, "🎯 Lucro abaixo da meta: corridas voltam a somar no dia até meta + 10%")
+        }
+        if (!decision.divert) return null
+        TripLog.add(this, "🛡️ Meta batida: ${ShiftMath.money(rideNet)} adiantados para as despesas dos próximos dias")
+        return rideNet
+    }
+
+    /** Dados do dia de trabalho usados pelo ícone "M" e pela decisão do adiantamento. */
+    private data class DayContext(
+        val period: Period,
+        val workDay: Long,
+        val offers: List<OfferRecord>,
+        val entries: List<FinanceEntry>,
+        val cost: VehicleCostConfig,
+        val pastCosts: Map<Long, Double>,
+        val goal: Double?,
+    )
 
     private data class DayInputs(
         val current: Shift?,
@@ -553,7 +647,8 @@ class OverlayService : LifecycleService() {
                 km = t.km,
                 carCost = t.carCost,
                 gross = t.gross,
-                net = t.net,
+                // Lucro do dia com o adiantamento: o que foi adiantado não conta; o que pagou custos conta.
+                net = GoalAdvance.net(t.net, dayAdvance),
                 goal = dailyGoal,
                 hasData = t.shifts > 0 || t.gross > 0 || t.km > 0,
             ),
@@ -824,8 +919,17 @@ class OverlayService : LifecycleService() {
             return
         }
         if (!auto) { matcher.closedOldest(System.currentTimeMillis()); saveTripMemory(force = true) }
+        val netBefore = dayNetNow() // lucro do dia antes desta corrida (decide se ela vai para o adiantamento)
         ShiftTracker.finishPending(this, platform)
-        tripToast("${if (previous) "Corrida anterior finalizada" else "Corrida finalizada"} ✓ +${ShiftMath.money(pending.price)} no lucro")
+        val advanced = netBefore?.let { adviseGoal(pending, it) }
+        val label = if (previous) "Corrida anterior finalizada" else "Corrida finalizada"
+        tripToast(
+            if (advanced != null) {
+                "$label ✓ +${ShiftMath.money(pending.price)} · meta batida: ${ShiftMath.money(advanced)} adiantados para as despesas"
+            } else {
+                "$label ✓ +${ShiftMath.money(pending.price)} no lucro"
+            },
+        )
     }
 
     private fun playGreat(key: OfferKey): Long {

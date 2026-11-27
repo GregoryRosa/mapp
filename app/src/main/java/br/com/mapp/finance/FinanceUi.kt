@@ -54,6 +54,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.com.mapp.MappApp
+import br.com.mapp.core.goal.AdvanceDay
+import br.com.mapp.core.goal.DayRange
+import br.com.mapp.core.goal.GoalAdvance
 import br.com.mapp.core.model.Signal
 import br.com.mapp.core.model.VehicleCostConfig
 import br.com.mapp.core.repo.FinanceEntry
@@ -63,9 +66,12 @@ import br.com.mapp.core.shift.CostShare
 import br.com.mapp.core.shift.CostSplit
 import br.com.mapp.core.shift.PeriodMath
 import br.com.mapp.core.shift.PeriodTotals
+import br.com.mapp.overlay.GoalAdvanceStore
 import br.com.mapp.overlay.ShiftTracker
 import br.com.mapp.ui.MappColors
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flowOf
+import java.time.LocalDate
 
 /* Componentes compartilhados pelas telas de finance/. */
 
@@ -241,6 +247,41 @@ fun rememberPeriodTotals(period: Period, now: Long = rememberNow()): PeriodTotal
             period.from, period.to, current, history, offers, entries, cost.costPerKm, now, CostSplit.parts(cost),
             cost.fixedShare,
         )
+    }
+}
+
+/**
+ * Adiantamento para as despesas visto do dia [date] (meta batida: `GoalAdvance`), com [totals] = os
+ * números desse dia. Os custos dos dias anteriores, desde a 1ª corrida adiantada, vêm da mesma conta
+ * do [rememberPeriodTotals]. Lucro do dia com ele = `GoalAdvance.net(totals.net, adiantamento)`.
+ */
+@Composable
+fun rememberAdvanceDay(date: LocalDate, totals: PeriodTotals): AdvanceDay {
+    val ctx = LocalContext.current
+    val repos = MappApp.repos
+    val book by remember { GoalAdvanceStore.book(ctx) }.collectAsStateWithLifecycle()
+    val current by remember { ShiftTracker.current(ctx) }.collectAsStateWithLifecycle()
+    val history by remember { ShiftTracker.history(ctx) }.collectAsStateWithLifecycle()
+    val cost by remember { repos.vehicle.config() }.collectAsStateWithLifecycle(VehicleCostConfig())
+    val day = date.toEpochDay()
+    val days = remember(book, day) { GoalAdvance.daysBefore(book, day) }
+    val ranges = remember(days) {
+        days.map { d -> ReportMath.day(LocalDate.ofEpochDay(d)).let { DayRange(d, it.from, it.to) } }
+    }
+    val from = ranges.firstOrNull()?.from
+    val to = ranges.lastOrNull()?.to
+    val offers by remember(from, to) {
+        if (from == null || to == null) flowOf(emptyList<OfferRecord>()) else repos.offers.acceptedBetween(from, to)
+    }.collectAsStateWithLifecycle(initialValue = emptyList<OfferRecord>())
+    val entries by remember(from, to) {
+        if (from == null || to == null) flowOf(emptyList<FinanceEntry>()) else repos.finance.entries(from, to)
+    }.collectAsStateWithLifecycle(initialValue = emptyList<FinanceEntry>())
+    val past = remember(ranges, history, offers, entries, cost) {
+        GoalAdvance.pastCosts(ranges, history, offers, entries, cost.costPerKm, System.currentTimeMillis())
+    }
+    return remember(book, current, history, past, totals, day) {
+        val alive = GoalAdvance.alive(book.diversions, listOfNotNull(current) + history)
+        GoalAdvance.day(alive, day, past + (day to totals.cost))
     }
 }
 

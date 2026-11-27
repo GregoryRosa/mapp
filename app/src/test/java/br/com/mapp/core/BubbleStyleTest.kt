@@ -172,4 +172,16 @@ class BubbleStyleTest {
         assertEquals(false, BubbleStyle.decode(BubbleStyle().encode()).showNet)
         assertEquals(false, BubbleStyle.decode("v1;value=xyz").showNet)
     }
+
+    @Test fun textos_em_volta_do_m_mostrar_ou_esconder() {
+        // Padrão = mostrar; estilo gravado antes da opção também mostra.
+        assertTrue(BubbleStyle().showTexts)
+        assertTrue(BubbleStyle.decode("v1;bg=FF16404A").showTexts)
+        val hidden = BubbleStyle(showTexts = false)
+        assertTrue(hidden.encode().contains("texts=off"))
+        assertEquals(hidden, BubbleStyle.decode(hidden.encode()))
+        assertTrue(BubbleStyle.decode(BubbleStyle().encode()).showTexts)
+        // Restaurar padrão volta a mostrar.
+        assertEquals(true, BubbleStyle().copy(showTexts = true).showTexts)
+    }
 }
