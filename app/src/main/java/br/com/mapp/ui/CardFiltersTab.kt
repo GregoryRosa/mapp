@@ -68,6 +68,7 @@ import br.com.mapp.core.model.FilterProfile
 import br.com.mapp.core.model.VehicleCostConfig
 import br.com.mapp.finance.ConfirmDeleteDialog
 import br.com.mapp.finance.Format
+import br.com.mapp.finance.MoneyField
 import br.com.mapp.finance.NumberField
 import br.com.mapp.finance.isBlankOrNumber
 import br.com.mapp.overlay.CardHeaderView
@@ -334,14 +335,20 @@ private fun FilterEditor(
                 }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    NumberField(
-                        "De", minText, { minText = it }, Modifier.weight(1f),
-                        suffix = item.unit.ifEmpty { null }, integer = item.decimals == 0,
-                    )
-                    NumberField(
-                        "Até", maxText, { maxText = it }, Modifier.weight(1f),
-                        suffix = item.unit.ifEmpty { null }, integer = item.decimals == 0,
-                    )
+                    if (item.isMoney) {
+                        // R$: estilo maquininha (1773 → 17,73).
+                        MoneyField("De", minText, { minText = it }, Modifier.weight(1f))
+                        MoneyField("Até", maxText, { maxText = it }, Modifier.weight(1f))
+                    } else {
+                        NumberField(
+                            "De", minText, { minText = it }, Modifier.weight(1f),
+                            suffix = item.unit.ifEmpty { null }, integer = item.decimals == 0,
+                        )
+                        NumberField(
+                            "Até", maxText, { maxText = it }, Modifier.weight(1f),
+                            suffix = item.unit.ifEmpty { null }, integer = item.decimals == 0,
+                        )
+                    }
                 }
                 Text(
                     when {

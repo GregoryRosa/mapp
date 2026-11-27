@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -47,7 +48,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -55,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.com.mapp.MappApp
 import br.com.mapp.core.goal.AdvanceDay
+import br.com.mapp.core.input.MoneyInput
 import br.com.mapp.core.goal.DayRange
 import br.com.mapp.core.goal.GoalAdvance
 import br.com.mapp.core.model.Signal
@@ -186,6 +195,60 @@ internal fun NumberField(
         keyboardOptions = KeyboardOptions(keyboardType = if (integer) KeyboardType.Number else KeyboardType.Decimal),
         modifier = modifier.fillMaxWidth(),
     )
+}
+
+/**
+ * Campo de dinheiro no estilo maquininha (`core/input/MoneyInput`): só números, o valor se forma
+ * em centavos da direita para a esquerda (1773 → 17,73; 100000 → 1.000,00) e apagar tira o último
+ * dígito. [value] e [onValueChange] usam o texto formatado ("17,73", vazio = sem valor), que o
+ * `Format.parse` já lê — as telas guardam o mesmo texto de antes. [onDone] = tecla OK do teclado.
+ */
+@Composable
+internal fun MoneyField(
+    label: String?,
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    suffix: String? = "R$",
+    trailingIcon: (@Composable () -> Unit)? = null,
+    onDone: (() -> Unit)? = null,
+) {
+    val digits = MoneyInput.digitsOf(value)
+    OutlinedTextField(
+        // O campo só tem os dígitos, sempre com o cursor no fim; quem mostra vírgula e ponto é o
+        // MoneyTransformation.
+        value = TextFieldValue(digits, selection = TextRange(digits.length)),
+        onValueChange = { edited ->
+            val next = MoneyInput.edit(digits, edited.text)
+            val text = MoneyInput.format(next)
+            if (text != value) onValueChange(text)
+        },
+        label = if (label != null) { { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) } } else null,
+        singleLine = true,
+        suffix = if (suffix != null) { { Text(suffix) } } else null,
+        trailingIcon = trailingIcon,
+        visualTransformation = MoneyTransformation,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Number,
+            imeAction = if (onDone != null) ImeAction.Done else ImeAction.Default,
+        ),
+        keyboardActions = KeyboardActions(onDone = { onDone?.invoke() }),
+        modifier = modifier.fillMaxWidth(),
+    )
+}
+
+/** Mostra os dígitos (centavos) como dinheiro; o cursor fica sempre no fim. */
+private object MoneyTransformation : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        val shown = MoneyInput.format(text.text)
+        return TransformedText(
+            AnnotatedString(shown),
+            object : OffsetMapping {
+                override fun originalToTransformed(offset: Int): Int = shown.length
+                override fun transformedToOriginal(offset: Int): Int = text.length
+            },
+        )
+    }
 }
 
 /** true se o texto está vazio ou é um número válido. */
