@@ -683,7 +683,7 @@ private fun EntryDialog(initial: FinanceEntry?, onDismiss: () -> Unit, onSave: (
                         }
                     }
                 }
-                NumberField("Valor", amount, { amount = it }, suffix = "R$")
+                MoneyField("Valor", amount, { amount = it })
                 if (kind == EntryKind.INCOME) {
                     NumberField("Km rodados (opcional)", km, { km = it }, suffix = "km")
                 }
@@ -754,12 +754,12 @@ private fun GoalsDialog(
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                 )
-                NumberField("Meta geral do dia", daily, { daily = it }, suffix = "R$")
+                MoneyField("Meta geral do dia", daily, { daily = it })
                 Text(
                     "Vale nos dias sem meta própria. Deixe em branco para não usar meta.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                NumberField("Meta mensal", monthly, { monthly = it }, suffix = "R$")
+                MoneyField("Meta mensal", monthly, { monthly = it })
                 if (slices.isNotEmpty()) {
                     Text(
                         "Por semana em $monthLabel (seg a dom, como a Uber):",
@@ -807,12 +807,11 @@ private fun GoalsDialog(
                         }
                     }
                 }
-                NumberField(
+                MoneyField(
                     "Meta destes dias",
                     dayValue,
                     { dayValue = it },
                     Modifier.fillMaxWidth(),
-                    suffix = "R$",
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(

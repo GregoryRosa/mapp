@@ -32,6 +32,9 @@ enum class FilterField(val id: String, val label: String, val unit: String, val 
     /** Filtro de palavras (endereço); os outros são de número (de/até). */
     val isText: Boolean get() = this == ADDRESS
 
+    /** De/até em R$: campo de dinheiro (`core/input/MoneyInput`). */
+    val isMoney: Boolean get() = unit == "R$"
+
     companion object {
         fun fromId(id: String?): FilterField? = entries.firstOrNull { it.id == id }
     }

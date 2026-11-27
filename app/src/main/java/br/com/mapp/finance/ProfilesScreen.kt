@@ -368,6 +368,7 @@ private fun CriterionCard(
             title = criterion.title,
             initial = values[i],
             integer = criterion.integer,
+            money = criterion.money,
             onDismiss = { typing = null },
             onConfirm = { v ->
                 typing = null
@@ -511,6 +512,7 @@ private fun TypeValueDialog(
     title: String,
     initial: Double,
     integer: Boolean,
+    money: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (Double) -> Unit,
 ) {
@@ -521,18 +523,26 @@ private fun TypeValueDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                singleLine = true,
-                isError = text.isNotBlank() && value == null,
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = if (integer) KeyboardType.Number else KeyboardType.Decimal,
-                    imeAction = ImeAction.Done,
-                ),
-                keyboardActions = KeyboardActions(onDone = { value?.let(onConfirm) }),
-                modifier = Modifier.fillMaxWidth().focusRequester(focus),
-            )
+            if (money) {
+                // R$: estilo maquininha (1773 → 17,73).
+                MoneyField(
+                    null, text, { text = it }, Modifier.fillMaxWidth().focusRequester(focus),
+                    onDone = { value?.let(onConfirm) },
+                )
+            } else {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = true,
+                    isError = text.isNotBlank() && value == null,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = if (integer) KeyboardType.Number else KeyboardType.Decimal,
+                        imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { value?.let(onConfirm) }),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                )
+            }
             LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
         },
         confirmButton = {

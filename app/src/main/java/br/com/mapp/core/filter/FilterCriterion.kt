@@ -36,6 +36,9 @@ enum class FilterCriterion(
     /** Valores inteiros (minutos). */
     val integer: Boolean get() = this == PICKUP_MIN
 
+    /** Valor em R$ (R$/km, R$/h, valor, lucro): ao digitar, campo de dinheiro (`core/input/MoneyInput`). */
+    val money: Boolean get() = this == PER_KM || this == PER_HOUR || this == PRICE || this == PROFIT
+
     /**
      * Faixa salva no perfil (null = critério fora). Mais é melhor: low = amarelo a partir de,
      * high = verde a partir de. Menos é melhor: low = verde até, high = amarelo até.

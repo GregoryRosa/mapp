@@ -379,14 +379,14 @@ private fun VehicleForm(
             }
         }
         if (fuelType.isElectric) {
-            NumberField("Preço da energia (recarga)", fuel, { fuel = it }, suffix = fuelType.priceSuffix)
+            MoneyField("Preço da energia (recarga)", fuel, { fuel = it }, suffix = fuelType.priceSuffix)
             NumberField("Consumo", kmPerLiter, { kmPerLiter = it }, suffix = fuelType.consumptionSuffix)
             Text(
                 "Use o preço do kWh da sua recarga (conta de luz em casa ou eletroposto) e a eficiência do carro em km/kWh.",
                 style = MaterialTheme.typography.bodySmall,
             )
         } else {
-            NumberField("Preço do ${fuelType.label.lowercase()}", fuel, { fuel = it }, suffix = fuelType.priceSuffix)
+            MoneyField("Preço do ${fuelType.label.lowercase()}", fuel, { fuel = it }, suffix = fuelType.priceSuffix)
             NumberField("Consumo", kmPerLiter, { kmPerLiter = it }, suffix = fuelType.consumptionSuffix)
         }
         CostInput(
@@ -587,7 +587,12 @@ private fun CostInput(
 ) {
     Column {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            NumberField(label, value, onValue, Modifier.weight(1f), suffix = unit.suffix, trailingIcon = trailingIcon)
+            // R$/km é taxa (até 3 casas: 0,068) e continua livre; custo do mês é dinheiro (maquininha).
+            if (unit == CostUnit.PER_KM) {
+                NumberField(label, value, onValue, Modifier.weight(1f), suffix = unit.suffix, trailingIcon = trailingIcon)
+            } else {
+                MoneyField(label, value, onValue, Modifier.weight(1f), suffix = unit.suffix, trailingIcon = trailingIcon)
+            }
             FilterChip(
                 selected = unit == CostUnit.PER_MONTH,
                 onClick = { onUnit(CostUnit.PER_MONTH) },
@@ -628,7 +633,7 @@ private fun FixedCostInput(
     trailingIcon: (@Composable () -> Unit)? = null,
 ) {
     Column {
-        NumberField(label, value, onValue, Modifier.fillMaxWidth(), suffix = CostUnit.FIXED_MONTH.suffix, trailingIcon = trailingIcon)
+        MoneyField(label, value, onValue, Modifier.fillMaxWidth(), suffix = CostUnit.FIXED_MONTH.suffix, trailingIcon = trailingIcon)
         val amount = Format.parse(value)?.takeIf { it >= 0 }
         val equivalent = when {
             amount == null -> null
@@ -818,7 +823,7 @@ private fun KmBaseCard(
                 }
             }
             if (needGross) {
-                NumberField("Faturamento por dia", grossPerDay, onGrossPerDay, Modifier.fillMaxWidth(), suffix = "R$")
+                MoneyField("Faturamento por dia", grossPerDay, onGrossPerDay, Modifier.fillMaxWidth())
                 Text(
                     if (auto) {
                         "Ainda sem corridas finalizadas nas jornadas: informe uma estimativa do bruto das corridas " +
