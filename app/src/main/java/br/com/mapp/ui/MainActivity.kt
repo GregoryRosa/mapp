@@ -29,6 +29,7 @@ import br.com.mapp.billing.EntitlementStore
 import br.com.mapp.billing.PlayBilling
 import br.com.mapp.core.billing.AccessRules
 import br.com.mapp.core.support.ScreenNames
+import br.com.mapp.core.trip.TripCapture
 import br.com.mapp.finance.FinanceScreen
 import br.com.mapp.finance.HistoryScreen
 import br.com.mapp.finance.ProfilesScreen
@@ -139,6 +140,13 @@ private fun MappShell() {
         // Botão de suporte no canto de todas as telas (menos nas próprias telas de suporte).
         val entry by nav.currentBackStackEntryAsState()
         val route = entry?.destination?.route
+        // Viagem lida na Uber pelo "Inserir viagem da Uber": o formulário fica na tela de Ofertas.
+        val captured by TripCapture.result.collectAsStateWithLifecycle()
+        LaunchedEffect(captured != null, route) {
+            if (captured != null && route != null && route != Routes.HISTORY) {
+                nav.navigate(Routes.HISTORY) { launchSingleTop = true }
+            }
+        }
         if (route != Routes.SUPPORT && route != Routes.ADMIN) {
             SupportFab {
                 SupportOrigin.capture(route)

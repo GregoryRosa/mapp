@@ -26,6 +26,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
@@ -62,6 +63,8 @@ import br.com.mapp.MappApp
 import br.com.mapp.core.repo.OfferRecord
 import br.com.mapp.core.shift.PeriodTotals
 import br.com.mapp.core.shift.ShiftTrip
+import br.com.mapp.core.trip.TripCapture
+import br.com.mapp.core.trip.TripDetails
 import br.com.mapp.overlay.ShiftTracker
 import kotlinx.coroutines.launch
 
@@ -128,11 +131,65 @@ fun HistoryScreen(onBack: () -> Unit) {
         }
     }
 
+    // Inserir viagem que o MApp não pegou: lida da tela "Detalhes da viagem" da Uber ou digitada.
+    var manual by remember { mutableStateOf<Pair<TripDetails, Boolean>?>(null) }
+    val armedUntil by TripCapture.armedUntil.collectAsStateWithLifecycle()
+    val captured by TripCapture.result.collectAsStateWithLifecycle()
+    LaunchedEffect(captured) {
+        captured?.let {
+            manual = it to true
+            TripCapture.consume()
+        }
+    }
+    val pull: () -> Unit = {
+        manual = null
+        Toast.makeText(ctx, pullFromUber(ctx).message(), Toast.LENGTH_LONG).show()
+    }
+    manual?.let { (initial, fromUber) ->
+        ManualTripDialog(
+            initial = initial,
+            fromUber = fromUber,
+            onDismiss = { manual = null },
+            onPull = pull,
+            onSave = { d, at, match ->
+                manual = null
+                scope.launch {
+                    val msg = try {
+                        saveManualTrip(ctx, d, at, match)
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        "Não deu para inserir a viagem: ${e.message}"
+                    }
+                    Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
+                }
+            },
+        )
+    }
+
     Scaffold(
         topBar = { BackTopBar("Histórico de ofertas", onBack) },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(onClick = pull, modifier = Modifier.weight(1f)) { Text("📲 Inserir viagem da Uber") }
+                OutlinedButton(onClick = { manual = TripDetails() to false }) { Text("✎ Digitar") }
+            }
+            if (armedUntil > now) {
+                Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp)) {
+                    Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "📲 Esperando a viagem na Uber: abra Ganhos → a viagem (tela Detalhes da viagem).",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { TripCapture.cancel() }) { Text("Cancelar") }
+                    }
+                }
+            }
             TabRow(selectedTabIndex = tab) {
                 Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Aceitas hoje (${accepted.size})") })
                 Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Todas") })
