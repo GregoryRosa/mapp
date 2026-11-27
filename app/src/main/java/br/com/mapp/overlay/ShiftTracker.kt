@@ -152,7 +152,12 @@ object ShiftTracker {
     @Synchronized
     fun setTrip(ctx: Context, trip: ShiftTrip, offerAt: Long, present: Boolean): Boolean {
         load(ctx)
-        val owner = ShiftMath.ownerOf(offerAt, _current.value, _history.value) ?: return false
+        // A jornada que já tem esta corrida (não duplica; tirar acha também a que foi parar numa jornada
+        // de outro dia por versão anterior) ou a do horário.
+        val all = listOfNotNull(_current.value) + _history.value
+        val owner = all.firstOrNull { it.tripIndexFor(trip.platform, trip.price, offerAt) >= 0 }
+            ?: ShiftMath.ownerOf(offerAt, _current.value, _history.value)
+            ?: return false
         val changed = owner.withTrip(trip, offerAt, present)
         if (changed == owner) return true
         if (owner === _current.value) {

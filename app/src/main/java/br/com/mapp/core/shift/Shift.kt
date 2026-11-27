@@ -341,11 +341,26 @@ object ShiftMath {
     }
 
     /**
-     * Jornada em que uma oferta de [at] aconteceu: a atual (se começou antes) ou a encerrada mais
-     * recente que começou antes dela ([history] da mais nova para a mais antiga). null = nenhuma.
+     * Jornada de uma corrida de [at] (marcada como aceita no histórico ou inserida à mão):
+     * 1. a que estava rodando nesse horário — a atual a partir do início; a encerrada entre o início e
+     *    o fim ([endOf]);
+     * 2. fora de todas, a **do mesmo dia** mais perto no tempo. É o caso da viagem que o MApp não pegou
+     *    (sem a leitura a jornada não abriu sozinha e começou depois dela) e da oferta vista segundos
+     *    antes de a jornada automática abrir: entram na jornada de hoje, nunca na encerrada de ontem
+     *    (que fica fora do dia e esconde a corrida dos números de hoje).
+     * null = nenhuma jornada no dia: a corrida conta solta ([PeriodMath.looseOffers]).
+     * [history] da mais nova para a mais antiga.
      */
-    fun ownerOf(at: Long, current: Shift?, history: List<Shift>): Shift? =
-        current?.takeIf { at >= it.startedAt } ?: history.firstOrNull { at >= it.startedAt }
+    fun ownerOf(at: Long, current: Shift?, history: List<Shift>, zone: ZoneId = ZoneId.systemDefault()): Shift? {
+        current?.takeIf { at >= it.startedAt }?.let { return it }
+        history.firstOrNull { at in it.startedAt..endOf(it) }?.let { return it }
+        return (listOfNotNull(current) + history)
+            .filter { sameDay(it.startedAt, at, zone) || (it !== current && sameDay(endOf(it), at, zone)) }
+            .minByOrNull { if (at < it.startedAt) it.startedAt - at else at - endOf(it) }
+    }
+
+    /** Fim de uma jornada encerrada (gravada por versão antiga, sem [Shift.endedAt]: início + tempo trabalhado). */
+    fun endOf(s: Shift): Long = s.endedAt ?: (s.startedAt + s.activeMs)
 
     /**
      * Jornada "do dia" mostrada junto ao ícone "M": a atual (mesmo que tenha começado ontem) ou,
@@ -596,7 +611,7 @@ object PeriodMath {
     /** Jornadas com o fim de cada uma: a aberta vai até [now]. */
     private fun shiftSpans(current: Shift?, history: List<Shift>, now: Long): List<Pair<Shift, Long>> =
         listOfNotNull(current).map { it to max(now, it.startedAt) } +
-            history.map { it to (it.endedAt ?: (it.startedAt + it.activeMs)) }
+            history.map { it to ShiftMath.endOf(it) }
 
     /** Km da oferta: busca + viagem (com o que foi estimado quando o OCR não leu). */
     private fun offerKm(r: OfferRecord): Double {
