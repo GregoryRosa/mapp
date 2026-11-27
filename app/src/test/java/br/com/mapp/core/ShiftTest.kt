@@ -66,14 +66,37 @@ class ShiftTest {
     }
 
     @Test fun jornada_dona_da_oferta() {
-        val cur = Shift(startedAt = 20 * h)
-        val ontem = Shift(startedAt = 0)
-        val hoje = Shift(startedAt = 10 * h)
-        val history = listOf(hoje, ontem)
-        assertTrue(ShiftMath.ownerOf(21 * h, cur, history) === cur)
-        assertTrue(ShiftMath.ownerOf(12 * h, cur, history) === hoje)
-        assertTrue(ShiftMath.ownerOf(5 * h, null, history) === ontem)
-        assertNull(ShiftMath.ownerOf(-1, cur, history))
+        val utc = ZoneId.of("UTC")
+        val d = 24 * h
+        // Ontem 8h–18h; hoje 7h–11h (encerrada); a atual começou hoje às 14h.
+        val ontem = Shift(startedAt = 8 * h, endedAt = 18 * h)
+        val manha = Shift(startedAt = d + 7 * h, endedAt = d + 11 * h)
+        val cur = Shift(startedAt = d + 14 * h)
+        val history = listOf(manha, ontem)
+        fun owner(at: Long, current: Shift? = cur) = ShiftMath.ownerOf(at, current, history, utc)
+
+        // Dentro de uma jornada: ela.
+        assertTrue(owner(d + 15 * h) === cur)
+        assertTrue(owner(d + 9 * h) === manha)
+        assertTrue(owner(12 * h) === ontem)
+        // Entre duas jornadas do dia: a mais perto.
+        assertTrue(owner(d + 13 * h) === cur)
+        assertTrue(owner(d + 12 * h) === manha)
+        // Viagem antes da 1ª jornada do dia (o MApp não pegou e a jornada abriu depois): a de hoje,
+        // nunca a encerrada de ontem.
+        assertTrue(owner(d + 6 * h) === manha)
+        val soAtual = Shift(startedAt = d + 7 * h)
+        assertTrue(ShiftMath.ownerOf(d + 6 * h + 35 * 60_000L, soAtual, listOf(ontem), utc) === soAtual)
+        // Oferta vista segundos antes de a jornada automática abrir: a jornada nova.
+        assertTrue(ShiftMath.ownerOf(d + 7 * h - 30_000L, soAtual, listOf(ontem), utc) === soAtual)
+        // Depois do fim, no mesmo dia, sem jornada aberta: a encerrada do dia.
+        assertTrue(owner(d + 20 * h, current = null) === manha)
+        // Dia sem jornada nenhuma: solta.
+        assertNull(owner(2 * d + 10 * h, current = null))
+        assertNull(owner(-h))
+        // Gravada sem fim (versão antiga): início + tempo trabalhado.
+        val antiga = Shift(startedAt = 8 * h, activeMs = 2 * h, resumedAt = null)
+        assertEquals(10 * h, ShiftMath.endOf(antiga))
     }
 
     @Test fun resumo_da_jornada() {
