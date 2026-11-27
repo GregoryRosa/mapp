@@ -19,6 +19,9 @@ import br.com.mapp.core.copilot.OnlineScreen
 import br.com.mapp.core.earnings.DayEarningsScreen
 import br.com.mapp.core.model.Platform
 import br.com.mapp.core.model.RawOffer
+import br.com.mapp.core.trip.TripCapture
+import br.com.mapp.core.trip.TripDetails
+import br.com.mapp.core.trip.TripDetailsScreen
 import br.com.mapp.reader.parser.OcrLayout
 import br.com.mapp.reader.parser.OfferParsers
 import br.com.mapp.reader.parser.TripScreens
@@ -232,6 +235,10 @@ class OfferAccessibilityService : AccessibilityService() {
         OnlineScreen.detect(platform, texts)?.let { OfferBus.publishRideOnline(platform, it) }
         // Ganho de hoje da Uber ("R$ 147,25" + "HOJE"): o copiloto lança a diferença como ganho extra.
         DayEarningsScreen.read(platform, texts)?.let { OfferBus.publishDayEarnings(platform, it) }
+        // "Puxar da Uber" (Ofertas → Inserir viagem): tela "Detalhes da viagem" vira o formulário no MApp.
+        if (TripCapture.isArmed(System.currentTimeMillis())) {
+            TripDetailsScreen.read(platform, texts)?.let(::onTripDetails)
+        }
 
         return if (platform == lastPlatform && texts == lastTexts) {
             lastParsed
@@ -269,6 +276,26 @@ class OfferAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * Viagem lida na tela "Detalhes da viagem" (qualquer thread). Entregue ao [TripCapture], traz o MApp de
+     * volta como tocar no ícone dele — a tela de Ofertas abre o formulário preenchido.
+     */
+    private fun onTripDetails(details: TripDetails) {
+        if (!TripCapture.offer(details, System.currentTimeMillis())) return
+        handler.post {
+            safely {
+                val launch = packageManager.getLaunchIntentForPackage(packageName) ?: return@safely
+                startActivity(
+                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED),
+                )
+            }
+        }
+    }
+
+    /** Ler a tela pela imagem: com o copiloto ligado ou esperando a viagem do "Puxar da Uber". */
+    private val imageWanted: Boolean
+        get() = OfferBus.hasListeners || TripCapture.isArmed(System.currentTimeMillis())
+
     private fun summary(o: RawOffer): String = buildString {
         append(String.format(PT_BR, "R$ %.2f", o.price))
         o.pickupKm?.let { append(" · busca $it km") }
@@ -304,7 +331,7 @@ class OfferAccessibilityService : AccessibilityService() {
 
     /** Evento do app de corrida: se a próxima leitura por imagem está longe, traz para perto. */
     private fun requestOcrSoon(screenChanged: Boolean, delayMs: Long = OCR_AFTER_EVENT_MS) {
-        if (ocr == null || ocrBusy || !OfferBus.hasListeners) return
+        if (ocr == null || ocrBusy || !imageWanted) return
         // Com a oferta já no cartão, a animação da contagem não deve disparar OCR sem parar;
         // só troca de tela (oferta aceita/recusada/sumiu) adianta a conferência.
         if (tracker.shown != null && !screenChanged) return
@@ -319,8 +346,8 @@ class OfferAccessibilityService : AccessibilityService() {
     private fun tick(): Long {
         val engine = ocr ?: return OCR_IDLE_MS
         val now = SystemClock.elapsedRealtime()
-        if (!OfferBus.hasListeners || !isScreenOn()) {
-            // Copiloto parado ou tela apagada: sem captura.
+        if (!imageWanted || !isScreenOn()) {
+            // Copiloto parado (e sem "Puxar da Uber") ou tela apagada: sem captura.
             tracker.onPaused()
             return OCR_IDLE_MS
         }
@@ -404,6 +431,9 @@ class OfferAccessibilityService : AccessibilityService() {
                         // Toda leitura da imagem informa a etapa (null = nenhuma): é o que descarta ou
                         // confirma uma etapa lida uma vez.
                         val stage = if (parsed == null) TripScreens.detect(lines, fromOcr = true)?.copy(platform = platform) else null
+                        if (TripCapture.isArmed(System.currentTimeMillis())) {
+                            TripDetailsScreen.read(platform, lines, fromOcr = true)?.let(::onTripDetails)
+                        }
                         handler.post { onStage(stage) }
                         ReaderStatus.onRead(
                             ReaderStatus.SOURCE_OCR + "/" + mode.label,
